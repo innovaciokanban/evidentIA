@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPERUSER
+  COMPANY_ADMIN
+  COMPANY_USER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DiagnosticStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum SWOTType {
+  STRENGTH
+  WEAKNESS
+  OPPORTUNITY
+  THREAT
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum Impact {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RecommendationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum ActionPlanStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+}
+
+enum ActionItemStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum CrossType {
+  FO
+  DO
+  FA
+  DA
+}
+
+enum CrossOrigin {
+  USER
+  AI
+  BOTH
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  name           String
+  passwordHash   String
+  role           Role
+  companyId      String?
+  company        Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  sessions       Session[]
+  createdTickets Ticket[]  @relation("CreatedTickets")
+  assignedTickets Ticket[] @relation("AssignedTickets")
+  createdDiagnostics QualityDiagnostic[] @relation("CreatedDiagnostics")
+  createdActionPlans  ActionPlan[]       @relation("CreatedActionPlans")
+  responsibleItems    ActionItem[]       @relation("ResponsibleActionItems")
+  createdCrosses      StrategicCross[]   @relation("CreatedStrategicCrosses")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([companyId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Ticket {
+  id          String         @id @default(cuid())
+  title       String
+  description String
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+  createdById String
+  assignedToId String?
+  actionItemId String?       @unique
+  dueDate     DateTime?
+  createdBy   User           @relation("CreatedTickets", fields: [createdById], references: [id], onDelete: Restrict)
+  assignedTo  User?          @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
+  actionItem  ActionItem?    @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+}
+
+model Company {
+  id             String   @id @default(cuid())
+  name           String
+  identification String   @unique
+  industry       String
+  description    String
+  users          User[]
+  diagnostics    QualityDiagnostic[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([name])
+}
+
+model QualityDiagnostic {
+  id             String           @id @default(cuid())
+  companyId      String
+  title          String
+  description    String
+  status         DiagnosticStatus @default(DRAFT)
+  createdById    String
+  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy      User             @relation("CreatedDiagnostics", fields: [createdById], references: [id], onDelete: Restrict)
+  swotAnalysis   SWOTAnalysis?
+  aiAnalysis     AIAnalysis?
+  recommendations Recommendation[]
+  actionPlans    ActionPlan[]
+  crosses        StrategicCross[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([companyId])
+  @@index([createdById])
+  @@index([status])
+}
+
+model SWOTAnalysis {
+  id           String           @id @default(cuid())
+  diagnosticId String           @unique
+  diagnostic   QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  items        SWOTItem[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+}
+
+model SWOTItem {
+  id          String     @id @default(cuid())
+  swotId      String
+  type        SWOTType
+  description String
+  priority    Priority?
+  impact      Impact?
+  swot        SWOTAnalysis @relation(fields: [swotId], references: [id], onDelete: Cascade)
+  factor1Crosses StrategicCross[] @relation("CrossFactor1")
+  factor2Crosses StrategicCross[] @relation("CrossFactor2")
+  createdAt   DateTime   @default(now())
+
+  @@index([swotId])
+  @@index([type])
+}
+
+model AIAnalysis {
+  id                    String           @id @default(cuid())
+  diagnosticId          String           @unique
+  executiveSummary      String
+  diagnosis             String
+  keyFindings           Json
+  foStrategies          Json
+  doStrategies          Json
+  faStrategies          Json
+  daStrategies          Json
+  priorityRisks         Json
+  priorityOpportunities Json
+  recommendations       Json
+  diagnostic            QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+}
+
+model Recommendation {
+  id             String              @id @default(cuid())
+  diagnosticId   String
+  title          String
+  description    String
+  priority       Priority
+  expectedImpact String
+  suggestedAction String
+  status         RecommendationStatus @default(PENDING)
+  diagnostic     QualityDiagnostic    @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  actionItems    ActionItem[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([diagnosticId])
+  @@index([status])
+}
+
+model ActionPlan {
+  id             String            @id @default(cuid())
+  diagnosticId   String
+  title          String
+  description    String
+  status         ActionPlanStatus  @default(DRAFT)
+  createdById    String
+  diagnostic     QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdBy      User              @relation("CreatedActionPlans", fields: [createdById], references: [id], onDelete: Restrict)
+  items          ActionItem[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([diagnosticId])
+  @@index([createdById])
+  @@index([status])
+}
+
+model ActionItem {
+  id               String            @id @default(cuid())
+  actionPlanId     String
+  recommendationId String?
+  title            String
+  description      String
+  priority         Priority
+  status           ActionItemStatus  @default(PENDING)
+  responsibleId    String?
+  dueDate          DateTime?
+  actionPlan       ActionPlan        @relation(fields: [actionPlanId], references: [id], onDelete: Cascade)
+  recommendation   Recommendation?   @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+  responsible      User?             @relation("ResponsibleActionItems", fields: [responsibleId], references: [id], onDelete: SetNull)
+  ticket           Ticket?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([actionPlanId])
+  @@index([recommendationId])
+  @@index([responsibleId])
+  @@index([status])
+}
+
+model StrategicCross {
+  id           String            @id @default(cuid())
+  diagnosticId String
+  crossType    CrossType
+  origin       CrossOrigin       @default(USER)
+  factor1Id    String
+  factor2Id    String
+  strategy     String?
+  aiAnalysis   Json?
+  priority     Priority?
+  createdById  String
+  diagnostic   QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  factor1      SWOTItem          @relation("CrossFactor1", fields: [factor1Id], references: [id], onDelete: Cascade)
+  factor2      SWOTItem          @relation("CrossFactor2", fields: [factor2Id], references: [id], onDelete: Cascade)
+  createdBy    User              @relation("CreatedStrategicCrosses", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([diagnosticId])
+  @@index([factor1Id])
+  @@index([factor2Id])
+  @@unique([factor1Id, factor2Id])
+}
