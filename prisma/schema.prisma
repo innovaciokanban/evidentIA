@@ -83,6 +83,41 @@ enum CrossOrigin {
   BOTH
 }
 
+enum WeightingLevel {
+  MUY_BAJO
+  BAJO
+  MEDIO
+  ALTO
+  MUY_ALTO
+}
+
+enum CheckyMessageRole {
+  USER
+  CHECKY
+}
+
+enum CheckyFindingBasis {
+  FACT
+  INFERENCE
+}
+
+enum CheckySuggestionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum CheckyCategory {
+  REVIEW_ASPECTS
+  MISSING_CROSSES
+  UNRELATED_FACTORS
+  STRENGTHEN_STRATEGIES
+  STRATEGIC_RISKS
+  MISSED_OPPORTUNITIES
+  INFO_TO_COMPLEMENT
+  NEXT_STEPS
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -98,6 +133,8 @@ model User {
   createdActionPlans  ActionPlan[]       @relation("CreatedActionPlans")
   responsibleItems    ActionItem[]       @relation("ResponsibleActionItems")
   createdCrosses      StrategicCross[]   @relation("CreatedStrategicCrosses")
+  createdCheckySessions CheckySession[]  @relation("CreatedCheckySessions")
+  createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -166,6 +203,7 @@ model QualityDiagnostic {
   recommendations Recommendation[]
   actionPlans    ActionPlan[]
   crosses        StrategicCross[]
+  checkySessions CheckySession[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -291,6 +329,7 @@ model StrategicCross {
   factor1      SWOTItem          @relation("CrossFactor1", fields: [factor1Id], references: [id], onDelete: Cascade)
   factor2      SWOTItem          @relation("CrossFactor2", fields: [factor2Id], references: [id], onDelete: Cascade)
   createdBy    User              @relation("CreatedStrategicCrosses", fields: [createdById], references: [id], onDelete: Restrict)
+  weighting    StrategicCrossWeighting?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
@@ -298,4 +337,59 @@ model StrategicCross {
   @@index([factor1Id])
   @@index([factor2Id])
   @@unique([factor1Id, factor2Id])
+}
+
+model StrategicCrossWeighting {
+  id                  String        @id @default(cuid())
+  crossId             String        @unique
+  impactoEstrategico  WeightingLevel
+  viabilidad          WeightingLevel
+  urgencia            WeightingLevel
+  sinergiaInterna      WeightingLevel
+  impactoReputacional WeightingLevel
+  weightedScore       Float
+  cross               StrategicCross @relation(fields: [crossId], references: [id], onDelete: Cascade)
+  createdById         String
+  createdBy           User          @relation("CreatedCrossWeightings", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([weightedScore])
+  @@index([createdById])
+}
+
+model CheckySession {
+  id           String            @id @default(cuid())
+  diagnosticId String
+  title        String?
+  diagnostic   QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  messages     CheckyMessage[]
+  createdById  String
+  createdBy    User              @relation("CreatedCheckySessions", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([diagnosticId])
+  @@index([createdById])
+}
+
+model CheckyMessage {
+  id                 String                 @id @default(cuid())
+  sessionId          String
+  role               CheckyMessageRole
+  content            String
+  category           CheckyCategory?
+  basis              CheckyFindingBasis?
+  evidenceIds        String[]               @default([])
+  insufficientData   Boolean                @default(false)
+  missingInformation String[]               @default([])
+  status             CheckySuggestionStatus?
+  decisionNote       String?
+  suggestedStrategyTitle       String?
+  suggestedStrategyDescription String?
+  session            CheckySession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt          DateTime               @default(now())
+
+  @@index([sessionId])
+  @@index([status])
 }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, Company, CrossOrigin, CrossType, DashboardData, Diagnostic, DiagnosticStatus, Level, Recommendation, RecommendationStatus, Role, StrategicCross, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeighting, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, Level, Recommendation, RecommendationStatus, Role, StrategicCross, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -11,98 +11,164 @@ import logo from './assets/logokanban.png'
 import './App.css'
 
 type View = 'dashboard' | 'tickets' | 'companies' | 'diagnostics' | 'swot' | 'recommendations' | 'action-plans' | 'users'
+
 type DiagStage = 'diagnostico' | 'dofa' | 'recomendaciones' | 'planes'
+
 type CompaniesIntent = { kind: 'create-company' } | { kind: 'create-diagnostic' } | { kind: 'open-company'; companyId: string } | { kind: 'open-first-diagnostic' } | { kind: 'open-diagnostic'; companyId: string; diagnosticId: string }
+
 type DetailIntent = { kind: 'create-diagnostic' } | { kind: 'open-first-diagnostic' } | { kind: 'open-diagnostic'; diagnosticId: string }
+
 type TicketDraft = { title: string; description: string; priority: TicketPriority; status: TicketStatus; assignedToId: string }
+
 type CompanyDraft = { name: string; identification: string; industry: string; description: string; adminEnabled: boolean; adminName: string; adminEmail: string; adminPassword: string }
+
 type DiagnosticDraft = { title: string; description: string; status: DiagnosticStatus }
+
 type SWOTDraft = { type: SWOTType; description: string }
+
 type PlanDraft = { title: string; description: string; status: ActionPlanStatus }
+
 type ItemDraft = { title: string; description: string; priority: Level; status: ActionItemStatus; recommendationId: string; responsibleId: string; dueDate: string }
+
 type UserFormRole = 'COMPANY_ADMIN' | 'COMPANY_USER'
+
 type UserDraft = { name: string; email: string; password: string; role: UserFormRole; companyId: string }
 
 const statuses: Array<{ value: TicketStatus; label: string }> = [
   { value: 'OPEN', label: 'Abierto' },
   { value: 'IN_PROGRESS', label: 'En progreso' },
   { value: 'RESOLVED', label: 'Resuelto' },
-  { value: 'CLOSED', label: 'Cerrado' },
-]
+  { value: 'CLOSED', label: 'Cerrado' },]
+
 const priorities: Array<{ value: TicketPriority; label: string }> = [
   { value: 'LOW', label: 'Baja' },
   { value: 'MEDIUM', label: 'Media' },
   { value: 'HIGH', label: 'Alta' },
-  { value: 'URGENT', label: 'Urgente' },
-]
+  { value: 'URGENT', label: 'Urgente' },]
 
 const emptyDraft: TicketDraft = { title: '', description: '', priority: 'MEDIUM', status: 'OPEN', assignedToId: '' }
+
 const emptyCompanyDraft: CompanyDraft = { name: '', identification: '', industry: '', description: '', adminEnabled: false, adminName: '', adminEmail: '', adminPassword: '' }
+
 const emptyDiagnosticDraft: DiagnosticDraft = { title: '', description: '', status: 'DRAFT' }
+
 const emptySWOTDraft: SWOTDraft = { type: 'STRENGTH', description: '' }
+
 const emptyPlanDraft: PlanDraft = { title: '', description: '', status: 'DRAFT' }
+
 const emptyItemDraft: ItemDraft = { title: '', description: '', priority: 'MEDIUM', status: 'PENDING', recommendationId: '', responsibleId: '', dueDate: '' }
+
 const emptyUserDraft: UserDraft = { name: '', email: '', password: '', role: 'COMPANY_USER', companyId: '' }
+
 const formRoleOptions: Array<{ value: UserFormRole; label: string }> = [{ value: 'COMPANY_ADMIN', label: 'Administrador de empresa' }, { value: 'COMPANY_USER', label: 'Usuario de empresa' }]
+
 const roleLabels: Record<Role, string> = { SUPERUSER: 'Superusuario', COMPANY_ADMIN: 'Administrador de empresa', COMPANY_USER: 'Usuario de empresa' }
+
 const diagnosticStatuses: Array<{ value: DiagnosticStatus; label: string }> = [{ value: 'DRAFT', label: 'Borrador' }, { value: 'IN_PROGRESS', label: 'En progreso' }, { value: 'COMPLETED', label: 'Completado' }]
+
 const swotTypes: Array<{ value: SWOTType; label: string; short: string }> = [{ value: 'STRENGTH', label: 'Fortaleza', short: 'FORTALEZAS' }, { value: 'WEAKNESS', label: 'Debilidad', short: 'DEBILIDADES' }, { value: 'OPPORTUNITY', label: 'Oportunidad', short: 'OPORTUNIDADES' }, { value: 'THREAT', label: 'Amenaza', short: 'AMENAZAS' }]
+
 const crossTypeCombos: Record<CrossType, string> = { FO: 'Fortaleza + Oportunidad', DO: 'Debilidad + Oportunidad', FA: 'Fortaleza + Amenaza', DA: 'Debilidad + Amenaza' }
+
 const crossOriginLabels: Record<CrossOrigin, string> = { USER: 'Usuario', AI: 'IA', BOTH: 'Usuario + IA' }
+
 const crossFilterTabs: Array<{ value: CrossType | 'ALL'; label: string }> = [{ value: 'ALL', label: 'Todos' }, { value: 'FO', label: 'FO' }, { value: 'DO', label: 'DO' }, { value: 'FA', label: 'FA' }, { value: 'DA', label: 'DA' }]
+
 const emptyCrossDraft = { strategy: '' }
+
 const crossDragFlyoutStyle: React.CSSProperties = { position: 'fixed', left: 0, top: 0, pointerEvents: 'none' }
+
+const crossOriginIcons: Record<CrossOrigin, string> = { USER: '👤', AI: '✨', BOTH: '👤✨' }
+
+const weightingLevels: Array<{ value: WeightingLevel; label: string; short: string }> = [
+  { value: 'MUY_BAJO', label: 'Muy bajo', short: '1' },
+  { value: 'BAJO', label: 'Bajo', short: '2' },
+  { value: 'MEDIO', label: 'Medio', short: '3' },
+  { value: 'ALTO', label: 'Alto', short: '4' },
+  { value: 'MUY_ALTO', label: 'Muy alto', short: '5' },]// Los pesos y las bandas son solo informacion para la persona que evalua: el ponderado siempre lo
+// calcula el backend, aqui no se replica ninguna formula ni se estiman puntuaciones.
+
+const weightingCriteriaMeta: Array<{ key: CrossWeightingCriterion; label: string; weight: string; hint: string }> = [
+  { key: 'impactoEstrategico', label: 'Impacto estrategico', weight: '20%', hint: 'Que tanto mueve la estrategia el objetivo del diagnostico.' },
+  { key: 'viabilidad', label: 'Viabilidad', weight: '25%', hint: 'Cuanto se puede sostener con los recursos actuales.' },
+  { key: 'urgencia', label: 'Urgencia / Oportunidad', weight: '20%', hint: 'Que tan rapido hay que actuar o que ventana se pierde.' },
+  { key: 'sinergiaInterna', label: 'Sinergia interna', weight: '15%', hint: 'Cuanto se apoya en las fortalezas que ya existen.' },
+  { key: 'impactoReputacional', label: 'Impacto reputacional', weight: '20%', hint: 'Como afecta la percepcion de la empresa.' },]
+
+const neutralWeightingCriteria: CrossWeightingCriteria = { impactoEstrategico: 'MEDIO', viabilidad: 'MEDIO', urgencia: 'MEDIO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' }
+
+const weightingBands: Array<{ min: number; label: string; tone: string }> = [
+  { min: 4, label: 'Inmediata', tone: 'immediate' },
+  { min: 3, label: 'Corto plazo', tone: 'short' },
+  { min: 2, label: 'Mediano plazo', tone: 'medium' },
+  { min: 1, label: 'Largo plazo', tone: 'long' },]
+
+function weightingBand(score: number) { return weightingBands.find((band) => score >= band.min) ?? weightingBands[weightingBands.length - 1] }
+
+function criteriaOf(weighting: CrossWeighting): CrossWeightingCriteria {
+  return { impactoEstrategico: weighting.impactoEstrategico, viabilidad: weighting.viabilidad, urgencia: weighting.urgencia, sinergiaInterna: weighting.sinergiaInterna, impactoReputacional: weighting.impactoReputacional }}
+
 const swotTypeLabels = Object.fromEntries(swotTypes.map((item) => [item.value, item.label])) as Record<SWOTType, string>
+
 function crossTypeForPair(a: SWOTType, b: SWOTType): CrossType | null {
   if (a === b) return null
   const pair = [a, b].sort().join(':')
   const matrix: Record<string, CrossType> = { 'OPPORTUNITY:STRENGTH': 'FO', 'STRENGTH:THREAT': 'FA', 'OPPORTUNITY:WEAKNESS': 'DO', 'THREAT:WEAKNESS': 'DA' }
-  return matrix[pair] ?? null
-}
+  return matrix[pair] ?? null}
+
 function isCompatibleCrossPair(a: SWOTType, b: SWOTType): boolean { return crossTypeForPair(a, b) !== null }
+
 function crossPairKey(a: { id: string; type: SWOTType }, b: { id: string; type: SWOTType }): string { const internal = [a, b].find((item) => item.type === 'STRENGTH' || item.type === 'WEAKNESS')!; const external = internal === a ? b : a; return `${internal.id}:${external.id}` }
+
 const levels: Array<{ value: Level; label: string }> = [{ value: 'LOW', label: 'Baja' }, { value: 'MEDIUM', label: 'Media' }, { value: 'HIGH', label: 'Alta' }]
+
 const diagnosticStatusLabel = Object.fromEntries(diagnosticStatuses.map((item) => [item.value, item.label])) as Record<DiagnosticStatus, string>
+
 const actionPlanStatuses: Array<{ value: ActionPlanStatus; label: string }> = [{ value: 'DRAFT', label: 'Borrador' }, { value: 'ACTIVE', label: 'Activo' }, { value: 'COMPLETED', label: 'Completado' }]
+
 const actionItemStatuses: Array<{ value: ActionItemStatus; label: string }> = [{ value: 'PENDING', label: 'Pendiente' }, { value: 'IN_PROGRESS', label: 'En progreso' }, { value: 'COMPLETED', label: 'Completada' }, { value: 'CANCELLED', label: 'Cancelada' }]
+
 const planStatusLabel = Object.fromEntries(actionPlanStatuses.map((item) => [item.value, item.label])) as Record<ActionPlanStatus, string>
+
 const actionItemStatusLabel = Object.fromEntries(actionItemStatuses.map((item) => [item.value, item.label])) as Record<ActionItemStatus, string>
+
 const recommendationStatusLabel = { PENDING: 'Pendiente', ACCEPTED: 'Aceptada', REJECTED: 'Rechazada' } as const
+
 const recPriorityLabel = Object.fromEntries(levels.map((item) => [item.value, item.label])) as Record<Level, string>
+
 const recFilters: Array<{ value: RecommendationStatus | 'all'; label: string }> = [{ value: 'all', label: 'Todas' }, { value: 'PENDING', label: 'Pendientes' }, { value: 'ACCEPTED', label: 'Aceptadas' }, { value: 'REJECTED', label: 'Rechazadas' }]
+
 const boardColumns: Array<{ status: ActionItemStatus; label: string }> = [{ status: 'PENDING', label: 'Pendientes' }, { status: 'IN_PROGRESS', label: 'En progreso' }, { status: 'COMPLETED', label: 'Completadas' }, { status: 'CANCELLED', label: 'Canceladas' }]
+
 const kanbanColumnVisuals: Record<ActionItemStatus, { icon: string; emptyTitle: string; emptyText: string }> = { PENDING: { icon: '◦', emptyTitle: 'Sin pendientes', emptyText: 'Arrastra aquí las acciones por iniciar.' }, IN_PROGRESS: { icon: '↻', emptyTitle: 'Nada en progreso', emptyText: 'Mueve aquí las acciones en curso.' }, COMPLETED: { icon: '✓', emptyTitle: 'Sin completadas', emptyText: 'Las acciones finalizadas aparecerán aquí.' }, CANCELLED: { icon: '×', emptyTitle: 'Sin canceladas', emptyText: 'Las acciones descartadas se archivan aquí.' } }
+
 const diagStageToView: Record<DiagStage, View> = { diagnostico: 'diagnostics', dofa: 'swot', recomendaciones: 'recommendations', planes: 'action-plans' }
+
 const viewToDiagStage: Partial<Record<View, DiagStage>> = { diagnostics: 'diagnostico', swot: 'dofa', recommendations: 'recomendaciones', 'action-plans': 'planes' }
 
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [checkingSession, setCheckingSession] = useState(true)
-
   useEffect(() => {
     api<{ user: User }>('/auth/me')
       .then(({ user: currentUser }) => setUser(currentUser))
       .catch(() => setUser(null))
       .finally(() => setCheckingSession(false))
   }, [])
-
   useEffect(() => {
     const onUnauthorized = () => setUser(null)
     window.addEventListener('app:unauthorized', onUnauthorized)
     return () => window.removeEventListener('app:unauthorized', onUnauthorized)
   }, [])
-
   if (checkingSession) return <div className="screen-center"><span className="loader" />Cargando espacio de trabajo...</div>
   if (!user) return <Login onLogin={setUser} />
-  return <Workspace user={user} onLogout={() => setUser(null)} />
-}
+  return <Workspace user={user} onLogout={() => setUser(null)} />}
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
@@ -116,7 +182,6 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
       setLoading(false)
     }
   }
-
   return (
     <main className="login-page">
       <div className="login-card">
@@ -133,8 +198,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
         <p className="security-note"><span>✦</span> Sesión protegida y cifrada</p>
       </div>
     </main>
-  )
-}
+  )}
 
 function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [view, setView] = useState<View>('dashboard')
@@ -143,23 +207,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const consumeCompaniesIntent = useCallback(() => setCompaniesIntent(null), [])
   const [diagnosticActive, setDiagnosticActive] = useState(false)
   const [diagStage, setDiagStage] = useState<DiagStage>('diagnostico')
-
   async function logout() {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
     onLogout()
   }
-
   function navigateToView(targetView: View, intent?: CompaniesIntent) {
     setView(targetView)
     if (intent) setCompaniesIntent(intent)
     setMobileMenu(false)
   }
-
   function handleQualityNav(key: View) {
     if (diagnosticActive && viewToDiagStage[key]) { setDiagStage(viewToDiagStage[key]); window.scrollTo({ top: 0 }); setMobileMenu(false); return }
     navigateToView(key, qualityViewsIntentMap[key])
   }
-
   const viewLabels: Record<View, string> = {
     dashboard: 'Resumen',
     companies: 'Empresas',
@@ -170,7 +230,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     tickets: 'Tickets',
     users: 'Usuarios',
   }
-
   const qualityViews: Array<{ key: View; icon: string; label: string }> = [
     { key: 'companies', icon: '▥', label: 'Empresas' },
     { key: 'diagnostics', icon: '◫', label: 'Análisis estratégico' },
@@ -178,13 +237,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     { key: 'recommendations', icon: '◆', label: 'Recomendaciones' },
     { key: 'action-plans', icon: '▤', label: 'Planes de acción' },
   ]
-
   const qualityViewsIntentMap: Record<string, CompaniesIntent> = {
     swot: { kind: 'open-first-diagnostic' },
     recommendations: { kind: 'open-first-diagnostic' },
     'action-plans': { kind: 'open-first-diagnostic' },
   }
-
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileMenu ? 'open' : ''}`}>
@@ -198,19 +255,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} onClick={() => navigateToView('dashboard')}>
             <span className="nav-icon">⌂</span> Dashboard
           </button>
-
           <p className="nav-heading">GESTIÓN DE CALIDAD</p>
           {qualityViews.map((item) => (
             <button key={item.key} className={`nav-item ${(diagnosticActive ? diagStageToView[diagStage] : view) === item.key ? 'active' : ''}`} onClick={() => handleQualityNav(item.key)}>
               <span className="nav-icon">{item.icon}</span> {item.label}
             </button>
           ))}
-
           <p className="nav-heading">OPERACIÓN</p>
           <button className={`nav-item ${view === 'tickets' ? 'active' : ''}`} onClick={() => navigateToView('tickets')}>
             <span className="nav-icon">▤</span> Tickets
           </button>
-
           {(user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN') && (
             <>
               <p className="nav-heading">ADMINISTRACIÓN</p>
@@ -248,8 +302,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         {view === 'users' && (user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN') && <Users user={user} />}
       </main>
     </div>
-  )
-}
+  )}
 
 function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStageChange }: { user: User; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }) {
   const canCreate = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
@@ -265,7 +318,6 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
   const [formError, setFormError] = useState('')
   const [draft, setDraft] = useState<DiagnosticDraft>(emptyDiagnosticDraft)
   const [companyId, setCompanyId] = useState('')
-
   const loadDiagnostics = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -280,13 +332,11 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
   useEffect(() => { const timer = window.setTimeout(() => { void loadDiagnostics() }, 0); return () => window.clearTimeout(timer) }, [loadDiagnostics])
   useEffect(() => { onDiagnosticActiveChange(Boolean(selected)) }, [selected, onDiagnosticActiveChange])
   useEffect(() => () => onDiagnosticActiveChange(false), [onDiagnosticActiveChange])
-
   const filtered = diagnostics.filter((diagnostic) => {
     if (!search) return true
     const term = search.toLowerCase()
     return diagnostic.title.toLowerCase().includes(term) || diagnostic.company.name.toLowerCase().includes(term) || diagnostic.createdBy.name.toLowerCase().includes(term)
   })
-
   function openDetail(diagnostic: Diagnostic) { setSelected(diagnostic); window.scrollTo({ top: 0 }) }
   function startCreate() { setEditing(null); setDraft(emptyDiagnosticDraft); setFormError(''); setShowForm(true) }
   function startEdit(diagnostic: Diagnostic) { setEditing(diagnostic); setDraft({ title: diagnostic.title, description: diagnostic.description, status: diagnostic.status }); setCompanyId(diagnostic.companyId); setFormError(''); setShowForm(true) }
@@ -313,7 +363,6 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
       if (selected && selected.id === diagnostic.id) setSelected(null)
     } catch { setError('No se pudo eliminar el diagnóstico.') }
   }
-
   if (selected) {
     return (
       <>
@@ -324,7 +373,6 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
       </>
     )
   }
-
   return (
     <div className="page diagnostics-page">
       <div className="page-heading">
@@ -371,8 +419,7 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
       </section>
       {showForm && <DiagnosticForm draft={draft} setDraft={setDraft} isEdit={Boolean(editing)} saving={saving} onSubmit={saveDiagnostic} onClose={() => { setShowForm(false); setEditing(null) }} error={formError} companies={canCreate ? companies : []} companyId={companyId} onCompanyIdChange={setCompanyId} />}
     </div>
-  )
-}
+  )}
 
 function Users({ user }: { user: User }) {
   const isSuperuser = user.role === 'SUPERUSER'
@@ -385,7 +432,6 @@ function Users({ user }: { user: User }) {
   const [draft, setDraft] = useState<UserDraft>(emptyUserDraft)
   const [editing, setEditing] = useState<User | null>(null)
   const [showForm, setShowForm] = useState(false)
-
   const loadUsers = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -395,7 +441,6 @@ function Users({ user }: { user: User }) {
   }, [])
   useEffect(() => { const timer = window.setTimeout(() => { void loadUsers() }, 0); return () => window.clearTimeout(timer) }, [loadUsers])
   useEffect(() => { if (isSuperuser) api<{ companies: Company[] }>('/companies').then((result) => setCompanies(result.companies)).catch(() => undefined) }, [isSuperuser])
-
   function openCreate() { setEditing(null); setDraft(emptyUserDraft); setShowForm(true); setError(''); setNotice('') }
   function openEdit(target: User) {
     setEditing(target)
@@ -440,7 +485,6 @@ function Users({ user }: { user: User }) {
       setNotice('Usuario eliminado correctamente.')
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el usuario.') }
   }
-
   return (
     <div className="page users-page">
       <div className="page-heading">
@@ -498,8 +542,7 @@ function Users({ user }: { user: User }) {
         />
       )}
     </div>
-  )
-}
+  )}
 
 function UserForm({ draft, setDraft, editing, isSuperuser, companies, saving, onSubmit, onClose }: { draft: UserDraft; setDraft: React.Dispatch<React.SetStateAction<UserDraft>>; editing: User | null; isSuperuser: boolean; companies: Company[]; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const isNew = !editing
@@ -534,8 +577,7 @@ function UserForm({ draft, setDraft, editing, isSuperuser, companies, saving, on
         </div>
       </form>
     </div>
-  )
-}
+  )}
 
 function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, intent?: CompaniesIntent) => void }) {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -545,13 +587,11 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
   if (!data) return <LoadingState />
   const { summary } = data
   const greeting = new Date().getHours() < 12 ? 'Buenos días' : new Date().getHours() < 19 ? 'Buenas tardes' : 'Buenas noches'
-
   const attentionItems: Array<{ type: string; label: string; count: number; tone: string; view: View }> = []
   if (summary.overdueActionItems > 0) attentionItems.push({ type: 'alert', label: 'Acciones vencidas', count: summary.overdueActionItems, tone: 'red', view: 'action-plans' })
   if (summary.inProgressDiagnostics > 0) attentionItems.push({ type: 'progress', label: 'Diagnósticos en curso', count: summary.inProgressDiagnostics, tone: 'amber', view: 'diagnostics' })
   if (summary.pendingRecommendations > 0) attentionItems.push({ type: 'pending', label: 'Recomendaciones pendientes', count: summary.pendingRecommendations, tone: 'purple', view: 'recommendations' })
   if (summary.pendingActionItems > summary.overdueActionItems) attentionItems.push({ type: 'tasks', label: 'Acciones pendientes', count: summary.pendingActionItems - summary.overdueActionItems, tone: 'blue', view: 'action-plans' })
-
   return (
     <div className="page">
       <div className="page-heading">
@@ -565,7 +605,6 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
           <button className="button primary" onClick={() => onNavigate('diagnostics', { kind: 'open-first-diagnostic' })}>Ver diagnósticos</button>
         </div>
       </div>
-
       <section className="metric-grid executive-kpis">
         <KPICard icon="▥" label="Empresas" value={summary.totalCompanies} tone="blue" />
         <KPICard icon="◫" label="Diagnósticos" value={summary.totalDiagnostics} tone="purple" />
@@ -574,12 +613,10 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
         <KPICard icon="↗" label="Acciones pendientes" value={summary.pendingActionItems} tone="amber" />
         <KPICard icon="!" label="Acciones vencidas" value={summary.overdueActionItems} tone="red" />
       </section>
-
       <div className="chart-grid">
         <DiagnosticStatusChart draft={summary.draftDiagnostics} inProgress={summary.inProgressDiagnostics} completed={summary.completedDiagnostics} />
         <RecommendationChart recommendations={data.priorityRecommendations} />
       </div>
-
       {attentionItems.length > 0 && (
         <section className="attention-section">
           <div className="attention-heading">
@@ -599,7 +636,6 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
           </div>
         </section>
       )}
-
       <section className="dashboard-columns">
         <div className="dashboard-col">
           <div className="panel">
@@ -645,8 +681,7 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
         </div>
       </section>
     </div>
-  )
-}
+  )}
 
 function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnosticActiveChange, diagStage, onDiagStageChange }: { user: User; intent: CompaniesIntent | null; onConsumeIntent: () => void; diagnosticActive: boolean; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }) {
   const [companies, setCompanies] = useState<Company[]>([])
@@ -660,7 +695,6 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-
   const loadCompanies = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -672,7 +706,6 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
   }, [debouncedSearch])
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 350); return () => window.clearTimeout(timer) }, [search])
   useEffect(() => { const timer = window.setTimeout(() => { void loadCompanies() }, 0); return () => window.clearTimeout(timer) }, [loadCompanies])
-
   const applyIntent = useCallback((available: Company[], pending: CompaniesIntent | null) => {
     if (!pending) return
     setDetailIntent(null)
@@ -686,7 +719,6 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
     onConsumeIntent()
   }, [onConsumeIntent])
   useEffect(() => { if (!intent || companies.length === 0 || loading) return; const timer = window.setTimeout(() => { applyIntent(companies, intent) }, 0); return () => window.clearTimeout(timer) }, [intent, companies, loading, applyIntent])
-
   function startCreate() { setSelected(null); setDraft(emptyCompanyDraft); setShowForm(true) }
   function startEdit(companyToEdit: Company) { setSelected(companyToEdit); setDraft({ name: companyToEdit.name, identification: companyToEdit.identification, industry: companyToEdit.industry, description: companyToEdit.description, adminEnabled: false, adminName: '', adminEmail: '', adminPassword: '' }); setShowForm(true) }
   async function saveCompany(event: React.FormEvent<HTMLFormElement>) {
@@ -701,9 +733,7 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar la empresa.') } finally { setSaving(false) }
   }
   async function removeCompany(companyToRemove: Company) { if (!window.confirm('¿Eliminar esta empresa?')) return; try { await api(`/companies/${companyToRemove.id}`, { method: 'DELETE' }); setSelected(null); await loadCompanies() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la empresa.') } }
-
-  return <div className="page companies-page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>
-}
+  return <div className="page companies-page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>}
 
 function CompanyForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: CompanyDraft; setDraft: React.Dispatch<React.SetStateAction<CompanyDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▥</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR EMPRESA' : 'NUEVA EMPRESA'}</p><h2>{isEdit ? 'Actualizar empresa' : 'Crear empresa'}</h2><p className="company-modal-subtitle">Registra la información de la empresa en el sistema</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Nombre de la empresa<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Acme Consultores" minLength={2} required /></label><div className="form-grid"><label>Identificación<input value={draft.identification} onChange={(event) => setDraft({ ...draft, identification: event.target.value })} placeholder="NIT o identificación" minLength={3} required /></label><label>Industria<input value={draft.industry} onChange={(event) => setDraft({ ...draft, industry: event.target.value })} placeholder="Ej. Tecnología" minLength={2} required /></label></div><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade contexto sobre la empresa..." rows={6} minLength={3} required /></label>{!isEdit && <div className="admin-create-section"><label className="admin-create-toggle"><input type="checkbox" checked={draft.adminEnabled} onChange={(event) => setDraft({ ...draft, adminEnabled: event.target.checked })} /><span className="admin-create-check" aria-hidden="true">✓</span><div className="admin-create-copy"><strong>Crear administrador para esta empresa</strong><small>Se creará un usuario administrador con rol de COMPANY_ADMIN.</small></div></label>{draft.adminEnabled && <div className="admin-fields"><div className="form-grid"><label>Nombre del administrador<input value={draft.adminName} onChange={(event) => setDraft({ ...draft, adminName: event.target.value })} placeholder="Ej. Ana López" minLength={2} required /></label><label>Correo del administrador<input type="email" value={draft.adminEmail} onChange={(event) => setDraft({ ...draft, adminEmail: event.target.value })} placeholder="admin@empresa.com" autoComplete="off" required /></label></div><label>Contraseña inicial<input type="password" value={draft.adminPassword} onChange={(event) => setDraft({ ...draft, adminPassword: event.target.value })} placeholder="Mínimo 8 caracteres" minLength={8} autoComplete="new-password" required /></label></div>}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear empresa'}</button></div></form></div> }
 
@@ -715,7 +745,6 @@ function CompanyDetail({ company: companyToShow, onEdit, onDelete, onClose, deta
   const [loadingDiagnostics, setLoadingDiagnostics] = useState(true)
   const [diagnosticError, setDiagnosticError] = useState('')
   const [savingDiagnostic, setSavingDiagnostic] = useState(false)
-
   const loadDiagnostics = useCallback(async () => {
     setLoadingDiagnostics(true); setDiagnosticError('')
     try {
@@ -726,7 +755,6 @@ function CompanyDetail({ company: companyToShow, onEdit, onDelete, onClose, deta
   useEffect(() => { const timer = window.setTimeout(() => { void loadDiagnostics() }, 0); return () => window.clearTimeout(timer) }, [loadDiagnostics])
   useEffect(() => { if (!detailIntent) return; const timer = window.setTimeout(() => { if (detailIntent.kind === 'create-diagnostic') { setSelectedDiagnostic(null); setDiagnosticDraft(emptyDiagnosticDraft); setShowDiagnosticForm(true); onConsumeDetailIntent(); return } if ((detailIntent.kind === 'open-first-diagnostic' || detailIntent.kind === 'open-diagnostic') && !loadingDiagnostics && diagnostics.length > 0) { const target = detailIntent.kind === 'open-diagnostic' ? diagnostics.find((item) => item.id === detailIntent.diagnosticId) : diagnostics[0]; if (target) setSelectedDiagnostic(target); onConsumeDetailIntent() } }, 0); return () => window.clearTimeout(timer) }, [detailIntent, diagnostics, loadingDiagnostics, onConsumeDetailIntent])
   useEffect(() => { onDiagnosticActiveChange(Boolean(selectedDiagnostic)) }, [selectedDiagnostic, onDiagnosticActiveChange])
-
   function startDiagnosticCreate() { setSelectedDiagnostic(null); setDiagnosticDraft(emptyDiagnosticDraft); setShowDiagnosticForm(true) }
   function startDiagnosticEdit(diagnosticToEdit: Diagnostic) { setDiagnosticDraft({ title: diagnosticToEdit.title, description: diagnosticToEdit.description, status: diagnosticToEdit.status }); setShowDiagnosticForm(true) }
   async function saveDiagnostic(event: React.FormEvent<HTMLFormElement>) {
@@ -738,9 +766,7 @@ function CompanyDetail({ company: companyToShow, onEdit, onDelete, onClose, deta
     } catch (requestError) { setDiagnosticError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el diagnóstico.') } finally { setSavingDiagnostic(false) }
   }
   async function removeDiagnostic() { if (!selectedDiagnostic || !window.confirm('¿Eliminar este análisis estratégico y su matriz DOFA?')) return; try { await api(`/diagnostics/${selectedDiagnostic.id}`, { method: 'DELETE' }); setSelectedDiagnostic(null); await loadDiagnostics() } catch { setDiagnosticError('No se pudo eliminar el diagnóstico.') } }
-
-  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Diagnósticos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error">{diagnosticError}</div>}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando diagnósticos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin diagnósticos" text="Crea el primer diagnóstico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear diagnóstico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>
-}
+  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Diagnósticos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error">{diagnosticError}</div>}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando diagnósticos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin diagnósticos" text="Crea el primer diagnóstico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear diagnóstico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>}
 
 function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, companies, companyId, onCompanyIdChange, error }: { draft: DiagnosticDraft; setDraft: React.Dispatch<React.SetStateAction<DiagnosticDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void; companies?: Company[]; companyId?: string; onCompanyIdChange?: (id: string) => void; error?: string }) {
   return (
@@ -766,10 +792,9 @@ function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, co
         </div>
       </form>
     </div>
-  )
-}
+  )}
 
-function DiagnosticDetailBase({ diagnostic }: { diagnostic: Diagnostic }) {
+function DiagnosticDetailBase({ diagnostic, crossesVersion = 0 }: { diagnostic: Diagnostic; crossesVersion?: number }) {
   const [items, setItems] = useState<SWOTItem[]>(diagnostic.swotAnalysis?.items ?? [])
   const [itemDraft, setItemDraft] = useState<SWOTDraft>(emptySWOTDraft)
   const [editingItem, setEditingItem] = useState<SWOTItem | null>(null)
@@ -795,7 +820,9 @@ function DiagnosticDetailBase({ diagnostic }: { diagnostic: Diagnostic }) {
   const loadCrosses = useCallback(async () => {
     try { const result = await api<{ crosses: StrategicCross[] }>(`/diagnostics/${diagnostic.id}/crosses`); setCrosses(result.crosses) } catch { setCrossError('No pudimos cargar los cruces.') } finally { setLoadingCrosses(false) }
   }, [diagnostic.id])
-  useEffect(() => { const timer = window.setTimeout(() => { void loadCrosses() }, 0); return () => window.clearTimeout(timer) }, [loadCrosses])
+  // `crossesVersion` lets the Checky panel ask for a reload after it materializes a strategic cross,
+  // reusing this loader instead of fetching the matrix twice from two different places.
+  useEffect(() => { const timer = window.setTimeout(() => { void loadCrosses() }, 0); return () => window.clearTimeout(timer) }, [loadCrosses, crossesVersion])
   useEffect(() => { if (!pendingCross) return; const timer = window.setTimeout(() => { pendingCrossRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, 30); return () => window.clearTimeout(timer) }, [pendingCross])
   function startItemCreate(type: SWOTType) { setEditingItem(null); setItemDraft({ ...emptySWOTDraft, type }); setShowItemForm(true); setItemError('') }
   function startItemEdit(item: SWOTItem) { setEditingItem(item); setItemDraft({ type: item.type, description: item.description }); setShowItemForm(true); setItemError('') }
@@ -901,13 +928,132 @@ function DiagnosticDetailBase({ diagnostic }: { diagnostic: Diagnostic }) {
   const pendingCrossF2Id = pendingCross?.factor2?.id ?? ''
   const internalCrossOptions = items.filter((item) => item.type === 'STRENGTH' || item.type === 'WEAKNESS')
   const externalCrossOptions = items.filter((item) => item.type === 'OPPORTUNITY' || item.type === 'THREAT')
-  return <section className="diag-card diag-section dofa-section"><div className="diag-section-head"><span className="diag-step-chip">2</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del diagnóstico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Convierte los factores DOFA en estrategias accionables.</p></div><div className="crosses-head-actions"><span className="cross-count">{crosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : crosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && crosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{crosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{crosses.length}</strong><span>cruces</span></div></div></div></div></section>
-}
+  return <section className="diag-card diag-section dofa-section"><div className="diag-section-head"><span className="diag-step-chip">2</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del diagnóstico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Convierte los factores DOFA en estrategias accionables.</p></div><div className="crosses-head-actions"><span className="cross-count">{crosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : crosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && crosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{crosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section><StrategyWeightingPanel diagnosticId={diagnostic.id} crosses={crosses} loadingCrosses={loadingCrosses} />{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{crosses.length}</strong><span>cruces</span></div></div></div></div></section>}
 
 function CrossModal({ cross, draft, setDraft, saving, error, onSubmit, onClose }: { cross: StrategicCross; draft: { strategy: string }; setDraft: React.Dispatch<React.SetStateAction<{ strategy: string }>>; saving: boolean; error: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const crossType = cross.crossType
-  return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal cross-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon cross-modal-icon">{crossType}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>Editar cruce</h2><p className="company-modal-subtitle">Actualiza la estrategia del cruce.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><div className="cross-type-detect"><span className="cross-type-chip large">{crossType}</span><div className="cross-type-copy"><p className="detail-label">Tipo de cruce</p><strong>{crossTypeCombos[crossType]}</strong></div><span className="factor-type-badge">FO / DO / FA / DA</span></div><label>Factor 1<input type="text" value={`${swotTypeLabels[cross.factor1.type]}: ${cross.factor1.description}`} readOnly /></label><label>Factor 2<input type="text" value={`${swotTypeLabels[cross.factor2.type]}: ${cross.factor2.description}`} readOnly /></label><label>Estrategia<textarea value={draft.strategy} onChange={(event) => setDraft({ ...draft, strategy: event.target.value })} placeholder="Estrategia del cruce..." rows={3} minLength={3} required /></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div>
-}
+  return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal cross-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon cross-modal-icon">{crossType}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>Editar cruce</h2><p className="company-modal-subtitle">Actualiza la estrategia del cruce.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><div className="cross-type-detect"><span className="cross-type-chip large">{crossType}</span><div className="cross-type-copy"><p className="detail-label">Tipo de cruce</p><strong>{crossTypeCombos[crossType]}</strong></div><span className="factor-type-badge">FO / DO / FA / DA</span></div><label>Factor 1<input type="text" value={`${swotTypeLabels[cross.factor1.type]}: ${cross.factor1.description}`} readOnly /></label><label>Factor 2<input type="text" value={`${swotTypeLabels[cross.factor2.type]}: ${cross.factor2.description}`} readOnly /></label><label>Estrategia<textarea value={draft.strategy} onChange={(event) => setDraft({ ...draft, strategy: event.target.value })} placeholder="Estrategia del cruce..." rows={3} minLength={3} required /></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div>}
+
+function StrategyWeightingPanel({ diagnosticId, crosses, loadingCrosses }: { diagnosticId: string; crosses: StrategicCross[]; loadingCrosses: boolean }) {
+  const [weightings, setWeightings] = useState<CrossWeighting[]>([])
+  const [drafts, setDrafts] = useState<Record<string, CrossWeightingCriteria>>({})
+  const [saveState, setSaveState] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const loadWeightings = useCallback(async () => {
+    setLoading(true)
+    setLoadError('')
+    try {
+      // El endpoint ya viene ordenado por ponderado descendente; aqui solo se guardan los niveles
+      // de cada cruce para que los selectores muestren el valor real que devolvio el servidor.
+      const result = await api<{ weightings: CrossWeighting[] }>(`/diagnostics/${diagnosticId}/weightings`)
+      setWeightings(result.weightings)
+      setDrafts(Object.fromEntries(result.weightings.map((weighting) => [weighting.crossId, criteriaOf(weighting)])))
+    } catch { setLoadError('No pudimos cargar las ponderaciones de las estrategias.') } finally { setLoading(false) }
+  }, [diagnosticId])
+  const crossesKey = crosses.map((cross) => cross.id).join(',')
+  useEffect(() => { const timer = window.setTimeout(() => { void loadWeightings() }, 0); return () => window.clearTimeout(timer) }, [loadWeightings, crossesKey])
+  async function saveWeighting(cross: StrategicCross, criteria: CrossWeightingCriteria) {
+    if (saveState[cross.id] === 'saving') return
+    const previous = weightings.find((weighting) => weighting.crossId === cross.id)
+    const previousDraft = drafts[cross.id] ?? neutralWeightingCriteria
+    setDrafts((current) => ({ ...current, [cross.id]: criteria }))
+    setSaveState((current) => ({ ...current, [cross.id]: 'saving' }))
+    setSaveErrors((current) => { const next = { ...current }; delete next[cross.id]; return next })
+    try {
+      // Solo viajan los cinco niveles: el ponderado lo responde el backend y aqui nunca se calcula.
+      const result = await api<{ weighting: CrossWeighting }>(`/crosses/${cross.id}/weighting`, { method: 'PUT', body: JSON.stringify(criteria) })
+      setWeightings((current) => [result.weighting, ...current.filter((weighting) => weighting.crossId !== result.weighting.crossId)])
+      setSaveState((current) => ({ ...current, [cross.id]: 'saved' }))
+    } catch (error) {
+      setDrafts((current) => ({ ...current, [cross.id]: previous ? criteriaOf(previous) : previousDraft }))
+      setSaveErrors((current) => ({ ...current, [cross.id]: error instanceof ApiError && error.status === 400 ? 'Este cruce aún no tiene una estrategia que valorar.' : error instanceof ApiError ? error.message : 'No se pudo guardar la valoración.' }))
+      setSaveState((current) => ({ ...current, [cross.id]: 'error' }))
+    }
+  }
+  const weightingByCross = useMemo(() => new Map(weightings.map((weighting) => [weighting.crossId, weighting])), [weightings])
+  const ordered = useMemo(() => {
+    // Se ordena con el ponderado que devuelve el servidor. Los cruces sin ponderar quedan al final
+    // y conservan el orden en que los entrega la matriz DOFA.
+    return [...crosses].sort((a, b) => {
+      const left = weightingByCross.get(a.id)
+      const right = weightingByCross.get(b.id)
+      if (left && right) return right.weightedScore - left.weightedScore
+      if (left) return -1
+      if (right) return 1
+      return 0
+    })
+  }, [crosses, weightingByCross])
+  const rankedCount = crosses.filter((cross) => weightingByCross.has(cross.id)).length
+  return (
+    <section className="diag-card diag-section weighting-section">
+      <div className="diag-section-head">
+        <span className="diag-step-chip weighting-chip">⚖</span>
+        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora cada estrategia con cinco criterios y ordena las oportunidades por importancia.</p></div>
+        <div className="crosses-head-actions"><span className="cross-count">{rankedCount}/{crosses.length} valore{rankedCount === 1 ? '' : 's'}</span></div>
+      </div>
+      <div className="weighting-scale">
+        <span className="detail-label">ESCALA</span>
+        <div className="weighting-scale-levels">{weightingLevels.map((level) => <span className="weighting-scale-level" key={level.value}><b>{level.short}</b>{level.label}</span>)}</div>
+        <span className="weighting-scale-note">Ponderado de 1 a 5 calculado por el servidor</span>
+      </div>
+      {loadError && <div className="form-error" role="alert">{loadError}</div>}
+      {loading || loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando ponderaciones...</div> : ordered.length === 0 ? <EmptyState compact title="Sin estrategias" text="Crea cruces estratégicos en la matriz DOFA para poder ponderarlos." /> : <div className="weighting-list">{ordered.map((cross, index) => {
+        const weighting = weightingByCross.get(cross.id)
+        const criteria = drafts[cross.id] ?? neutralWeightingCriteria
+        const state = saveState[cross.id] ?? 'idle'
+        const busy = state === 'saving'
+        const originLabel = crossOriginLabels[cross.origin]
+        const originIcon = crossOriginIcons[cross.origin]
+        const band = weighting ? weightingBand(weighting.weightedScore) : null
+        const evaluable = Boolean(cross.strategy)
+        return (
+          <article className={`weighting-card${weighting ? ' weighed' : ''}`} key={cross.id} data-weighting-cross-id={cross.id}>
+            <div className="weighting-card-head">
+              {weighting && <span className="weighting-rank" title="Posición según el ponderado">#{index + 1}</span>}
+              <span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span>
+              <span className="cross-combo">{crossTypeCombos[cross.crossType]}</span>
+              <span className="cross-origin weighting-origin" title={`Origen: ${originLabel}`}><span aria-hidden="true">{originIcon}</span> {originLabel}</span>
+              <span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span>
+              {weighting && band ? <span className="weighting-score-block"><span className="weighting-score-value">{weighting.weightedScore.toFixed(2)}</span><span className="weighting-score-max">/5</span><span className={`weighting-band ${band.tone}`}>{band.label}</span></span> : <span className="weighting-score-block pending"><span className="weighting-score-value">—</span><span className="weighting-band neutral">Sin ponderar</span></span>}
+            </div>
+            <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p>
+            <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>
+            {cross.strategy ? <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p> : <p className="weighting-no-strategy">Este cruce todavía no tiene estrategia. Edita el cruce para poder ponderarlo.</p>}
+            <div className="weighting-criteria">
+              {weightingCriteriaMeta.map((criterion) => (
+                <label className="weighting-criterion" key={criterion.key}>
+                  <span className="weighting-criterion-copy"><span className="weighting-criterion-label">{criterion.label}</span><span className="weighting-criterion-hint">{criterion.hint}</span></span>
+                  <span className="weighting-criterion-control">
+                    <span className="weighting-weight" title={`Peso de este criterio: ${criterion.weight}`}>{criterion.weight}</span>
+                    <select
+                      value={criteria[criterion.key]}
+                      disabled={!evaluable || busy}
+                      aria-label={`${criterion.label} de la estrategia ${cross.crossType}`}
+                      onChange={(event) => void saveWeighting(cross, { ...criteria, [criterion.key]: event.target.value as WeightingLevel })}
+                    >
+                      {weightingLevels.map((level) => <option value={level.value} key={level.value}>{level.label} ({level.short})</option>)}
+                    </select>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="weighting-foot">
+              <span className={`weighting-status ${state}`}>
+                {state === 'saving' && <><span className="loader" />Guardando...</>}
+                {state === 'saved' && <><span className="weighting-status-dot" aria-hidden="true">✓</span>Guardado</>}
+                {state === 'error' && saveErrors[cross.id] ? <>{saveErrors[cross.id]}</> : null}
+                {state === 'idle' && !evaluable ? 'Sin estrategia: no se puede valorar' : state === 'idle' && !weighting ? 'Valora los cinco criterios para obtener el ponderado' : state === 'idle' ? `Guardado ${relativeDate(weighting!.updatedAt)}` : null}
+              </span>
+              {weighting && <span className="weighting-updated">Actualizado {relativeDate(weighting.updatedAt)}</span>}
+            </div>
+            {state === 'error' && saveErrors[cross.id] && <div className="form-error" role="alert">{saveErrors[cross.id]}</div>}
+          </article>
+        )
+      })}</div>}
+    </section>
+  )}
 
 function SWOTItemForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: SWOTDraft; setDraft: React.Dispatch<React.SetStateAction<SWOTDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { const detected = swotTypes.find((item) => item.value === draft.type); const detectedSymbol = draft.type === 'STRENGTH' ? '+' : draft.type === 'WEAKNESS' ? '−' : draft.type === 'OPPORTUNITY' ? '↗' : '!'; return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className={`company-modal-icon factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>{isEdit ? 'Editar factor' : 'Agregar factor'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información del factor.' : 'Detectado automáticamente'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{!isEdit && <div className="factor-type-detect"><span className={`swot-symbol factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</span><div className="factor-type-copy"><p className="detail-label">Tipo detectado</p><strong>{detected?.label}</strong></div><span className="factor-type-badge">Detectado automáticamente</span></div>}{isEdit && <label>Tipo<input type="text" value={detected?.label ?? ''} readOnly /></label>}<label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el factor..." rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar factor' : 'Agregar factor'}</button></div></form></div> }
 
@@ -924,7 +1070,6 @@ function Tickets({ user }: { user: User }) {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
-
   const loadTickets = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -939,7 +1084,6 @@ function Tickets({ user }: { user: User }) {
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 350); return () => window.clearTimeout(timer) }, [search])
   useEffect(() => { const timer = window.setTimeout(() => { void loadTickets() }, 0); return () => window.clearTimeout(timer) }, [loadTickets])
   useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
-
   function startCreate() { setSelected(null); setDraft(emptyDraft); setShowForm(true) }
   function startEdit(ticket: Ticket) { setSelected(ticket); setDraft({ title: ticket.title, description: ticket.description, priority: ticket.priority, status: ticket.status, assignedToId: ticket.assignedTo?.id ?? '' }); setShowForm(true) }
   async function saveTicket(event: React.FormEvent<HTMLFormElement>) {
@@ -952,17 +1096,18 @@ function Tickets({ user }: { user: User }) {
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.') } finally { setSaving(false) }
   }
   async function removeTicket(ticket: Ticket) { if (!window.confirm('¿Eliminar este ticket?')) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
-
-  return <div className="page tickets-page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel tickets-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>
-}
+  return <div className="page tickets-page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel tickets-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
 
 function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
 
 function TicketDetail({ ticket, user, onEdit, onDelete, onClose }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void }) { return <div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div><div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div></aside></div> }
 
 function PageError({ message }: { message: string }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p></div></div> }
+
 function initials(name: string) { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase() }
+
 function firstName(name: string) { return name.split(' ')[0] }
+
 function relativeDate(date: string) { const value = new Date(date); const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const target = new Date(value.getFullYear(), value.getMonth(), value.getDate()); const days = Math.round((target.getTime() - today.getTime()) / 86400000); if (days === 0) return 'Hoy'; if (days === -1) return 'Ayer'; if (days === 1) return 'Mañana'; if (days < 0 && days > -7) return `Hace ${Math.abs(days)} días`; if (days > 1 && days < 7) return `En ${days} días`; return value.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) }
 
 function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStageChange }: { diagnostic: Diagnostic; onBack: () => void; onEdit: () => void; onDelete: () => void; stage: DiagStage; onStageChange: (stage: DiagStage) => void }) {
@@ -982,6 +1127,8 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
   const [importing, setImporting] = useState(false)
   const [recError, setRecError] = useState('')
   const [createActionFor, setCreateActionFor] = useState<Recommendation | null>(null)
+  const [crossesVersion, setCrossesVersion] = useState(0)
+  const refreshCrosses = useCallback(() => setCrossesVersion((current) => current + 1), [])
   const loadRecommendations = useCallback(async () => {
     try { const result = await api<{ recommendations: Recommendation[] }>(`/diagnostics/${diagnostic.id}/recommendations`); setRecommendations(result.recommendations) } catch { setRecError('No pudimos cargar las recomendaciones.') }
   }, [diagnostic.id])
@@ -1044,8 +1191,9 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
           <ul className="ai-assistant-list"><li>Factores de la matriz</li><li>Cruces del usuario</li><li>Patrones estratégicos</li></ul>
           <div className="ai-assistant-cta">{analysisError && <div className="form-error">{analysisError}</div>}<button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : analysis ? 'Regenerar análisis' : 'Analizar con IA'}</button></div>
         </div>
-        <DiagnosticDetailBase diagnostic={diagnostic} />
+        <DiagnosticDetailBase diagnostic={diagnostic} crossesVersion={crossesVersion} />
         {analysis && <AIAnalysisPanel analysis={analysis} loading={analysisLoading} items={diagnostic.swotAnalysis?.items ?? []} onNavigateToRecommendations={() => setDiagStage('recomendaciones')} />}
+        {analysis && <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} onCrossCreated={refreshCrosses} />}
         {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('recomendaciones')}>Siguiente: Recomendaciones →</button></div>
       </section>
@@ -1061,8 +1209,7 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
         <ActionPlansPanel diagnostic={diagnostic} recommendations={recommendations} createActionFor={createActionFor} onCreateActionClose={() => setCreateActionFor(null)} />
       </section>
     </div>
-  )
-}
+  )}
 
 function RecommendationsPanel({ analysis, recommendations, onImport, onSetStatus, onRequestCreateAction, importing }: { analysis: AIAnalysis | null; recommendations: Recommendation[]; onImport: () => Promise<void>; onSetStatus: (recommendation: Recommendation, status: RecommendationStatus) => Promise<void>; onRequestCreateAction: (recommendation: Recommendation) => void; importing: boolean }) {
   const aiRecommendations = analysis?.recommendations ?? []
@@ -1128,8 +1275,7 @@ function RecommendationsPanel({ analysis, recommendations, onImport, onSetStatus
         </>
       )}
     </section>
-  )
-}
+  )}
 
 function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCreateActionClose }: { diagnostic: Diagnostic; recommendations: Recommendation[]; createActionFor: Recommendation | null; onCreateActionClose: () => void }) {
   const [plans, setPlans] = useState<ActionPlan[]>([])
@@ -1179,14 +1325,13 @@ function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCrea
   function startItemEdit(item: ActionItem) { setEditingItem(item); setItemEditDraft({ title: item.title, description: item.description, priority: item.priority, status: item.status, recommendationId: item.recommendationId ?? '', responsibleId: item.responsibleId ?? '', dueDate: item.dueDate ? item.dueDate.slice(0, 10) : '' }) }
   async function saveItemEdit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!editingItem) return; setSavingItemEdit(true); setError(''); try { const payload = { title: itemEditDraft.title, description: itemEditDraft.description, priority: itemEditDraft.priority, status: itemEditDraft.status, responsibleId: itemEditDraft.responsibleId || null, dueDate: itemEditDraft.dueDate || null }; await api(`/action-items/${editingItem.id}`, { method: 'PATCH', body: JSON.stringify(payload) }); setEditingItem(null); await loadPlans() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo actualizar la acción.') } finally { setSavingItemEdit(false) } }
   async function saveRecAction(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!createActionFor || !recActionPlanId || savingRecAction) return; setSavingRecAction(true); setRecActionError(''); try { const payload = { ...recActionDraft, recommendationId: createActionFor.id, responsibleId: recActionDraft.responsibleId || null, dueDate: recActionDraft.dueDate || null }; await api(`/action-plans/${recActionPlanId}/items`, { method: 'POST', body: JSON.stringify(payload) }); onCreateActionClose(); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear la acción.') } finally { setSavingRecAction(false) } }
-  async function createPlanFromModal(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (creatingModalPlan) return; setCreatingModalPlan(true); setRecActionError(''); try { const result = await api<{ actionPlan: ActionPlan }>(`/diagnostics/${diagnostic.id}/action-plans`, { method: 'POST', body: JSON.stringify(modalPlanDraft) }); setRecActionPlanId(result.actionPlan.id); setModalPlanDraft(emptyPlanDraft); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear el plan.') } finally { setCreatingModalPlan(false) } }
-return <section className="ai-analysis-panel plans-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">5</span><div><p className="detail-label">EJECUCIÓN</p><h3>Planes de Acción</h3><p className="ai-panel-subtitle">Organiza la ejecución de las recomendaciones.</p></div></div><button className="button primary small-button" onClick={() => { setPlanDraft(emptyPlanDraft); setShowPlanForm(!showPlanForm) }}>{showPlanForm ? 'Cerrar' : '+ Nuevo plan'}</button></div>{error && <div className="form-error">{error}</div>}{showPlanForm && <form className="factor-form plan-form" onSubmit={savePlan}><div className="factor-form-heading"><h3>Nuevo plan de acción</h3><button type="button" className="icon-button" onClick={() => setShowPlanForm(false)}>×</button></div><label>Título<input value={planDraft.title} onChange={(event) => setPlanDraft({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => setPlanDraft({ ...planDraft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setShowPlanForm(false)}>Cancelar</button><button className="button primary" disabled={savingPlan}>{savingPlan ? 'Creando...' : 'Crear plan'}</button></div></form>}{loading ? <div className="ai-loading"><span className="loader" />Cargando planes...</div> : plans.length === 0 ? <EmptyState compact title="Sin planes de acción" text="Crea el primer plan para organizar la ejecución." /> : <><div className="plan-kpis">{[{ label: 'Planes activos', value: plans.filter((entry) => entry.status === 'ACTIVE').length, tone: 'active', icon: '▤' }, { label: 'Acciones totales', value: plans.reduce((sum, entry) => sum + entry.items.length, 0), tone: 'total', icon: '◫' }, { label: 'Completadas', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'COMPLETED').length, 0), tone: 'completed', icon: '✓' }, { label: 'En progreso', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'IN_PROGRESS').length, 0), tone: 'progress', icon: '↻' }].map((kpi) => <div className={`plan-kpi${kpi.tone ? ` ${kpi.tone}` : ''}`} key={kpi.label}><span className="plan-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><small>{kpi.label}</small></div></div>)}</div><div className="plans-list">{plans.map((plan) => <article className="plan-card" key={plan.id}><header className="plan-card-head"><div className="plan-card-main"><div className="plan-title-row"><h4>{plan.title}</h4><span className={`plan-pill ${plan.status.toLowerCase()}`}>{planStatusLabel[plan.status]}</span></div><p className="plan-description">{plan.description}</p><small className="plan-createdby">Creado por {plan.createdBy.name}</small></div><div className="plan-actions"><label className="plan-status-field"><span className="plan-status-label">Estado</span><select value={plan.status} onChange={(event) => void updatePlan(plan, event.target.value as ActionPlanStatus)} aria-label="Estado del plan">{actionPlanStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="plan-actions-buttons"><button className="button secondary small-button" onClick={() => startPlanEdit(plan)}>Editar</button><button className="button danger small-button" onClick={() => void removePlan(plan)}>Eliminar</button></div></div></header>{itemFormFor === plan.id && <form className="factor-form item-form" onSubmit={saveItem}><div className="factor-form-heading"><h3>Nueva acción</h3><button type="button" className="icon-button" onClick={() => setItemFormFor(null)}>×</button></div><label>Título<input value={itemDraft.title} onChange={(event) => setItemDraft({ ...itemDraft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={itemDraft.description} onChange={(event) => setItemDraft({ ...itemDraft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={itemDraft.priority} onChange={(event) => setItemDraft({ ...itemDraft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Recomendación<select value={itemDraft.recommendationId} onChange={(event) => setItemDraft({ ...itemDraft, recommendationId: event.target.value })}><option value="">Sin relacionar</option>{recommendations.filter((item) => item.status !== 'REJECTED').map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={itemDraft.responsibleId} onChange={(event) => setItemDraft({ ...itemDraft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={itemDraft.dueDate} onChange={(event) => setItemDraft({ ...itemDraft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setItemFormFor(null)}>Cancelar</button><button className="button primary" disabled={savingItem}>{savingItem ? 'Agregando...' : 'Agregar acción'}</button></div></form>}<div className="plan-board">{boardColumns.map((column) => { const columnItems = plan.items.filter((item) => item.status === column.status); return <div className={`kanban-column ${column.status.toLowerCase()}${dragState ? ' drop-enabled' : ''}${dropTarget === column.status ? ' drop-target' : ''}`} key={column.status} onDragOver={(event) => onColumnDragOver(event, column.status)} onDragLeave={(event) => onColumnDragLeave(event, column.status)} onDrop={(event) => onColumnDrop(event, column.status)}><div className="kanban-column-header"><span className="kanban-column-name"><span className={`kanban-column-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><span className="kanban-column-title">{column.label}</span></span><span className="kanban-column-count">{columnItems.length}</span></div>{dragState && dropTarget === column.status && <div className="kanban-drop-hint">Soltar aquí</div>}{columnItems.length === 0 ? <div className="kanban-column-empty"><span className={`kanban-empty-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><strong>{kanbanColumnVisuals[column.status].emptyTitle}</strong><small>{kanbanColumnVisuals[column.status].emptyText}</small></div> : columnItems.map((item) => <KanbanActionCard key={item.id} item={item} isDragging={dragState?.itemId === item.id} onDragStart={onCardDragStart} onDragEnd={onCardDragEnd} onChangeStatus={(entry, status) => void updateItem(entry, { status })} onEdit={startItemEdit} onRemove={(entry) => void removeItem(entry)} />)}</div> })}</div><footer className="plan-card-footer"><button className="text-button" onClick={() => { setItemDraft(emptyItemDraft); setItemFormFor(itemFormFor === plan.id ? null : plan.id) }}>{itemFormFor === plan.id ? 'Cerrar formulario' : '+ Agregar acción'}</button></footer></article>)}</div></>}{editingPlan && <PlanEditForm draft={planEditDraft} setDraft={setPlanEditDraft} saving={savingPlanEdit} onSubmit={savePlanEdit} onClose={() => setEditingPlan(null)} />}{editingItem && <ActionItemEditForm draft={itemEditDraft} setDraft={setItemEditDraft} users={users} saving={savingItemEdit} onSubmit={saveItemEdit} onClose={() => setEditingItem(null)} />}{createActionFor && <ActionFromRecommendationForm recommendation={createActionFor} plans={plans} users={users} planId={recActionPlanId} onPlanIdChange={setRecActionPlanId} draft={recActionDraft} onDraftChange={setRecActionDraft} planDraft={modalPlanDraft} onPlanDraftChange={setModalPlanDraft} error={recActionError} saving={savingRecAction} creatingPlan={creatingModalPlan} onSubmit={saveRecAction} onPlanCreate={createPlanFromModal} onClose={onCreateActionClose} />}</section> }
+  async function createPlanFromModal(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (creatingModalPlan) return; setCreatingModalPlan(true); setRecActionError(''); try { const result = await api<{ actionPlan: ActionPlan }>(`/diagnostics/${diagnostic.id}/action-plans`, { method: 'POST', body: JSON.stringify(modalPlanDraft) }); setRecActionPlanId(result.actionPlan.id); setModalPlanDraft(emptyPlanDraft); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear el plan.') } finally { setCreatingModalPlan(false) } }return <section className="ai-analysis-panel plans-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">5</span><div><p className="detail-label">EJECUCIÓN</p><h3>Planes de Acción</h3><p className="ai-panel-subtitle">Organiza la ejecución de las recomendaciones.</p></div></div><button className="button primary small-button" onClick={() => { setPlanDraft(emptyPlanDraft); setShowPlanForm(!showPlanForm) }}>{showPlanForm ? 'Cerrar' : '+ Nuevo plan'}</button></div>{error && <div className="form-error">{error}</div>}{showPlanForm && <form className="factor-form plan-form" onSubmit={savePlan}><div className="factor-form-heading"><h3>Nuevo plan de acción</h3><button type="button" className="icon-button" onClick={() => setShowPlanForm(false)}>×</button></div><label>Título<input value={planDraft.title} onChange={(event) => setPlanDraft({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => setPlanDraft({ ...planDraft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setShowPlanForm(false)}>Cancelar</button><button className="button primary" disabled={savingPlan}>{savingPlan ? 'Creando...' : 'Crear plan'}</button></div></form>}{loading ? <div className="ai-loading"><span className="loader" />Cargando planes...</div> : plans.length === 0 ? <EmptyState compact title="Sin planes de acción" text="Crea el primer plan para organizar la ejecución." /> : <><div className="plan-kpis">{[{ label: 'Planes activos', value: plans.filter((entry) => entry.status === 'ACTIVE').length, tone: 'active', icon: '▤' }, { label: 'Acciones totales', value: plans.reduce((sum, entry) => sum + entry.items.length, 0), tone: 'total', icon: '◫' }, { label: 'Completadas', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'COMPLETED').length, 0), tone: 'completed', icon: '✓' }, { label: 'En progreso', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'IN_PROGRESS').length, 0), tone: 'progress', icon: '↻' }].map((kpi) => <div className={`plan-kpi${kpi.tone ? ` ${kpi.tone}` : ''}`} key={kpi.label}><span className="plan-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><small>{kpi.label}</small></div></div>)}</div><div className="plans-list">{plans.map((plan) => <article className="plan-card" key={plan.id}><header className="plan-card-head"><div className="plan-card-main"><div className="plan-title-row"><h4>{plan.title}</h4><span className={`plan-pill ${plan.status.toLowerCase()}`}>{planStatusLabel[plan.status]}</span></div><p className="plan-description">{plan.description}</p><small className="plan-createdby">Creado por {plan.createdBy.name}</small></div><div className="plan-actions"><label className="plan-status-field"><span className="plan-status-label">Estado</span><select value={plan.status} onChange={(event) => void updatePlan(plan, event.target.value as ActionPlanStatus)} aria-label="Estado del plan">{actionPlanStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="plan-actions-buttons"><button className="button secondary small-button" onClick={() => startPlanEdit(plan)}>Editar</button><button className="button danger small-button" onClick={() => void removePlan(plan)}>Eliminar</button></div></div></header>{itemFormFor === plan.id && <form className="factor-form item-form" onSubmit={saveItem}><div className="factor-form-heading"><h3>Nueva acción</h3><button type="button" className="icon-button" onClick={() => setItemFormFor(null)}>×</button></div><label>Título<input value={itemDraft.title} onChange={(event) => setItemDraft({ ...itemDraft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={itemDraft.description} onChange={(event) => setItemDraft({ ...itemDraft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={itemDraft.priority} onChange={(event) => setItemDraft({ ...itemDraft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Recomendación<select value={itemDraft.recommendationId} onChange={(event) => setItemDraft({ ...itemDraft, recommendationId: event.target.value })}><option value="">Sin relacionar</option>{recommendations.filter((item) => item.status !== 'REJECTED').map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={itemDraft.responsibleId} onChange={(event) => setItemDraft({ ...itemDraft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={itemDraft.dueDate} onChange={(event) => setItemDraft({ ...itemDraft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setItemFormFor(null)}>Cancelar</button><button className="button primary" disabled={savingItem}>{savingItem ? 'Agregando...' : 'Agregar acción'}</button></div></form>}<div className="plan-board">{boardColumns.map((column) => { const columnItems = plan.items.filter((item) => item.status === column.status); return <div className={`kanban-column ${column.status.toLowerCase()}${dragState ? ' drop-enabled' : ''}${dropTarget === column.status ? ' drop-target' : ''}`} key={column.status} onDragOver={(event) => onColumnDragOver(event, column.status)} onDragLeave={(event) => onColumnDragLeave(event, column.status)} onDrop={(event) => onColumnDrop(event, column.status)}><div className="kanban-column-header"><span className="kanban-column-name"><span className={`kanban-column-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><span className="kanban-column-title">{column.label}</span></span><span className="kanban-column-count">{columnItems.length}</span></div>{dragState && dropTarget === column.status && <div className="kanban-drop-hint">Soltar aquí</div>}{columnItems.length === 0 ? <div className="kanban-column-empty"><span className={`kanban-empty-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><strong>{kanbanColumnVisuals[column.status].emptyTitle}</strong><small>{kanbanColumnVisuals[column.status].emptyText}</small></div> : columnItems.map((item) => <KanbanActionCard key={item.id} item={item} isDragging={dragState?.itemId === item.id} onDragStart={onCardDragStart} onDragEnd={onCardDragEnd} onChangeStatus={(entry, status) => void updateItem(entry, { status })} onEdit={startItemEdit} onRemove={(entry) => void removeItem(entry)} />)}</div> })}</div><footer className="plan-card-footer"><button className="text-button" onClick={() => { setItemDraft(emptyItemDraft); setItemFormFor(itemFormFor === plan.id ? null : plan.id) }}>{itemFormFor === plan.id ? 'Cerrar formulario' : '+ Agregar acción'}</button></footer></article>)}</div></>}{editingPlan && <PlanEditForm draft={planEditDraft} setDraft={setPlanEditDraft} saving={savingPlanEdit} onSubmit={savePlanEdit} onClose={() => setEditingPlan(null)} />}{editingItem && <ActionItemEditForm draft={itemEditDraft} setDraft={setItemEditDraft} users={users} saving={savingItemEdit} onSubmit={saveItemEdit} onClose={() => setEditingItem(null)} />}{createActionFor && <ActionFromRecommendationForm recommendation={createActionFor} plans={plans} users={users} planId={recActionPlanId} onPlanIdChange={setRecActionPlanId} draft={recActionDraft} onDraftChange={setRecActionDraft} planDraft={modalPlanDraft} onPlanDraftChange={setModalPlanDraft} error={recActionError} saving={savingRecAction} creatingPlan={creatingModalPlan} onSubmit={saveRecAction} onPlanCreate={createPlanFromModal} onClose={onCreateActionClose} />}</section> }
 
 function KanbanActionCard({ item, isDragging, onDragStart, onDragEnd, onChangeStatus, onEdit, onRemove }: { item: ActionItem; isDragging: boolean; onDragStart: (item: ActionItem) => void; onDragEnd: () => void; onChangeStatus: (item: ActionItem, status: ActionItemStatus) => void; onEdit: (item: ActionItem) => void; onRemove: (item: ActionItem) => void }) {
   const [expanded, setExpanded] = useState(false)
   const longDescription = item.description.length > 110
-  return <article className={`kanban-card${isDragging ? ' dragging' : ''}`} draggable onDragStart={() => onDragStart(item)} onDragEnd={onDragEnd}><div className="kanban-card-head"><strong className="kanban-card-title">{item.title}</strong><div className="kanban-card-controls"><button type="button" className="text-button" onClick={() => onEdit(item)}>Editar</button><button type="button" className="row-action" onClick={() => onRemove(item)} aria-label="Eliminar">×</button></div></div><div className="kanban-card-status"><span className={`kanban-status-badge ${item.status.toLowerCase()}`}>{actionItemStatusLabel[item.status]}</span><select value={item.status} onChange={(event) => onChangeStatus(item, event.target.value as ActionItemStatus)} aria-label="Estado de la acción">{actionItemStatuses.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div><p className={`kanban-card-description${expanded ? ' expanded' : ''}`}>{item.description}</p>{longDescription && <button type="button" className="kanban-more" onClick={() => setExpanded(!expanded)}>{expanded ? 'Ver menos' : 'Ver más'}</button>}<div className="kanban-meta-row"><span className={`level-pill ${item.priority.toLowerCase()}`}>P. {recPriorityLabel[item.priority]}</span>{item.responsible && <span className="assignee"><span className="avatar tiny">{initials(item.responsible.name)}</span>{item.responsible.name}</span>}{item.dueDate && <span className="kanban-meta-cell kanban-due">Vence {relativeDate(item.dueDate)}</span>}</div><div className="kanban-card-foot"><div className="kanban-foot-row"><span className="kanban-meta-cell kanban-origin">Origen: {item.recommendation ? 'recomendación' : 'plan de acción'}</span>{item.ticket && <span className="kanban-meta-cell kanban-ticket">Ticket #{item.ticket.id.slice(-6).toUpperCase()}</span>}</div>{item.recommendation && <span className="kanban-rec" title={item.recommendation.title}>{item.recommendation.title}</span>}</div></article>
-}
+  return <article className={`kanban-card${isDragging ? ' dragging' : ''}`} draggable onDragStart={() => onDragStart(item)} onDragEnd={onDragEnd}><div className="kanban-card-head"><strong className="kanban-card-title">{item.title}</strong><div className="kanban-card-controls"><button type="button" className="text-button" onClick={() => onEdit(item)}>Editar</button><button type="button" className="row-action" onClick={() => onRemove(item)} aria-label="Eliminar">×</button></div></div><div className="kanban-card-status"><span className={`kanban-status-badge ${item.status.toLowerCase()}`}>{actionItemStatusLabel[item.status]}</span><select value={item.status} onChange={(event) => onChangeStatus(item, event.target.value as ActionItemStatus)} aria-label="Estado de la acción">{actionItemStatuses.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div><p className={`kanban-card-description${expanded ? ' expanded' : ''}`}>{item.description}</p>{longDescription && <button type="button" className="kanban-more" onClick={() => setExpanded(!expanded)}>{expanded ? 'Ver menos' : 'Ver más'}</button>}<div className="kanban-meta-row"><span className={`level-pill ${item.priority.toLowerCase()}`}>P. {recPriorityLabel[item.priority]}</span>{item.responsible && <span className="assignee"><span className="avatar tiny">{initials(item.responsible.name)}</span>{item.responsible.name}</span>}{item.dueDate && <span className="kanban-meta-cell kanban-due">Vence {relativeDate(item.dueDate)}</span>}</div><div className="kanban-card-foot"><div className="kanban-foot-row"><span className="kanban-meta-cell kanban-origin">Origen: {item.recommendation ? 'recomendación' : 'plan de acción'}</span>{item.ticket && <span className="kanban-meta-cell kanban-ticket">Ticket #{item.ticket.id.slice(-6).toUpperCase()}</span>}</div>{item.recommendation && <span className="kanban-rec" title={item.recommendation.title}>{item.recommendation.title}</span>}</div></article>}
+
 function PlanEditForm({ draft, setDraft, saving, onSubmit, onClose }: { draft: PlanDraft; setDraft: React.Dispatch<React.SetStateAction<PlanDraft>>; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">PLAN DE ACCIÓN</p><h2>Editar plan</h2><p className="company-modal-subtitle">Actualiza la información del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div> }
 
 function ActionItemEditForm({ draft, setDraft, users, saving, onSubmit, onClose }: { draft: ItemDraft; setDraft: React.Dispatch<React.SetStateAction<ItemDraft>>; users: User[]; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">✓</div><div className="company-modal-title"><p className="eyebrow">ACTIVIDAD</p><h2>Editar acción</h2><p className="company-modal-subtitle">Actualiza la información y el responsable de la actividad.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ActionItemStatus })}>{actionItemStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={draft.responsibleId} onChange={(event) => setDraft({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div> }
@@ -1201,30 +1346,437 @@ function AiKpis({ items, crossCount }: { items: SWOTItem[]; crossCount?: number 
     { label: 'Amenazas', value: items.filter((item) => item.type === 'THREAT').length, icon: '⚠', tone: 'threat' },
     ...(crossCount !== undefined ? [{ label: 'Cruces estratégicos', value: crossCount, icon: '◫', tone: 'strategy' }] : []),
   ]
-  return <div className="ai-kpis">{kpis.map((kpi) => <div className={`ai-kpi ${kpi.tone}`} key={kpi.label}><span className="ai-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><span>{kpi.label}</span></div></div>)}</div>
-}
+  return <div className="ai-kpis">{kpis.map((kpi) => <div className={`ai-kpi ${kpi.tone}`} key={kpi.label}><span className="ai-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><span>{kpi.label}</span></div></div>)}</div>}
 
-function AiExecSummary({ text }: { text: string }) { return <article className="ai-exec-summary"><span className="ai-exec-icon" aria-hidden="true">✦</span><div><h4>Resumen ejecutivo</h4><p>{text}</p></div></article> }
+function aiTextParagraphs(text: string): string[] {
+  return text.split(/\n+/).map((part) => part.trim()).filter(Boolean)}
 
-function AiDiagnosis({ text }: { text: string }) { return <article className="ai-diagnosis"><span className="ai-diagnosis-icon" aria-hidden="true">◫</span><div><h4>Diagnóstico</h4><p>{text}</p></div></article> }
+type AiQuickRead = { strategies: number; risks: number; opportunities: number }
+
+function AiExecSummary({ text, quickRead }: { text: string; quickRead?: AiQuickRead }) {
+  const paragraphs = aiTextParagraphs(text)
+  return (
+    <article className="ai-exec-summary">
+      <header className="ai-card-head">
+        <span className="ai-exec-icon" aria-hidden="true">✦</span>
+        <div className="ai-card-headings">
+          <h4>Resumen ejecutivo</h4>
+          <p className="ai-card-subtitle">Lectura de alto nivel de la situación estratégica</p>
+        </div>
+        <span className="ai-generated-badge">Generado con IA</span>
+      </header>
+      <div className="ai-card-body">
+        {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      </div>
+      {quickRead && (
+        <div className="ai-quick-read">
+          <span className="ai-quick-read-label">Lectura rápida</span>
+          <ul className="ai-quick-read-stats">
+            <li><strong>{quickRead.strategies}</strong><span>Estrategias IA</span></li>
+            <li><strong>{quickRead.risks}</strong><span>Riesgos prioritarios</span></li>
+            <li><strong>{quickRead.opportunities}</strong><span>Oportunidades prioritarias</span></li>
+          </ul>
+        </div>
+      )}
+    </article>
+  )}
+
+function AiDiagnosis({ text }: { text: string }) {
+  const paragraphs = aiTextParagraphs(text)
+  return (
+    <article className="ai-diagnosis">
+      <header className="ai-card-head">
+        <span className="ai-diagnosis-icon" aria-hidden="true">◫</span>
+        <div className="ai-card-headings">
+          <h4>Diagnóstico</h4>
+          <p className="ai-card-subtitle">Lectura estratégica de la situación actual</p>
+        </div>
+      </header>
+      <div className="ai-card-body ai-reading-column">
+        {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      </div>
+    </article>
+  )}
 
 function AiFindings({ findings }: { findings: Array<{ basis: 'FACT' | 'INFERENCE'; finding: string }> }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
-  return <section className="ai-section ai-findings"><h4>Hallazgos</h4>{findings.length === 0 ? <p className="ai-empty">Sin hallazgos.</p> : <div className="ai-findings-list">{findings.map((item, index) => { const isOpen = openIndex === index; return <article className={`ai-finding${isOpen ? ' open' : ''}`} key={`${item.finding}-${index}`}><button type="button" className="ai-finding-head" aria-expanded={isOpen} onClick={() => setOpenIndex(isOpen ? null : index)}><span className="ai-finding-num">{String(index + 1).padStart(2, '0')}</span><span className="ai-finding-content"><span className={`ai-finding-tag ${item.basis === 'FACT' ? 'fact' : 'inference'}`}>{item.basis === 'FACT' ? 'Hecho' : 'Inferencia'}</span><p>{item.finding}</p></span><span className="ai-finding-chevron" aria-hidden="true">▾</span></button></article> })}</div>}</section>
-}
+  return <section className="ai-section ai-findings"><h4>Hallazgos</h4>{findings.length === 0 ? <p className="ai-empty">Sin hallazgos.</p> : <div className="ai-findings-list">{findings.map((item, index) => { const isOpen = openIndex === index; return <article className={`ai-finding${isOpen ? ' open' : ''}`} key={`${item.finding}-${index}`}><button type="button" className="ai-finding-head" aria-expanded={isOpen} onClick={() => setOpenIndex(isOpen ? null : index)}><span className="ai-finding-num">{String(index + 1).padStart(2, '0')}</span><span className="ai-finding-content"><span className={`ai-finding-tag ${item.basis === 'FACT' ? 'fact' : 'inference'}`}>{item.basis === 'FACT' ? 'Hecho' : 'Inferencia'}</span><p>{item.finding}</p></span><span className="ai-finding-chevron" aria-hidden="true">▾</span></button></article> })}</div>}</section>}
 
 function AiStrategyTabs({ strategies }: { strategies: Array<{ key: 'FO' | 'DO' | 'FA' | 'DA'; label: string; tone: string; items: string[] }> }) {
   const [active, setActive] = useState<string>(strategies[0]?.key ?? 'FO')
   const current = strategies.find((entry) => entry.key === active) ?? strategies[0]
-  return <section className="ai-section ai-strategy"><div className="ai-strategy-head"><h4>Matriz estratégica</h4><span className="ai-strategy-hint">Estrategias por combinación de factores</span></div><div className="ai-strategy-tabs" role="tablist">{strategies.map((entry) => <button type="button" role="tab" aria-selected={active === entry.key} className={`ai-strategy-tab ${entry.tone}${active === entry.key ? ' active' : ''}`} key={entry.key} onClick={() => setActive(entry.key)}><span className="ai-strategy-tab-icon" aria-hidden="true">{entry.key}</span><span>{entry.label}</span><small>{entry.items.length}</small></button>)}</div>{current && <div className="ai-strategy-panel" role="tabpanel">{current.items.length ? current.items.map((item, index) => <div className="ai-strategy-item" key={`${current.key}-${item}-${index}`}><span className="ai-strategy-item-check" aria-hidden="true">✓</span><p>{item}</p></div>) : <p className="ai-empty">Sin estrategias generadas para esta combinación.</p>}</div>}</section>
-}
+  return <section className="ai-section ai-strategy"><div className="ai-strategy-head"><h4>Matriz estratégica</h4><span className="ai-strategy-hint">Estrategias por combinación de factores</span></div><div className="ai-strategy-tabs" role="tablist">{strategies.map((entry) => <button type="button" role="tab" aria-selected={active === entry.key} className={`ai-strategy-tab ${entry.tone}${active === entry.key ? ' active' : ''}`} key={entry.key} onClick={() => setActive(entry.key)}><span className="ai-strategy-tab-icon" aria-hidden="true">{entry.key}</span><span>{entry.label}</span><small>{entry.items.length}</small></button>)}</div>{current && <div className="ai-strategy-panel" role="tabpanel">{current.items.length ? current.items.map((item, index) => <div className="ai-strategy-item" key={`${current.key}-${item}-${index}`}><span className="ai-strategy-item-check" aria-hidden="true">✓</span><p>{item}</p></div>) : <p className="ai-empty">Sin estrategias generadas para esta combinación.</p>}</div>}</section>}
 
 function AiPrioritySection({ title, tone, items }: { title: string; tone: string; items: string[] }) {
-  return <article className={`ai-priority-card ${tone}`}><div className="ai-priority-head"><h4>{title}</h4><span className="ai-priority-count">{items.length}</span></div>{items.length ? <ul className="ai-priority-list">{items.map((item, index) => <li key={`${title}-${item}-${index}`}>{item}</li>)}</ul> : <p className="ai-empty">Sin elementos.</p>}</article>
-}
+  return <article className={`ai-priority-card ${tone}`}><div className="ai-priority-head"><h4>{title}</h4><span className="ai-priority-count">{items.length}</span></div>{items.length ? <ul className="ai-priority-list">{items.map((item, index) => <li key={`${title}-${item}-${index}`}>{item}</li>)}</ul> : <p className="ai-empty">Sin elementos.</p>}</article>}
 
 function AIAnalysisPanel({ analysis, loading, items = [], crossCount, onNavigateToRecommendations }: { analysis: AIAnalysis; loading: boolean; items?: SWOTItem[]; crossCount?: number; onNavigateToRecommendations?: () => void }) {
-  return <section className="ai-analysis-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">3</span><div><p className="detail-label">ESTRATEGIA</p><h3>Análisis con IA</h3><p className="ai-panel-subtitle">Lectura estratégica generada con IA a partir de la DOFA.</p></div></div><span className="ai-badge">IA</span></div>{loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}<AiKpis items={items} crossCount={crossCount} /><AiExecSummary text={analysis.executiveSummary} /><AiDiagnosis text={analysis.diagnosis} /><AiFindings findings={analysis.keyFindings} /><AiStrategyTabs strategies={[{ key: 'FO', label: 'Estrategias FO', tone: 'fo', items: analysis.foStrategies }, { key: 'DO', label: 'Estrategias DO', tone: 'do', items: analysis.doStrategies }, { key: 'FA', label: 'Estrategias FA', tone: 'fa', items: analysis.faStrategies }, { key: 'DA', label: 'Estrategias DA', tone: 'da', items: analysis.daStrategies }]} /><div className="ai-priority-grid"><AiPrioritySection title="Riesgos prioritarios" tone="risk" items={analysis.priorityRisks} /><AiPrioritySection title="Oportunidades prioritarias" tone="opportunity" items={analysis.priorityOpportunities} /></div><div className="ai-recommendations"><h4>Recomendaciones</h4>{analysis.recommendations.map((recommendation) => <article className="ai-recommendation" key={recommendation.title}><div><strong>{recommendation.title}</strong><span className={`level-pill ${recommendation.priority.toLowerCase()}`}>{recommendation.priority === 'HIGH' ? 'Alta' : recommendation.priority === 'MEDIUM' ? 'Media' : 'Baja'}</span></div><p>{recommendation.description}</p><small><b>Impacto esperado:</b> {recommendation.expectedImpact}</small><small><b>Acción sugerida:</b> {recommendation.suggestedAction}</small></article>)}</div>{onNavigateToRecommendations && <article className="ai-next-card"><div className="ai-next-copy"><span className="ai-next-icon" aria-hidden="true">→</span><div><h4>¿Qué sigue?</h4><p>Convierte estas estrategias y recomendaciones en un plan de acción.</p></div></div><button type="button" className="button primary" onClick={onNavigateToRecommendations}>Ver recomendaciones →</button></article>}</section>
-}
+  const quickRead: AiQuickRead = {
+    strategies: analysis.foStrategies.length + analysis.doStrategies.length + analysis.faStrategies.length + analysis.daStrategies.length,
+    risks: analysis.priorityRisks.length,
+    opportunities: analysis.priorityOpportunities.length,
+  }
+  return <section className="ai-analysis-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">3</span><div><p className="detail-label">ESTRATEGIA</p><h3>Análisis con IA</h3><p className="ai-panel-subtitle">Lectura estratégica generada con IA a partir de la DOFA.</p></div></div><span className="ai-badge">IA</span></div>{loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}<AiKpis items={items} crossCount={crossCount} /><AiExecSummary text={analysis.executiveSummary} quickRead={quickRead} /><AiDiagnosis text={analysis.diagnosis} /><AiFindings findings={analysis.keyFindings} /><AiStrategyTabs strategies={[{ key: 'FO', label: 'Estrategias FO', tone: 'fo', items: analysis.foStrategies }, { key: 'DO', label: 'Estrategias DO', tone: 'do', items: analysis.doStrategies }, { key: 'FA', label: 'Estrategias FA', tone: 'fa', items: analysis.faStrategies }, { key: 'DA', label: 'Estrategias DA', tone: 'da', items: analysis.daStrategies }]} /><div className="ai-priority-grid"><AiPrioritySection title="Riesgos prioritarios" tone="risk" items={analysis.priorityRisks} /><AiPrioritySection title="Oportunidades prioritarias" tone="opportunity" items={analysis.priorityOpportunities} /></div><div className="ai-recommendations"><h4>Recomendaciones</h4>{analysis.recommendations.map((recommendation) => <article className="ai-recommendation" key={recommendation.title}><div><strong>{recommendation.title}</strong><span className={`level-pill ${recommendation.priority.toLowerCase()}`}>{recommendation.priority === 'HIGH' ? 'Alta' : recommendation.priority === 'MEDIUM' ? 'Media' : 'Baja'}</span></div><p>{recommendation.description}</p><small><b>Impacto esperado:</b> {recommendation.expectedImpact}</small><small><b>Acción sugerida:</b> {recommendation.suggestedAction}</small></article>)}</div>{onNavigateToRecommendations && <article className="ai-next-card"><div className="ai-next-copy"><span className="ai-next-icon" aria-hidden="true">→</span><div><h4>¿Qué sigue?</h4><p>Convierte estas estrategias y recomendaciones en un plan de acción.</p></div></div><button type="button" className="button primary" onClick={onNavigateToRecommendations}>Ver recomendaciones →</button></article>}</section>}/* ============================================   CHECKY · ASISTENTE ESTRATÉGICO   ============================================ */
+
+type CheckyStatus = 'idle' | 'loading' | 'success' | 'error' | 'insufficientData'
+
+type CheckyFactorRef = { kind: 'factor'; id: string; label: string; type: SWOTType }
+
+type CheckyCrossRef = { kind: 'cross'; id: string; label: string; crossType: CrossType; short: string }
+
+type CheckyUnknownRef = { kind: 'unknown'; id: string; label: string }
+
+type CheckyEvidenceRef = CheckyFactorRef | CheckyCrossRef | CheckyUnknownRef
+
+const checkyCategoryOrder: CheckyCategory[] = ['REVIEW_ASPECTS', 'MISSING_CROSSES', 'UNRELATED_FACTORS', 'STRENGTHEN_STRATEGIES', 'STRATEGIC_RISKS', 'MISSED_OPPORTUNITIES', 'INFO_TO_COMPLEMENT', 'NEXT_STEPS']
+
+type CheckyCategoryVisual = { label: string; icon: string; tone: string; relevance: Level }/** `relevance` es una lectura derivada de la categoría, no una prioridad asignada por la IA: el contrato de Checky no incluye ese campo. */
+
+const checkyCategoryVisuals: Record<CheckyCategory, CheckyCategoryVisual> = {
+  REVIEW_ASPECTS: { label: 'Aspectos a revisar', icon: '◎', tone: 'review', relevance: 'HIGH' },
+  MISSING_CROSSES: { label: 'Cruces potenciales', icon: '◇', tone: 'missing', relevance: 'HIGH' },
+  UNRELATED_FACTORS: { label: 'Factores poco relacionados', icon: '⊘', tone: 'unrelated', relevance: 'MEDIUM' },
+  STRENGTHEN_STRATEGIES: { label: 'Estrategias a fortalecer', icon: '↑', tone: 'strategy', relevance: 'MEDIUM' },
+  STRATEGIC_RISKS: { label: 'Riesgos estratégicos', icon: '!', tone: 'risk', relevance: 'HIGH' },
+  MISSED_OPPORTUNITIES: { label: 'Oportunidades no aprovechadas', icon: '↗', tone: 'opportunity', relevance: 'MEDIUM' },
+  INFO_TO_COMPLEMENT: { label: 'Información a validar', icon: '?', tone: 'info', relevance: 'LOW' },
+  NEXT_STEPS: { label: 'Próximos pasos', icon: '→', tone: 'next', relevance: 'MEDIUM' },}
+
+const checkySummaryCards: Array<{ category: CheckyCategory; label: string }> = [
+  { category: 'REVIEW_ASPECTS', label: 'Aspectos a revisar' },
+  { category: 'MISSING_CROSSES', label: 'Cruces potenciales' },
+  { category: 'STRENGTHEN_STRATEGIES', label: 'Estrategias a fortalecer' },
+  { category: 'NEXT_STEPS', label: 'Próximos pasos' },]
+
+const checkyStatusVisuals: Record<CheckySuggestionStatus, { label: string; icon: string }> = {
+  PENDING: { label: 'Pendiente', icon: '○' },
+  ACCEPTED: { label: 'Aceptada', icon: '✓' },
+  REJECTED: { label: 'Rechazada', icon: '✕' },}
+
+const checkyBasisCopy: Record<CheckyFindingBasis, { text: string; hint: string }> = {
+  FACT: { text: 'Basado directamente en información registrada.', hint: 'El hallazgo se apoya en datos que ya existen en el diagnóstico.' },
+  INFERENCE: { text: 'Inferencia realizada por Checky a partir de los datos disponibles.', hint: 'El hallazgo es una lectura razonada, no un dato registrado.' },}
+
+const checkyDefaultQuestion = 'Revisa mi análisis estratégico completo (factores, cruces y estrategias) e identifica los aspectos que debería considerar antes de avanzar.'/** El servidor guarda cada hallazgo como `${title}\n${detail}`; lo recuperamos sin inventar nada. */
+
+function splitCheckyContent(content: string): { title: string; detail: string } {
+  const [first = '', ...rest] = content.split('\n')
+  return { title: first.trim(), detail: rest.join('\n').trim() }}
+
+function checkyErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 503) return 'Checky no está configurado todavía. Añade OPENAI_API_KEY en el backend.'
+    if (error.status === 429) return 'Alcanzaste el límite de consultas de Checky. Inténtalo de nuevo más tarde.'
+    if (error.status === 502) return 'Checky no pudo completar la revisión en este momento. Inténtalo de nuevo.'
+    if (error.status === 403) return 'Tu rol no tiene permiso para consultar a Checky en este diagnóstico.'
+    return error.message
+  }
+  return 'No se pudo completar la consulta a Checky.'}
+
+function checkyEvidenceRefs(evidenceIds: string[], items: SWOTItem[], crosses: StrategicCross[]): CheckyEvidenceRef[] {
+  return evidenceIds.map((id) => {
+    const item = items.find((candidate) => candidate.id === id)
+    if (item) return { kind: 'factor', id, label: `${swotTypeLabels[item.type]}: ${item.description}`, type: item.type }
+    const cross = crosses.find((candidate) => candidate.id === id)
+    if (cross) {
+      const short = `#${cross.id.slice(-6).toUpperCase()}`
+      return { kind: 'cross', id, label: `Cruce ${cross.crossType} · ${short}`, crossType: cross.crossType, short }
+    }
+    return { kind: 'unknown', id, label: 'Referencia no disponible' }
+  })}
+
+function flashCheckyTarget(target: Element | null) {
+  if (!target) return
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  target.classList.remove('checky-evidence-flash')
+  window.requestAnimationFrame(() => target.classList.add('checky-evidence-flash'))
+  window.setTimeout(() => target.classList.remove('checky-evidence-flash'), 1800)}
+
+function navigateToCheckyEvidence(ref: CheckyEvidenceRef): { ok: boolean; hint: string } {
+  if (ref.kind === 'factor') {
+    const target = document.querySelector(`[data-swot-item-id="${ref.id}"]`)
+    flashCheckyTarget(target)
+    return { ok: Boolean(target), hint: target ? '' : 'No se encontró el factor en la matriz. Es posible que se haya eliminado después de la consulta.' }
+  }
+  if (ref.kind === 'cross') {
+    const target = document.querySelector(`[data-cross-id="${ref.id}"]`)
+    if (target) { flashCheckyTarget(target); return { ok: true, hint: '' } }
+    flashCheckyTarget(document.querySelector('.crosses-section'))
+    return { ok: false, hint: 'El cruce está en la sección de cruces, pero puede estar oculto por el filtro de tipo activo.' }
+  }
+  return { ok: false, hint: 'No se encontró el elemento en la matriz actual.' }}/** Ordena interno (STRENGTH/WEAKNESS) primero, igual que el servidor y que la creación de cruces de la app. */
+
+function orderCheckyFactors(factors: CheckyFactorRef[]): CheckyFactorRef[] {
+  if (factors.length < 2) return factors
+  const internal = factors.find((factor) => factor.type === 'STRENGTH' || factor.type === 'WEAKNESS')
+  const external = factors.find((factor) => factor.type === 'OPPORTUNITY' || factor.type === 'THREAT')
+  return internal && external ? [internal, external] : factors.slice(0, 2)}/** Extrae la estrategia solo si el propio detalle la delimita; nunca la inventa. */
+
+function CheckyBasisBadge({ basis }: { basis: CheckyFindingBasis }) {
+  const copy = checkyBasisCopy[basis]
+  return (
+    <span className={`checky-basis ${basis === 'FACT' ? 'fact' : 'inference'}`} title={copy.hint}>
+      <span className="checky-basis-dot" aria-hidden="true" />
+      {basis}
+      <span className="checky-basis-copy">{copy.text}</span>
+    </span>
+  )}
+
+function CheckyStatusBadge({ status }: { status: CheckySuggestionStatus }) {
+  const visual = checkyStatusVisuals[status]
+  return <span className={`checky-status ${status.toLowerCase()}`}><span aria-hidden="true">{visual.icon}</span>{visual.label}</span>}
+
+function CheckyDecisionActions({ status, busy, onAccept, onReject }: { status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
+  if (status === 'ACCEPTED') return <p className="checky-decided accepted"><span aria-hidden="true">✓</span> Sugerencia aceptada</p>
+  if (status === 'REJECTED') return <p className="checky-decided rejected"><span aria-hidden="true">✕</span> Sugerencia descartada</p>
+  return (
+    <div className="checky-actions">
+      <button type="button" className="button secondary small-button" onClick={onReject} disabled={busy}>Rechazar</button>
+      <button type="button" className="button primary small-button" onClick={onAccept} disabled={busy}>Aceptar sugerencia</button>
+    </div>
+  )}
+
+function CheckyEvidence({ refs }: { refs: CheckyEvidenceRef[] }) {
+  const [hint, setHint] = useState('')
+  if (refs.length === 0) return <p className="checky-evidence-empty">Checky no encontró evidencia trazable para este hallazgo.</p>
+  return (
+    <div className="checky-evidence">
+      <span className="checky-evidence-label">Evidencia</span>
+      <ul>
+        {refs.map((ref) => (
+          <li key={ref.id}>
+            <button type="button" className={`checky-evidence-chip ${ref.kind}`} onClick={() => setHint(navigateToCheckyEvidence(ref).hint)}>
+              <span className="checky-evidence-icon" aria-hidden="true">{ref.kind === 'factor' ? '◻' : ref.kind === 'cross' ? '◫' : '?'}</span>
+              <span className="checky-evidence-text">{ref.label}</span>
+              <span className="checky-evidence-go" aria-hidden="true">→</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {hint && <p className="checky-evidence-hint">{hint}</p>}
+    </div>
+  )}
+
+function CheckyMissingCrossCard({ finding, refs, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
+  const [open, setOpen] = useState(false)
+  const { title, detail } = splitCheckyContent(finding.content)
+  const factors = orderCheckyFactors(refs.filter((ref): ref is CheckyFactorRef => ref.kind === 'factor'))
+  const crossType = factors.length === 2 ? crossTypeForPair(factors[0].type, factors[1].type) : null
+  // La estrategia llega estructurada desde el backend: no se deduce del texto del hallazgo.
+  const strategyTitle = finding.suggestedStrategyTitle
+  const strategyDescription = finding.suggestedStrategyDescription
+  return (
+    <article className="checky-card checky-card-cross">
+      <header className="checky-card-head">
+        <span className="checky-card-icon" aria-hidden="true">💡</span>
+        <div>
+          <p className="checky-card-kicker">Posible cruce no explorado</p>
+          <h4>{title}</h4>
+        </div>
+      </header>
+      <div className="checky-cross-pair">
+        <div className="checky-cross-factor"><span className="checky-cross-role">Factor A</span><p>{factors[0]?.label ?? 'Por confirmar'}</p></div>
+        <span className="checky-cross-plus" aria-hidden="true">+</span>
+        <div className="checky-cross-factor"><span className="checky-cross-role">Factor B</span><p>{factors[1]?.label ?? 'Por confirmar'}</p></div>
+      </div>
+      <div className="checky-cross-meta">
+        <span className="checky-cross-type-label">Tipo</span>
+        {crossType ? <span className={`cross-type-chip large ${crossType.toLowerCase()}`}>{crossType}</span> : <span className="checky-cross-unknown">Checky no propuso una pareja DOFA válida</span>}
+      </div>
+      <p className="checky-cross-question">¿Por qué podría ser relevante?</p>
+      <p className="checky-card-detail">{detail}</p>
+      {strategyTitle && strategyDescription && (<div className="checky-cross-strategy"><p className="checky-cross-question"><span aria-hidden="true">🎯</span> Estrategia sugerida</p><p className="checky-strategy-title">{strategyTitle}</p><p className="checky-card-detail">{strategyDescription}</p></div>)}
+      <p className="checky-cross-note">Al aceptar, el cruce se crea en la matriz DOFA con origen IA y esta sugerencia queda aceptada. Si lo rechazas, no se crea nada.</p>
+      <div className="checky-card-foot">
+        <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
+        <CheckyBasisBadge basis={finding.basis ?? 'INFERENCE'} />
+        <CheckyStatusBadge status={status} />
+      </div>
+      {open && <CheckyEvidence refs={refs} />}
+      <CheckyDecisionActions status={status} busy={busy} onAccept={onAccept} onReject={onReject} />
+    </article>
+  )}
+
+function CheckyFindingCard({ finding, refs, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
+  const [open, setOpen] = useState(false)
+  const { title, detail } = splitCheckyContent(finding.content)
+  return (
+    <article className="checky-card">
+      <header className="checky-card-head">
+        <div>
+          <h4>{title}</h4>
+          <div className="checky-card-badges">
+            <span className={`level-pill ${checkyCategoryVisuals[finding.category!].relevance.toLowerCase()}`} title="Relevancia derivada de la categoría del hallazgo">Relevancia {checkyCategoryVisuals[finding.category!].relevance === 'HIGH' ? 'alta' : checkyCategoryVisuals[finding.category!].relevance === 'MEDIUM' ? 'media' : 'baja'}</span>
+            <CheckyStatusBadge status={status} />
+          </div>
+        </div>
+      </header>
+      <p className="checky-card-detail">{detail}</p>
+      <div className="checky-card-foot">
+        <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
+        <CheckyBasisBadge basis={finding.basis ?? 'INFERENCE'} />
+      </div>
+      {open && <CheckyEvidence refs={refs} />}
+      <CheckyDecisionActions status={status} busy={busy} onAccept={onAccept} onReject={onReject} />
+    </article>
+  )}
+
+function CheckySummary({ counts }: { counts: Record<CheckyCategory, number> }) {
+  return (
+    <div className="checky-summary">
+      {checkySummaryCards.map((card) => {
+        const visual = checkyCategoryVisuals[card.category]
+        return (
+          <div className={`checky-summary-card ${visual.tone}`} key={card.category}>
+            <span className="checky-summary-icon" aria-hidden="true">{visual.icon}</span>
+            <div><strong>{counts[card.category]}</strong><span>{card.label}</span></div>
+          </div>
+        )
+      })}
+    </div>
+  )}
+
+function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagnostic; items: SWOTItem[]; onCrossCreated: () => Promise<void> | void }) {
+  const [status, setStatus] = useState<CheckyStatus>('idle')
+  const [error, setError] = useState('')
+  const [session, setSession] = useState<CheckySession | null>(null)
+  const [messages, setMessages] = useState<CheckyMessage[]>([])
+  const [crosses, setCrosses] = useState<StrategicCross[]>([])
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const [list, crossResult] = await Promise.all([
+            api<{ sessions: CheckySession[] }>(`/diagnostics/${diagnostic.id}/checky/sessions`),
+            api<{ crosses: StrategicCross[] }>(`/diagnostics/${diagnostic.id}/crosses`),
+          ])
+          setCrosses(crossResult.crosses)
+          const latest = list.sessions[0]
+          if (!latest) return
+          const detail = await api<{ session: CheckySession; messages: CheckyMessage[] }>(`/checky/sessions/${latest.id}`)
+          setSession(detail.session)
+          setMessages(detail.messages)
+          if (detail.messages.some((message) => message.role === 'CHECKY')) {
+            const restoredReply = detail.messages.find((message) => message.role === 'CHECKY' && message.category === null)
+            setStatus(restoredReply?.insufficientData ? 'insufficientData' : 'success')
+          }
+        } catch { /* la sección arranca en idle sin bloquear el diagnóstico */ }
+      })()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [diagnostic.id])
+  async function consult() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setStatus('loading')
+    try {
+      const created = await api<{ session: CheckySession }>(`/diagnostics/${diagnostic.id}/checky/sessions`, { method: 'POST', body: JSON.stringify({ title: 'Revisión de Checky' }) })
+      setSession(created.session)
+      const result = await api<{ reply: CheckyMessage; messages: CheckyMessage[] }>(`/checky/sessions/${created.session.id}/messages`, { method: 'POST', body: JSON.stringify({ content: checkyDefaultQuestion }) })
+      setMessages(result.messages)
+      setStatus(result.reply.insufficientData ? 'insufficientData' : 'success')
+    } catch (requestError) {
+      setError(checkyErrorMessage(requestError))
+      setStatus('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function decide(message: CheckyMessage, next: CheckySuggestionStatus) {
+    if (!session || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      // A missing cross is the only decision that materializes data, so it goes through its own
+      // endpoint: the server creates the StrategicCross and only then marks the suggestion accepted.
+      if (next === 'ACCEPTED' && message.category === 'MISSING_CROSSES') {
+        const result = await api<{ suggestion: CheckyMessage; cross: StrategicCross }>(`/checky/suggestions/${message.id}/accept`, { method: 'POST' })
+        setMessages((current) => current.map((item) => item.id === result.suggestion.id ? result.suggestion : item))
+        setCrosses((current) => [result.cross, ...current.filter((item) => item.id !== result.cross.id)])
+        await onCrossCreated()
+        return
+      }
+      const result = await api<{ message: CheckyMessage }>(`/checky/sessions/${session.id}/messages/${message.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
+      setMessages((current) => current.map((item) => item.id === result.message.id ? result.message : item))
+    } catch (requestError) {
+      setError(checkyErrorMessage(requestError))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const reply = [...messages].reverse().find((message) => message.role === 'CHECKY' && message.category === null) ?? null
+  const suggestions = messages.filter((message) => message.role === 'CHECKY' && message.category !== null)
+  const counts = Object.fromEntries(checkyCategoryOrder.map((category) => [category, suggestions.filter((message) => message.category === category).length])) as Record<CheckyCategory, number>
+  const groups = checkyCategoryOrder
+    .map((category) => ({ category, visual: checkyCategoryVisuals[category], items: suggestions.filter((message) => message.category === category) }))
+    .filter((group) => group.items.length > 0)
+  const hasResults = suggestions.length > 0
+  const missing = reply?.missingInformation ?? []
+  const loading = status === 'loading'
+  return (
+    <section className="checky-panel" aria-busy={loading}>
+      <header className="checky-head">
+        <span className="checky-avatar" aria-hidden="true">✦</span>
+        <div className="checky-headings">
+          <h3>✨ Checky</h3>
+          <p className="checky-role">Asistente estratégico</p>
+          <p className="checky-intro">He revisado tus factores, cruces y estrategias para identificar aspectos que podrías considerar antes de avanzar.</p>
+        </div>
+        <button type="button" className="button primary checky-cta" onClick={() => void consult()} disabled={busy}>
+          {loading ? <><span className="button-loader" />Analizando...</> : 'Analizar con Checky'}
+        </button>
+      </header>
+      {loading && <div className="checky-loading"><span className="loader" />Checky está revisando tu análisis estratégico...</div>}
+      {status === 'error' && <div className="form-error checky-error" role="alert">{error}</div>}
+      {error && status !== 'error' && <div className="form-error checky-error" role="alert">{error}</div>}
+      {status === 'insufficientData' && (
+        <div className="checky-insufficient">
+          <span className="checky-insufficient-icon" aria-hidden="true">◔</span>
+          <div>
+            <strong>Checky necesita más información para concluir</strong>
+            <p>La evidencia registrada no alcanza para algunos de los análisis. Esto es lo que convendría validar con la empresa:</p>
+            <ul>{missing.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+          </div>
+        </div>
+      )}
+      {hasResults && reply && <p className="checky-reply">{reply.content}</p>}
+      {hasResults && <CheckySummary counts={counts} />}
+      {status === 'idle' && !hasResults && (
+        <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu diagnóstico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
+      )}
+      {hasResults && (
+        <div className="checky-groups">
+          {groups.map((group) => (
+            <section className={`checky-group ${group.visual.tone}`} key={group.category}>
+              <header className="checky-group-head">
+                <span className="checky-group-icon" aria-hidden="true">{group.visual.icon}</span>
+                <h4>{group.visual.label}</h4>
+                <span className="checky-group-count">{group.items.length}</span>
+              </header>
+              <div className="checky-group-body">
+                {group.items.map((finding) => {
+                  const refs = checkyEvidenceRefs(finding.evidenceIds, items, crosses)
+                  const onAccept = () => void decide(finding, 'ACCEPTED')
+                  const onReject = () => void decide(finding, 'REJECTED')
+                  return finding.category === 'MISSING_CROSSES'
+                    ? <CheckyMissingCrossCard key={finding.id} finding={finding} refs={refs} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
+                    : <CheckyFindingCard key={finding.id} finding={finding} refs={refs} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+      {hasResults && (
+        <footer className="checky-legend">
+          <span className="checky-legend-item"><CheckyBasisBadge basis="FACT" /></span>
+          <span className="checky-legend-item"><CheckyBasisBadge basis="INFERENCE" /></span>
+          <p>Las decisiones solo cambian el estado de la sugerencia. Checky no crea cruces, recomendaciones, planes ni tickets.</p>
+        </footer>
+      )}
+    </section>
+  )}
 
 export default App

@@ -4,13 +4,14 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, Role, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, Role, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
-import { AIService, AIServiceError, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
+import { AIService, AIServiceError, type CheckyConsultResult, type CheckyContext, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { calculateWeightedScore } from './weighting-service.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -46,6 +47,66 @@ const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof cros
   createdAt: cross.createdAt,
   updatedAt: cross.updatedAt,
 })
+
+const weightingView = (weighting: { id: string; crossId: string; impactoEstrategico: string; viabilidad: string; urgencia: string; sinergiaInterna: string; impactoReputacional: string; weightedScore: number; createdById: string; createdAt: Date; updatedAt: Date }) => ({
+  id: weighting.id,
+  crossId: weighting.crossId,
+  impactoEstrategico: weighting.impactoEstrategico,
+  viabilidad: weighting.viabilidad,
+  urgencia: weighting.urgencia,
+  sinergiaInterna: weighting.sinergiaInterna,
+  impactoReputacional: weighting.impactoReputacional,
+  weightedScore: weighting.weightedScore,
+  createdById: weighting.createdById,
+  createdAt: weighting.createdAt,
+  updatedAt: weighting.updatedAt,
+})
+
+const checkySessionView = (session: { id: string; diagnosticId: string; title: string | null; createdById: string; createdAt: Date; updatedAt: Date }) => ({
+  id: session.id,
+  diagnosticId: session.diagnosticId,
+  title: session.title,
+  createdById: session.createdById,
+  createdAt: session.createdAt,
+  updatedAt: session.updatedAt,
+})
+
+const checkyMessageView = (message: { id: string; sessionId: string; role: string; content: string; category: string | null; basis: string | null; evidenceIds: string[]; insufficientData: boolean; missingInformation: string[]; status: string | null; decisionNote: string | null; suggestedStrategyTitle: string | null; suggestedStrategyDescription: string | null; createdAt: Date }) => ({
+  id: message.id,
+  sessionId: message.sessionId,
+  role: message.role,
+  content: message.content,
+  category: message.category,
+  basis: message.basis,
+  evidenceIds: message.evidenceIds ?? [],
+  insufficientData: message.insufficientData,
+  missingInformation: message.missingInformation ?? [],
+  status: message.status,
+  decisionNote: message.decisionNote,
+  suggestedStrategyTitle: message.suggestedStrategyTitle,
+  suggestedStrategyDescription: message.suggestedStrategyDescription,
+  createdAt: message.createdAt,
+})
+
+const buildCheckyContext = async (db: PrismaClient, diagnostic: { id: string; title: string; description: string; status: string }, question: string): Promise<CheckyContext> => {
+  const stored = await db.qualityDiagnostic.findUnique({ where: { id: diagnostic.id }, include: { swotAnalysis: { include: { items: { orderBy: { createdAt: 'asc' } } } } } })
+  const items = stored?.swotAnalysis?.items ?? []
+  const [crosses, analysis, recommendations] = await Promise.all([
+    db.strategicCross.findMany({ where: { diagnosticId: diagnostic.id }, orderBy: { updatedAt: 'desc' } }),
+    db.aIAnalysis.findUnique({ where: { diagnosticId: diagnostic.id } }),
+    db.recommendation.findMany({ where: { diagnosticId: diagnostic.id }, select: { title: true, priority: true, status: true } }),
+  ])
+  return {
+    question,
+    diagnostic: { title: diagnostic.title, description: diagnostic.description, status: diagnostic.status },
+    swotItems: items.map((item) => ({ id: item.id, type: item.type, description: item.description })),
+    crosses: crosses.map((cross) => ({ id: cross.id, crossType: cross.crossType, origin: cross.origin, factor1Id: cross.factor1Id, factor2Id: cross.factor2Id, strategy: cross.strategy })),
+    aiAnalysis: analysis
+      ? { executiveSummary: analysis.executiveSummary, keyFindings: analysis.keyFindings, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities }
+      : null,
+    recommendations: recommendations.map((item) => ({ title: item.title, priority: item.priority, status: item.status })),
+  }
+}
 
 const scopeForUser = (request: Request): Prisma.TicketWhereInput => request.user?.role === Role.SUPERUSER ? {} : { OR: [{ createdBy: { companyId: request.user?.companyId ?? 'none' } }, { assignedTo: { companyId: request.user?.companyId ?? 'none' } }] }
 
@@ -98,6 +159,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   const userWriteGuard = requireRole(Role.SUPERUSER, Role.COMPANY_ADMIN)
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many login attempts' } })
   const aiAnalysisLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many AI analysis requests' } })
+  const checkyLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many Checky consultation requests' } })
 
   app.get('/api/health', (_request, response) => response.json({ status: 'ok' }))
 
@@ -489,14 +551,22 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.status(201).json({ cross: crossView(cross) })
   }))
 
+  // Acceso a un cruce por id con el mismo aislamiento multiempresa del resto de la API: si el cruce
+  // no existe o pertenece a otra empresa la respuesta es 404 y no revela nada más.
+  const crossForRequest = async (request: Request, crossId: string) => {
+    const cross = await db.strategicCross.findUnique({ where: { id: crossId }, include: { diagnostic: { include: { company: { select: { id: true } } } } } })
+    if (!cross || !canAccessCompany(request, cross.diagnostic.company)) return null
+    return cross
+  }
+
   app.patch('/api/crosses/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = crossUpdateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid cross data', details: parsed.error.issues })
       return
     }
-    const existing = await db.strategicCross.findUnique({ where: { id: String(request.params.id) }, include: { diagnostic: { include: { company: { select: { id: true } } } } } })
-    if (!existing || !canAccessCompany(request, existing.diagnostic.company)) {
+    const existing = await crossForRequest(request, String(request.params.id))
+    if (!existing) {
       response.status(404).json({ error: 'Cross not found' })
       return
     }
@@ -505,13 +575,65 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   app.delete('/api/crosses/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
-    const existing = await db.strategicCross.findUnique({ where: { id: String(request.params.id) }, include: { diagnostic: { include: { company: { select: { id: true } } } } } })
-    if (!existing || !canAccessCompany(request, existing.diagnostic.company)) {
+    const existing = await crossForRequest(request, String(request.params.id))
+    if (!existing) {
       response.status(404).json({ error: 'Cross not found' })
       return
     }
     await db.strategicCross.delete({ where: { id: existing.id } })
     response.status(204).send()
+  }))
+
+  app.put('/api/crosses/:id/weighting', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = crossWeightingSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid weighting data', details: parsed.error.issues })
+      return
+    }
+    const cross = await crossForRequest(request, String(request.params.id))
+    if (!cross) {
+      response.status(404).json({ error: 'Cross not found' })
+      return
+    }
+    if (!cross.strategy) {
+      response.status(400).json({ error: 'This strategic cross has no strategy to evaluate' })
+      return
+    }
+    // El ponderado se calcula aquí y no se lee del cuerpo: el cliente solo elige niveles.
+    const weightedScore = calculateWeightedScore(parsed.data)
+    const weighting = await db.strategicCrossWeighting.upsert({
+      where: { crossId: cross.id },
+      create: { crossId: cross.id, ...parsed.data, weightedScore, createdById: request.user!.id },
+      update: { ...parsed.data, weightedScore },
+    })
+    response.json({ weighting: weightingView(weighting) })
+  }))
+
+  app.get('/api/crosses/:id/weighting', authMiddleware, asyncHandler(async (request, response) => {
+    const cross = await crossForRequest(request, String(request.params.id))
+    if (!cross) {
+      response.status(404).json({ error: 'Cross not found' })
+      return
+    }
+    const weighting = await db.strategicCrossWeighting.findUnique({ where: { crossId: cross.id } })
+    if (!weighting) {
+      response.status(404).json({ error: 'This strategic cross has no weighting yet' })
+      return
+    }
+    response.json({ weighting: weightingView(weighting) })
+  }))
+
+  app.get('/api/diagnostics/:id/weightings', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const weightings = await db.strategicCrossWeighting.findMany({
+      where: { cross: { diagnosticId: diagnostic.id } },
+      orderBy: [{ weightedScore: 'desc' }, { createdAt: 'asc' }],
+    })
+    response.json({ weightings: weightings.map(weightingView) })
   }))
 
   app.post('/api/diagnostics/:id/crosses/generate', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {
@@ -689,6 +811,186 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const recommendation = await db.recommendation.update({ where: { id: existing.id }, data: parsed.data })
     response.json({ recommendation: recommendationView(recommendation) })
+  }))
+
+  class CheckyCrossConflictError extends Error {}
+
+const checkySessionForRequest = async (request: Request, sessionId: string) => {
+    const session = await db.checkySession.findUnique({ where: { id: sessionId }, include: { diagnostic: { include: { company: { select: { id: true } } } } } })
+    if (!session || !canAccessCompany(request, session.diagnostic.company)) return null
+    return session
+  }
+
+  app.post('/api/diagnostics/:id/checky/sessions', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = checkySessionCreateSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Checky session data', details: parsed.error.issues })
+      return
+    }
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const session = await db.checkySession.create({ data: { diagnosticId: diagnostic.id, title: parsed.data.title ?? null, createdById: request.user!.id } })
+    response.status(201).json({ session: checkySessionView(session) })
+  }))
+
+  app.get('/api/diagnostics/:id/checky/sessions', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const sessions = await db.checkySession.findMany({ where: { diagnosticId: diagnostic.id }, orderBy: { createdAt: 'desc' } })
+    response.json({ sessions: sessions.map(checkySessionView) })
+  }))
+
+  app.get('/api/checky/sessions/:sessionId', authMiddleware, asyncHandler(async (request, response) => {
+    const session = await checkySessionForRequest(request, String(request.params.sessionId))
+    if (!session) {
+      response.status(404).json({ error: 'Checky session not found' })
+      return
+    }
+    const messages = await db.checkyMessage.findMany({ where: { sessionId: session.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
+    response.json({ session: checkySessionView(session), messages: messages.map(checkyMessageView) })
+  }))
+
+  app.post('/api/checky/sessions/:sessionId/messages', authMiddleware, userWriteGuard, checkyLimiter, asyncHandler(async (request, response) => {
+    const parsed = checkyMessageCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Checky message', details: parsed.error.issues })
+      return
+    }
+    const session = await checkySessionForRequest(request, String(request.params.sessionId))
+    if (!session) {
+      response.status(404).json({ error: 'Checky session not found' })
+      return
+    }
+    const userMessage = await db.checkyMessage.create({ data: { sessionId: session.id, role: 'USER', content: parsed.data.content, evidenceIds: [], missingInformation: [] } })
+    const context = await buildCheckyContext(db, session.diagnostic, parsed.data.content)
+    let result: CheckyConsultResult
+    try {
+      result = await aiService.consultChecky(context)
+    } catch (error) {
+      if (error instanceof AIServiceError) {
+        response.status(error.code === 'NOT_CONFIGURED' ? 503 : 502).json({ error: error.code === 'NOT_CONFIGURED' ? 'Checky is not configured' : 'Checky returned an invalid analysis' })
+        return
+      }
+      throw error
+    }
+    const reply = await db.checkyMessage.create({ data: { sessionId: session.id, role: 'CHECKY', content: result.reply, insufficientData: result.insufficientData, missingInformation: result.missingInformation, evidenceIds: [] } })
+    const suggestions = []
+    for (const finding of result.findings) {
+      suggestions.push(await db.checkyMessage.create({ data: { sessionId: session.id, role: 'CHECKY', content: `${finding.title}\n${finding.detail}`, category: finding.category as CheckyCategory, basis: finding.basis as CheckyFindingBasis, evidenceIds: finding.evidenceIds, suggestedStrategyTitle: finding.suggestedStrategy?.title ?? null, suggestedStrategyDescription: finding.suggestedStrategy?.description ?? null, status: 'PENDING' } }))
+    }
+    const messages = await db.checkyMessage.findMany({ where: { sessionId: session.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
+    response.status(201).json({ userMessage: checkyMessageView(userMessage), reply: checkyMessageView(reply), suggestions: suggestions.map(checkyMessageView), messages: messages.map(checkyMessageView) })
+  }))
+
+  app.patch('/api/checky/sessions/:sessionId/messages/:messageId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = checkySuggestionDecisionSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Checky decision', details: parsed.error.issues })
+      return
+    }
+    const session = await checkySessionForRequest(request, String(request.params.sessionId))
+    if (!session) {
+      response.status(404).json({ error: 'Checky session not found' })
+      return
+    }
+    const existing = await db.checkyMessage.findUnique({ where: { id: String(request.params.messageId) } })
+    if (!existing || existing.sessionId !== session.id) {
+      response.status(404).json({ error: 'Checky message not found' })
+      return
+    }
+    if (existing.role !== 'CHECKY' || !existing.category) {
+      response.status(400).json({ error: 'Only Checky suggestions can be accepted or rejected' })
+      return
+    }
+    if (existing.status && existing.status !== 'PENDING') {
+      response.status(409).json({ error: 'This suggestion was already decided' })
+      return
+    }
+    if (parsed.data.status === 'ACCEPTED' && existing.category === 'MISSING_CROSSES') {
+      response.status(400).json({ error: 'Accept this missing cross through POST /api/checky/suggestions/:messageId/accept so the strategic cross is created' })
+      return
+    }
+    const updated = await db.checkyMessage.update({ where: { id: existing.id }, data: { status: parsed.data.status, decisionNote: parsed.data.decisionNote ?? null } })
+    response.json({ message: checkyMessageView(updated) })
+  }))
+
+  app.post('/api/checky/suggestions/:messageId/accept', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const message = await db.checkyMessage.findUnique({ where: { id: String(request.params.messageId) } })
+    if (!message) {
+      response.status(404).json({ error: 'Checky message not found' })
+      return
+    }
+    const session = await checkySessionForRequest(request, message.sessionId)
+    if (!session) {
+      response.status(404).json({ error: 'Checky message not found' })
+      return
+    }
+    if (message.role !== 'CHECKY' || !message.category) {
+      response.status(400).json({ error: 'Only Checky suggestions can be accepted' })
+      return
+    }
+    if (message.category !== 'MISSING_CROSSES') {
+      response.status(400).json({ error: 'Only a missing cross suggestion can create a strategic cross' })
+      return
+    }
+    if (message.status && message.status !== 'PENDING') {
+      response.status(409).json({ error: 'This suggestion was already decided' })
+      return
+    }
+    // The evidence ids come from the model, so they are only ever used to look up factors that
+    // belong to this diagnostic. The diagnostic filter lives in the query, so an id from another
+    // diagnostic or company is never loaded and can never reach the StrategicCross.
+    const factors = await db.sWOTItem.findMany({
+      where: { id: { in: message.evidenceIds }, swot: { diagnosticId: session.diagnosticId } },
+      select: { id: true, type: true },
+      orderBy: { createdAt: 'asc' },
+    })
+    if (factors.length !== 2) {
+      response.status(400).json({ error: 'A missing cross suggestion must cite exactly two factors of this diagnostic' })
+      return
+    }
+    const [firstFactor, secondFactor] = factors
+    const internal = firstFactor.type === 'STRENGTH' || firstFactor.type === 'WEAKNESS' ? firstFactor : secondFactor
+    const external = internal.id === firstFactor.id ? secondFactor : firstFactor
+    const crossType = crossTypeFor(internal.type, external.type)
+    if (!crossType) {
+      response.status(400).json({ error: 'These factors do not form a valid strategic cross (FO, DO, FA or DA)' })
+      return
+    }
+    // La estrategia llega estructurada desde la consulta de Checky, nunca se extrae del texto.
+    const strategy = message.suggestedStrategyDescription
+    let created: { cross: Prisma.StrategicCrossGetPayload<{ include: typeof crossInclude }>; suggestion: ReturnType<typeof checkyMessageView> }
+    try {
+      created = await db.$transaction(async (tx) => {
+        // Re-checked inside the transaction so a cross created concurrently cannot slip through.
+        const duplicate = await tx.strategicCross.findUnique({ where: { factor1Id_factor2Id: { factor1Id: internal.id, factor2Id: external.id } } })
+        if (duplicate) throw new CheckyCrossConflictError()
+        const cross = await tx.strategicCross.create({
+          data: { diagnosticId: session.diagnosticId, crossType: crossType as CrossType, origin: CrossOrigin.AI, factor1Id: internal.id, factor2Id: external.id, strategy, createdById: request.user!.id },
+          include: crossInclude,
+        })
+        const suggestion = await tx.checkyMessage.update({ where: { id: message.id }, data: { status: 'ACCEPTED' } })
+        return { cross, suggestion }
+      })
+    } catch (error) {
+      if (error instanceof CheckyCrossConflictError) {
+        response.status(409).json({ error: 'A strategic cross between these factors already exists' })
+        return
+      }
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        response.status(409).json({ error: 'A strategic cross between these factors already exists' })
+        return
+      }
+      response.status(500).json({ error: 'The strategic cross could not be created' })
+      return
+    }
+    response.status(201).json({ suggestion: checkyMessageView(created.suggestion), cross: crossView(created.cross) })
   }))
 
   app.get('/api/diagnostics/:id/action-plans', authMiddleware, asyncHandler(async (request, response) => {

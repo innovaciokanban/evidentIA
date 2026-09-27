@@ -182,6 +182,20 @@ export const crossUpdateSchema = z.object({
   'At least one field is required',
 )
 
+export const weightingLevelSchema = z.enum(['MUY_BAJO', 'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO'])
+
+/**
+ * El cliente solo elige el nivel de cada criterio. `strict()` hace que un campo inesperado sea un
+ * error en lugar de ignorarse, de modo que nobody pueda intentar fijar weightedScore desde fuera.
+ */
+export const crossWeightingSchema = z.object({
+  impactoEstrategico: weightingLevelSchema,
+  viabilidad: weightingLevelSchema,
+  urgencia: weightingLevelSchema,
+  sinergiaInterna: weightingLevelSchema,
+  impactoReputacional: weightingLevelSchema,
+}).strict()
+
 export const crossAnalyzeSchema = z.object({
   crosses: z.array(z.string().cuid()).max(200).optional(),
   origin: crossOriginSchema.optional(),
@@ -245,5 +259,67 @@ export function buildGeneratedCrossesAnalysisSchema(allowedIds: Set<string>) {
       crossId: z.string().refine((v) => allowedIds.has(v), 'Cross must be a valid existing cross'),
       analysis: crossAnalysisSchema,
     })).max(200),
+  })
+}
+
+export const checkyMessageRoleSchema = z.enum(['USER', 'CHECKY'])
+export const checkyFindingBasisSchema = z.enum(['FACT', 'INFERENCE'])
+export const checkySuggestionStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED'])
+
+export const checkyCategorySchema = z.enum([
+  'REVIEW_ASPECTS',
+  'MISSING_CROSSES',
+  'UNRELATED_FACTORS',
+  'STRENGTHEN_STRATEGIES',
+  'STRATEGIC_RISKS',
+  'MISSED_OPPORTUNITIES',
+  'INFO_TO_COMPLEMENT',
+  'NEXT_STEPS',
+])
+
+export const checkySessionCreateSchema = z.object({
+  title: z.string().trim().min(3).max(120).optional(),
+})
+
+export const checkyMessageCreateSchema = z.object({
+  content: z.string().trim().min(1).max(4000),
+})
+
+export const checkySuggestionDecisionSchema = z.object({
+  status: z.enum(['ACCEPTED', 'REJECTED']),
+  decisionNote: z.string().trim().min(1).max(1000).optional(),
+})
+
+/**
+ * Estrategia que Checky propone para un hallazgo, como estructura y no como prosa. El JSON schema
+ * estricto obliga a enviar siempre la clave, así que `null` significa "esta categoría no lleva
+ * estrategia". Si viene, debe ser completa: `title` y `description` con contenido real. Un hallazgo
+ * que no puede sostener una estrategia concreta omite el campo en lugar de devolverlo vacío.
+ */
+export const checkySuggestedStrategySchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  description: z.string().trim().min(20).max(2000),
+})
+
+export function buildCheckyConsultSchema(allowedIds: Set<string>) {
+  return z.object({
+    reply: z.string().trim().min(1).max(5000),
+    insufficientData: z.boolean(),
+    missingInformation: z.array(z.string().trim().min(1).max(1000)).max(20),
+    findings: z.array(z.object({
+      category: checkyCategorySchema,
+      title: z.string().trim().min(1).max(200),
+      detail: z.string().trim().min(1).max(3000),
+      basis: checkyFindingBasisSchema,
+      evidenceIds: z.array(z.string().refine((v) => allowedIds.has(v), 'Evidence must reference an existing SWOT factor or strategic cross')).max(20),
+      suggestedStrategy: checkySuggestedStrategySchema.nullish(),
+    })).max(40),
+  }).superRefine((result, ctx) => {
+    if (!result.insufficientData && result.findings.length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['findings'], message: 'Checky must return at least one finding or declare insufficient data' })
+    }
+    if (result.insufficientData && result.missingInformation.length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['missingInformation'], message: 'Insufficient data must state which information is missing' })
+    }
   })
 }

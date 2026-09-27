@@ -88,6 +88,61 @@ export type StrategicCross = {
   createdAt: string
   updatedAt: string
 }
+export type WeightingLevel = 'MUY_BAJO' | 'BAJO' | 'MEDIO' | 'ALTO' | 'MUY_ALTO'
+export type CrossWeightingCriterion = 'impactoEstrategico' | 'viabilidad' | 'urgencia' | 'sinergiaInterna' | 'impactoReputacional'
+export type CrossWeightingCriteria = Record<CrossWeightingCriterion, WeightingLevel>
+export type CrossWeighting = {
+  id: string
+  crossId: string
+  impactoEstrategico: WeightingLevel
+  viabilidad: WeightingLevel
+  urgencia: WeightingLevel
+  sinergiaInterna: WeightingLevel
+  impactoReputacional: WeightingLevel
+  weightedScore: number
+  createdById: string
+  createdAt: string
+  updatedAt: string
+}
+export type CheckyMessageRole = 'USER' | 'CHECKY'
+export type CheckyFindingBasis = 'FACT' | 'INFERENCE'
+export type CheckySuggestionStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
+export type CheckyCategory =
+  | 'REVIEW_ASPECTS'
+  | 'MISSING_CROSSES'
+  | 'UNRELATED_FACTORS'
+  | 'STRENGTHEN_STRATEGIES'
+  | 'STRATEGIC_RISKS'
+  | 'MISSED_OPPORTUNITIES'
+  | 'INFO_TO_COMPLEMENT'
+  | 'NEXT_STEPS'
+
+export type CheckySession = {
+  id: string
+  diagnosticId: string
+  title: string | null
+  createdById: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type CheckyMessage = {
+  id: string
+  sessionId: string
+  role: CheckyMessageRole
+  content: string
+  category: CheckyCategory | null
+  basis: CheckyFindingBasis | null
+  evidenceIds: string[]
+  insufficientData: boolean
+  missingInformation: string[]
+  status: CheckySuggestionStatus | null
+  decisionNote: string | null
+  suggestedStrategyTitle: string | null
+  suggestedStrategyDescription: string | null
+  createdAt: string
+}
+
 export type ActionPlanStatus = 'DRAFT' | 'ACTIVE' | 'COMPLETED'
 export type ActionItemStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
 
