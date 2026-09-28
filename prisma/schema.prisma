@@ -118,6 +118,15 @@ enum CheckyCategory {
   NEXT_STEPS
 }
 
+/**
+ * Fuentes de una estrategia que se pueden ponderar sin ser un cruce. Los cruces siguen pesándose en
+ * StrategicCrossWeighting, así que no aparecen aquí a propósito: esta tabla no los reemplaza.
+ */
+enum StrategySource {
+  AI_ANALYSIS
+  CHECKY
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -135,6 +144,7 @@ model User {
   createdCrosses      StrategicCross[]   @relation("CreatedStrategicCrosses")
   createdCheckySessions CheckySession[]  @relation("CreatedCheckySessions")
   createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
+  createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -203,6 +213,7 @@ model QualityDiagnostic {
   recommendations Recommendation[]
   actionPlans    ActionPlan[]
   crosses        StrategicCross[]
+  strategyWeightings StrategyWeighting[]
   checkySessions CheckySession[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
@@ -355,6 +366,35 @@ model StrategicCrossWeighting {
   updatedAt           DateTime      @updatedAt
 
   @@index([weightedScore])
+  @@index([createdById])
+}
+
+/**
+ * Ponderación de una estrategia que no es un cruce. La estrategia sigue viviendo donde nació —el
+ * análisis con IA o una sugerencia aceptada de Checky— y aquí solo se guarda el valor que le dio el
+ * usuario. sourceRef es el hash del texto normalizado, nunca un índice de posición, para que la
+ * misma estrategia conserve su ponderación aunque cambie de fila dentro de la IA o de Checky.
+ */
+model StrategyWeighting {
+  id                  String         @id @default(cuid())
+  diagnosticId        String
+  source              StrategySource
+  sourceRef           String
+  impactoEstrategico  WeightingLevel
+  viabilidad          WeightingLevel
+  urgencia            WeightingLevel
+  sinergiaInterna      WeightingLevel
+  impactoReputacional WeightingLevel
+  weightedScore       Float
+  createdById         String
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  diagnostic          QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdBy           User               @relation("CreatedStrategyWeightings", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([diagnosticId, source, sourceRef])
+  @@index([diagnosticId, weightedScore])
   @@index([createdById])
 }
 

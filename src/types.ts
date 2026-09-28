@@ -104,6 +104,31 @@ export type CrossWeighting = {
   createdAt: string
   updatedAt: string
 }
+/** Fuentes de una estrategia consolidada. Los cruces conservan su propia ponderación aparte. */
+export type StrategySource = 'AI_ANALYSIS' | 'STRATEGIC_CROSS' | 'CHECKY'
+/** Solo estas dos fuentes se valoran con PUT /diagnostics/:id/strategies/weighting. */
+export type WeightableStrategySource = 'AI_ANALYSIS' | 'CHECKY'
+/** Banda que clasifica el backend. El frontend solo la lee para elegir el color. */
+export type StrategyBand = 'INMEDIATA' | 'CORTO_PLAZO' | 'MEDIANO_PLAZO' | 'LARGO_PLAZO'
+export type StrategyFactorRef = { id: string; type: SWOTType; description: string }
+/** Ponderación tal como la entrega el backend: los cinco niveles, el ponderado y su banda. */
+export type StrategyWeighting = CrossWeightingCriteria & { weightedScore: number; weightingBand: StrategyBand }
+export type DiagnosticStrategy = {
+  id: string
+  title: string
+  description: string
+  source: StrategySource
+  crossId: string | null
+  crossType: CrossType | null
+  origin: CrossOrigin | null
+  factor1: StrategyFactorRef | null
+  factor2: StrategyFactorRef | null
+  weighting: StrategyWeighting | null
+  weightedScore: number | null
+  weightingBand: StrategyBand | null
+}
+export type StrategyWeightingResponse = { source: WeightableStrategySource; sourceRef: string } & StrategyWeighting
+
 export type CheckyMessageRole = 'USER' | 'CHECKY'
 export type CheckyFindingBasis = 'FACT' | 'INFERENCE'
 export type CheckySuggestionStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'

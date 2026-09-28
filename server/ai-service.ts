@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { env } from './env.js'
 import { aiAnalysisSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, crossAnalysisSchema, crossTypeSchema } from './validation.js'
+import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import type { z } from 'zod'
 
 export type AIAnalysisResult = z.infer<typeof aiAnalysisSchema>
@@ -24,7 +25,262 @@ export type CheckyContext = {
   crosses: Array<{ id: string; crossType: string; origin: string; factor1Id: string; factor2Id: string; strategy: string | null }>
   aiAnalysis: { executiveSummary: string; keyFindings: unknown; priorityRisks: unknown; priorityOpportunities: unknown } | null
   recommendations: Array<{ title: string; priority: string; status: string }>
+  /**
+   * Ponderaciones ya registradas en base de datos, una por cruce con estrategia ya ponderada.
+   * Opcional para no romper a los llamadores que construyen el contexto a mano. weightedScore llega
+   * tal cual se leyó de la BD: Checky lo lee y lo ordena, nunca lo recalcula.
+   */
+  weightings?: CheckyWeighting[]
+  /**
+   * Todas las estrategias del diagnóstico, de las tres fuentes y con la ponderación que ya tengan
+   * guardada. Opcional para no romper a los llamadores que arman el contexto a mano: sin él, Checky
+   * sigue viendo el bloque de cruces de siempre y nada más. Es de solo lectura: leerlo no calcula,
+   * no ordena por score y no escribe nada.
+   */
+  strategies?: CheckyConsolidatedStrategy[]
 }
+
+/** Clasificación por rango del ponderado que ya está guardado en la columna weightedScore. */
+export type CheckyWeightingBand = 'INMEDIATA' | 'CORTO_PLAZO' | 'MEDIANO_PLAZO' | 'LARGO_PLAZO'
+
+/**
+ * Las tres fuentes de una estrategia consolidada. El enum StrategySource de Prisma solo cubre las
+ * dos que se pueden ponderar en la tabla de estrategias, así que el cruce se declara aquí para poder
+ * hablar de las tres. Es el mismo conjunto de valores que usa la consolidación de la priorización.
+ */
+export type CheckyStrategyOrigin = 'AI_ANALYSIS' | 'STRATEGIC_CROSS' | 'CHECKY'
+
+/** Los cinco niveles tal como los guarda la base. Se nombran para poder compararlos entre fuentes. */
+export type CheckyWeightingCriteria = { impactoEstrategico: string; viabilidad: string; urgencia: string; sinergiaInterna: string; impactoReputacional: string }
+
+export type CheckyWeighting = {
+  crossId: string
+  crossType: string
+  origin: string
+  strategy: string | null
+  weightedScore: number
+  weightingBand: CheckyWeightingBand
+  criteria: CheckyWeightingCriteria
+  factors: Array<{ id: string; type: string; description: string }>
+}
+
+/**
+ * Una estrategia consolidada, sea del análisis con IA, de un cruce o de una sugerencia de Checky
+ * aceptada. Es la misma lista que la pantalla de ponderación muestra, traída aquí para que Checky
+ * lea lo que el usuario ya decidió sobre sus tres fuentes a la vez.
+ *
+ * weightedScore y weightingBand llegan copiados de la fila guardada: son hechos y no se recalculan
+ * aquí. Los dos llegan en null cuando el usuario todavía no valoró la estrategia, y esa ausencia es
+ * información, no un cero.
+ *
+ * strategyRef identifica la estrategia dentro de la lista consolidada, pero NO es un id citable:
+ * el contrato de evidencia solo admite ids reales de factor o de cruce, y esos viajan en factorIds
+ * y crossId. Para una estrategia de IA no hay factores, así que no hay nada citable que aportar.
+ */
+export type CheckyConsolidatedStrategy = {
+  strategyRef: string
+  source: CheckyStrategyOrigin
+  title: string
+  description: string
+  crossId: string | null
+  crossType: string | null
+  origin: string | null
+  factorIds: string[]
+  weightedScore: number | null
+  weightingBand: CheckyWeightingBand | null
+  criteria: CheckyWeightingCriteria | null
+}
+
+/**
+ * Rangos de la metodología, en el mismo orden que usa la interfaz. Clasificar un ponderado que ya
+ * existe en la BD no es recalcularlo: la etiqueta se deduce del número guardado y el número nunca
+ * se toca. Los límites son inclusivos por arriba, así que 4.00 cae en INMEDIATA y 3.99 en CORTO_PLAZO.
+ */
+const CHECKY_WEIGHTING_BANDS: ReadonlyArray<{ band: CheckyWeightingBand; min: number; max: number }> = [
+  { band: 'INMEDIATA', min: 4, max: 5 },
+  { band: 'CORTO_PLAZO', min: 3, max: 3.99 },
+  { band: 'MEDIANO_PLAZO', min: 2, max: 2.99 },
+  { band: 'LARGO_PLAZO', min: 1, max: 1.99 },
+]
+
+export const resolveWeightingBand = (weightedScore: number): CheckyWeightingBand =>
+  CHECKY_WEIGHTING_BANDS.find((candidate) => weightedScore >= candidate.min && weightedScore <= candidate.max)?.band ?? 'LARGO_PLAZO'
+
+/** Banda que el servidor considera de alta prioridad: la máxima de la metodología. */
+const HIGH_PRIORITY_BAND: CheckyWeightingBand = 'INMEDIATA'
+
+/** Lectura de la escala guardada. Devuelve undefined para un nivel que no exista, y el filtro lo trata como descartable. */
+const weightingLevelScore = (level: string) => WEIGHTING_LEVEL_SCORE[level as keyof typeof WEIGHTING_LEVEL_SCORE]
+const isLowFeasibility = (level: string) => {
+  const score = weightingLevelScore(level)
+  return score !== undefined && score <= WEIGHTING_LEVEL_SCORE.BAJO
+}
+const isHighImpact = (level: string) => {
+  const score = weightingLevelScore(level)
+  return score !== undefined && score >= WEIGHTING_LEVEL_SCORE.ALTO
+}
+const isHighPriorityBand = (band: CheckyWeightingBand | null) => band === 'INMEDIATA' || band === 'CORTO_PLAZO'
+
+/**
+ * Umbral conservador para considerar que el texto de una estrategia es demasiado corto para
+ * respaldar una ponderación alta. No mide calidad: solo marca que no hay suficiente texto escrito
+ * para que el usuario sepa qué se está incorporando, así que Checky tiene algo que pedir.
+ */
+const THIN_STRATEGY_CHARS = 30
+
+/** Una estrategia está valorada si la base guardó su ponderado. Sin ponderado no hay score ni banda. */
+const isValuedStrategy = (strategy: CheckyConsolidatedStrategy) => strategy.weightedScore !== null
+
+/** Sinergia interna baja: el usuario dice que la estrategia no se apoya en capacidades propias. */
+const isLowSynergy = (level: string) => {
+  const score = weightingLevelScore(level)
+  return score !== undefined && score <= WEIGHTING_LEVEL_SCORE.BAJO
+}
+
+/**
+ * Andamiaje de priorización sobre las estrategias consolidadas de las tres fuentes.
+ *
+ * Solo reorganiza lo que el usuario ya registró: no pondera, no recalcula, no ordena por su cuenta
+ * fuera del score guardado y no juzga calidad. Cada bloque corresponde a una pregunta que Checky
+ * tiene que poder responder con evidencia, y cada entrada lleva factorIds y crossId, que son los
+ * únicos ids que el contrato admite en evidenceIds. strategyRef solo sirve para que el modelo nombre
+ * la estrategia en su prosa: nunca se cita.
+ *
+ * Las señales son observaciones estructurales, igual que strategyWeightingSignals: su presencia es un
+ * motivo para preguntar, no una conclusión que el modelo pueda afirmar como hecho.
+ */
+const buildStrategyPrioritization = (strategies: CheckyConsolidatedStrategy[]) => {
+  const valued = strategies.filter(isValuedStrategy)
+  const unvalued = strategies.filter((strategy) => !isValuedStrategy(strategy))
+
+  /** Copia mínima para nombrar una estrategia sin duplicar los cinco niveles en cada bloque. */
+  const reference = (strategy: CheckyConsolidatedStrategy) => ({
+    strategyRef: strategy.strategyRef,
+    source: strategy.source,
+    title: strategy.title,
+    crossId: strategy.crossId,
+    crossType: strategy.crossType,
+    origin: strategy.origin,
+    factorIds: strategy.factorIds,
+  })
+
+  const valuedEntry = (strategy: CheckyConsolidatedStrategy) => ({
+    ...reference(strategy),
+    weightedScore: strategy.weightedScore,
+    weightingBand: strategy.weightingBand,
+    criteria: strategy.criteria,
+  })
+
+  // El orden es el del ponderado guardado, de mayor a menor. Es el mismo criterio de lectura que ya
+  // usa priorityRanking para los cruces: ordena lo registrado, no recomienda nada.
+  const byWeightedScore = [...valued].sort((left, right) => (right.weightedScore ?? 0) - (left.weightedScore ?? 0))
+
+  const bandCounts = Object.fromEntries(CHECKY_WEIGHTING_BANDS.map(({ band }) => [band, valued.filter((strategy) => strategy.weightingBand === band).length])) as Record<CheckyWeightingBand, number>
+
+  const bySource = (['AI_ANALYSIS', 'STRATEGIC_CROSS', 'CHECKY'] as const).map((source) => {
+    const items = strategies.filter((strategy) => strategy.source === source)
+    const itemsValued = items.filter(isValuedStrategy).length
+    return { source, total: items.length, valued: itemsValued, unvalued: items.length - itemsValued }
+  })
+
+  /** Requiere atención: banda alta. Solo incluye estrategias que el usuario ya valorar. */
+  const needsAttention = byWeightedScore.filter((strategy) => isHighPriorityBand(strategy.weightingBand)).map(valuedEntry)
+
+  /** Alta prioridad con poca viabilidad: prometen mucho y el usuario dice que costará. */
+  const highPriorityLowFeasibility = byWeightedScore
+    .filter((strategy) => isHighPriorityBand(strategy.weightingBand) && strategy.criteria !== null && isLowFeasibility(strategy.criteria.viabilidad))
+    .map((strategy) => ({ ...valuedEntry(strategy), viabilidad: strategy.criteria?.viabilidad, impactoEstrategico: strategy.criteria?.impactoEstrategico }))
+
+  /** Señales que apuntan a una estrategia que necesita fortalecerse antes de convertirse en plan. */
+  const strengthenSignals = byWeightedScore.flatMap((strategy) => {
+    if (strategy.criteria === null) return []
+    const signals: Array<{ kind: string; detail: string }> = []
+    if (isHighPriorityBand(strategy.weightingBand) && strategy.description.length < THIN_STRATEGY_CHARS) {
+      signals.push({ kind: 'THIN_TEXT_IN_HIGH_BAND', detail: `Está en una banda alta con solo ${strategy.description.length} caracteres de estrategia: la valoración va por delante de la redacción.` })
+    }
+    if (isHighImpact(strategy.criteria.impactoEstrategico) && isLowFeasibility(strategy.criteria.viabilidad)) {
+      signals.push({ kind: 'HIGH_IMPACT_LOW_FEASIBILITY', detail: 'El usuario valora el impacto por encima de la viabilidad: la estrategia promete mucho y cuesta mucho. Conviene que sepa qué está comprando.' })
+    }
+    if (isHighImpact(strategy.criteria.impactoEstrategico) && isLowSynergy(strategy.criteria.sinergiaInterna)) {
+      signals.push({ kind: 'HIGH_IMPACT_LOW_SYNERGY', detail: 'El impacto es alto pero la sinergia interna es baja: depende de capacidades que hoy el usuario no considera disponibles. Es una candidata a reforzar antes de comprometer recursos.' })
+    }
+    if (isLowFeasibility(strategy.criteria.viabilidad)) {
+      signals.push({ kind: 'LOW_FEASIBILITY', detail: 'La viabilidad valorada es baja: falta un plan de recursos, responsables y plazos antes de tratarla como comprometida.' })
+    }
+    return signals.map((signal) => ({ ...valuedEntry(strategy), ...signal }))
+  })
+
+  /**
+   * Posible redundancia, observada sin comparar significado: dos estrategias que se apoyan
+   * exactamente en los mismos factores, o cuyo texto normalizado contiene al otro. La lista
+   * consolidada ya viene sin duplicados exactos, así que lo que queda aquí es señal de solapamiento,
+   * no un error de la base.
+   */
+  const groupsByFactorSet = new Map<string, CheckyConsolidatedStrategy[]>()
+  for (const strategy of strategies) {
+    if (strategy.factorIds.length === 0) continue
+    const key = [...new Set(strategy.factorIds)].sort().join('::')
+    groupsByFactorSet.set(key, [...(groupsByFactorSet.get(key) ?? []), strategy])
+  }
+  const sharedFactorGroups = [...groupsByFactorSet.values()].filter((group) => group.length > 1).map((group) => ({
+    kind: 'SHARED_FACTORS' as const,
+    strategyRefs: group.map((strategy) => strategy.strategyRef),
+    sources: group.map((strategy) => strategy.source),
+    factorIds: [...new Set(group.flatMap((strategy) => strategy.factorIds))],
+    weightedScores: group.map((strategy) => strategy.weightedScore),
+    detail: 'Varias estrategias se apoyan en exactamente los mismos factores: conviene decidir si son la misma palanca descrita de dos formas o si compiten por los mismos recursos.',
+  }))
+
+  const normalizedText = (strategy: CheckyConsolidatedStrategy) => strategy.description.trim().replace(/\s+/g, ' ').toLowerCase()
+  const nestedTextPairs: Array<{ kind: 'NESTED_TEXT'; strategyRefs: string[]; sources: CheckyStrategyOrigin[]; factorIds: string[]; weightedScores: Array<number | null>; detail: string }> = []
+  for (const [index, strategy] of strategies.entries()) {
+    for (const other of strategies.slice(index + 1)) {
+      const left = normalizedText(strategy)
+      const right = normalizedText(other)
+      if (left === right || !left.includes(right) && !right.includes(left)) continue
+      nestedTextPairs.push({
+        kind: 'NESTED_TEXT',
+        strategyRefs: [strategy.strategyRef, other.strategyRef],
+        sources: [strategy.source, other.source],
+        factorIds: [...new Set([...strategy.factorIds, ...other.factorIds])],
+        weightedScores: [strategy.weightedScore, other.weightedScore],
+        detail: 'El texto de una estrategia contiene al de la otra: es posible que la misma idea esté escrita dos veces y se esté contando como dos.',
+      })
+    }
+  }
+
+  /**
+   * Huecos de información, deducidos de lo que falta de verdad. No son quejas: cada entrada señala
+   * un dato concreto que pedir y por qué cambiaría la decisión.
+   */
+  const missingInformationInputs = {
+    unvaluedStrategies: unvalued.map(reference),
+    /**
+     * Una estrategia de IA no tiene factores asociados, así que cualquier hallazgo sobre ella solo
+     * puede apoyarse en el dato cuantitativo, no en un id. Decirselo a Checky evita que invente una
+     * evidencia o que fuerce un hallazgo al que no puede citar nada.
+     */
+    valuedWithoutCitableEvidence: valued.filter((strategy) => strategy.factorIds.length === 0 && strategy.crossId === null).map(reference),
+    hasAnyWeighting: valued.length > 0,
+  }
+
+  return {
+    hasAnyWeighting: valued.length > 0,
+    totalStrategies: strategies.length,
+    valuedStrategies: valued.length,
+    unvaluedStrategies: unvalued.length,
+    bySource,
+    bandCounts,
+    weightedStrategies: byWeightedScore.map(valuedEntry),
+    pendingStrategies: unvalued.map(reference),
+    needsAttention,
+    highPriorityLowFeasibility,
+    strengthenSignals,
+    possibleDuplicates: [...sharedFactorGroups, ...nestedTextPairs],
+    missingInformationInputs,
+  }
+}
+
 export type CheckyConsultResult = {
   reply: string
   insufficientData: boolean
@@ -224,6 +480,57 @@ const CHECKY_SUGGESTED_STRATEGY = [
   'Nunca dejes title ni description vacíos: si no hay estrategia, el campo va en null.',
 ].join('\n\n')
 
+const CHECKY_WEIGHTING_RULES = [
+  'PONDERACIONES. El bloque weightings recoge lo que el usuario ya registró en la aplicación, junto con los conteos y listas de workMap (totalStrategies, evaluatedStrategies, pendingStrategies, priorityCounts, highPriorityStrategies, lowFeasibilityHighImpact, crossesWithoutStrategy, strategiesWithoutWeighting).',
+  'weightedScore y weightingBand son datos de hecho: el ponderado lo calcula el servidor al guardar la ponderación y la banda sale de ese número. NO recalcules el ponderado, NO apliques los pesos de los criterios por tu cuenta y NO reetiquetes la banda. Cita el número y la banda tal cual llegan.',
+  'Usa priorityCounts y highPriorityStrategies para ordenar la conversación: lo primero es atender las estrategias de mayor ponderado y, si el usuario pregunta por dónde empezar, contrasta con lowFeasibilityHighImpact (mucho impacto con poca viabilidad), que son candidatas a ejecución difícil, no de falta de valor.',
+  'pendingStrategies y strategiesWithoutWeighting son huecos reales de datos: si el usuario pregunta por prioridades y hay estrategias sin ponderar, dilo con esas ids en INFO_TO_COMPLEMENT o NEXT_STEPS. No les asignes un ponderado ni una banda.',
+  'Si no hay ninguna ponderación registrada, el diagnóstico aún no está priorizado: dilo y ofrece ponderar, en lugar de inventar una jerarquía.',
+].join('\n\n')
+
+/**
+ * Reglas de la priorización consolidada: las tres fuentes de estrategias en un solo bloque.
+ *
+ * No introduce categorías nuevas ni un segundo contrato. Las seis preguntas que tienen que poder
+ * contestarse se atan a las ocho dimensiones que ya existen, y los números del servidor se tratan
+ * como hechos que se citan, nunca como algo que Checky pueda calcular o corregir.
+ */
+const CHECKY_CONSOLIDATED_STRATEGIES = [
+  'ESTRATEGIAS CONSOLIDADAS. El bloque strategies y la sección analysis.strategyPrioritization traen juntas las estrategias del análisis con IA, las de los cruces y las sugerencias de Checky aceptadas, cada una con su source y, si el usuario ya la india, con su ponderado y su banda. Son la misma lista que el usuario ve en la pantalla de ponderación.',
+  'REGLAS INNEGOCIABLES SOBRE LOS VALORES. weightedScore y weightingBand son hechos calculados por el servidor al guardar la ponderación. NO recalcules ningún ponderado, NO apliques los pesos de los criterios (20/25/20/15/20) por tu cuenta, NO cambies una banda y NO le asignes ponderado ni banda a una estrategia que llega con los dos en null. Si necesitas ponderar algo que no está ponderado, la propuesta es "valorar esta estrategia", nunca un número.',
+  'La lista ya viene sin duplicados exactos: si dos textos eran idénticos, el servidor se quedó con uno. Lo que queda en possibleDuplicates es solapamiento real, no un error.',
+  'CÓMO CITAR. evidenceIds solo admite ids reales de factor o de cruce, los que llegan en factorIds y crossId. strategyRef es una etiqueta de referencia para nombrar la estrategia en tu prosa: copiarla en evidenceIds invalida toda la respuesta. Si una estrategia no trae factorIds ni crossId, es una estrategia del análisis con IA: puedes afirmar sus números como FACT porque están en el contexto, pero no tienes ningún id que citar, así que su hallazgo lleva evidenceIds vacío y lo explica en detail.',
+  'FACT E INFERENCE. Es FACT lo cuantitativo que se lee en el contexto: "tiene un ponderado de 3.45 y banda CORTO_PLAZO", "está sin ponderar", "3 de 7 estrategias valoradas", "estas dos se apoyan en los mismos factores". Es INFERENCE todo juicio sobre qué hacer: qué atender primero, qué reforzar, qué es redundante, qué falta. Las señales del servidor (needsAttention, highPriorityLowFeasibility, strengthenSignals, possibleDuplicates) son observaciones estructurales: el hecho es la coincidencia observable, y la lectura que hagas de ella va siempre en INFERENCE.',
+  'SEIS PREGUNTAS, SEIS CATEGORÍAS EXISTENTES. Usa el bloque que te toca y nada más:',
+  '1. Qué estrategias requieren atención: parte de needsAttention (banda alta) y de bySource, y responde en REVIEW_ASPECTS o STRATEGIC_RISKS según si el problema es de foco o de riesgo.',
+  '2. Alta prioridad con baja viabilidad: highPriorityLowFeasibility. Son las que prometen mucho y cuestan, no las que valen poco. Explícalo en STRATEGIC_RISKS, citando el nivel de viabilidad que lo demuestra.',
+  '3. Qué debería fortalecerse: strengthenSignals, en STRENGTHEN_STRATEGIES, y ahí suggestedStrategy sí puede ir poblado si la estrategia se apoya en factores reales que puedas citar.',
+  '4. Posibles estrategias redundantes: possibleDuplicates, en REVIEW_ASPECTS. Preséntalo como la pregunta que es ("puede que la misma palanca esté descrita dos veces"), nunca como un error confirmado: en INFERENCE.',
+  '5. Qué información falta: missingInformationInputs, en INFO_TO_COMPLEMENT, y activa insufficientData con missingInformation solo si de verdad falta algo concreto para decidir. pendingStrategies son estrategias escritas que el usuario todavía no ha ponderado; valuedWithoutCitableEvidence te dice cuáles no podrás citar.',
+  '6. Próximos pasos: NEXT_STEPS, ordenados y con motivo. El orden se apoya en weightedStrategies (de mayor a menor ponderado) contrastado con highPriorityLowFeasibility y con lo que está sin ponderar.',
+  'Con hasAnyWeighting en false el diagnóstico no está priorizado: dilo con esas palabras y ofrece ir a ponderar, sin suponer ningún orden.',
+].join('\n\n')
+
+const CHECKY_ANALYSIS_SCAFFOLD = [
+  'BLOQUE analysis. El servidor calculó este andamiaje con los datos reales del diagnóstico. Son hechos reorganizados, no conclusiones: úsalos para saber dónde hay huecos y con qué ids citar, pero el juicio y la redacción siguen siendo tuyos.',
+  'priorityRanking: estrategias ponderadas, de mayor a menor ponderado, con sus criterios. Sirve para saber qué se está priorizando. Si vas a recomendar una de ellas, di por qué, mirando los criterios y no el número.',
+  'unweightedStrategies: estrategias escritas que el usuario todavía no ha ponderado. Con hasAnyWeighting en false, el diagnóstico no está priorizado y debes decirlo en lugar de suponer un orden.',
+  'crossesWithoutStrategy: cruces sin texto de estrategia. weightedCrossesWithoutStrategy es el subconjunto más delicado: están ponderados y sin estrategia escrita, así que hay una valoración sin lo que valued.',
+  'strategyWeightingSignals: señales estructurales que el servidor detectó entre la ponderación y el texto. No son errores ni veredictos: son preguntas legítimas que puedes elevar a STRENGTHEN_STRATEGIES, STRATEGIC_RISKS o INFO_TO_COMPLEMENT, siempre en INFERENCE y citando los ids que la señal trae.',
+  'unusedFactors: factores que no participan en ningún cruce todavía, con sus ids reales. Son el material para pensar MISSING_CROSSES, pero la compuerta estricta sigue aplicando: de este inventario no sale un cruce sugerido por sí solo.',
+].join('\n\n')
+
+const CHECKY_RECOMMENDATION_DISCIPLINE = [
+  'CÓMO DEBES FUNDAMENTAR CADA RECOMENDACIÓN.',
+  'Todo hallazgo que afirmes algo del diagnóstico va con los ids que lo sostienen en evidenceIds. Si no puedes señalar al menos un id, el hallazgo no va: devuélvelo como insufficientData con la información concreta que te falta en missingInformation.',
+  'No recomiendes una estrategia por el hecho de tener el ponderado más alto. Un número alto describe lo que el usuario(calló, no por qué conviene actuar. Para sostener una recomendación de prioridad, apóyala en los criterios que sí explican el motivo: viabilidad baja, urgencia alta, un impacto reputacional que la empresa puede no haber considerado, o una banda que lo sitúe frente a las demás.',
+  'Explica siempre el motivo en detail: qué hueco estás detectando, qué evidencia lo sostiene y qué cambiaría la conclusión si la evidencia fuera otra. El usuario tiene que poder actuar mañana con lo que lees.',
+  'No repitas literalmente la descripción de los factores ni la del cruce como si fuera tu análisis. Si tu detail se limita a parafrasear un factor, no aporta nada: la recomendación tiene que ir más allá de lo que el usuario ya escribió.',
+  'No uses el número como adjetivo. "Tiene un ponderado de 3.45" es un dato; "merece atención por su ponderado" no es un motivo. Si el único argumento es el número, no es una recomendación.',
+  'No crees cruces, estrategias, planes de acción, ítems ni tickets. No tienes esa capacidad: propones y el usuario decide. Nunca presentes una propuesta como si ya estuviera registrada.',
+  'Si un hueco de datos impide evaluar una dimensión, no lo rellenes: repórtalo en INFO_TO_COMPLEMENT diciendo qué información cambiaría la decisión, o activa insufficientData con missingInformation.',
+].join('\n\n')
+
 const checkySystemRules = [
   CHECKY_ROLE,
   CHECKY_JUDGMENT_RULES,
@@ -233,8 +540,10 @@ const checkySystemRules = [
   CHECKY_ANTI_ECHO,
   CHECKY_ANALYSIS_DIMENSIONS,
   CHECKY_MISSING_CROSS_GATE,
+  CHECKY_CONSOLIDATED_STRATEGIES,
   CHECKY_SUGGESTED_STRATEGY,
   CHECKY_RECOMMENDATION_CRITERIA,
+  CHECKY_RECOMMENDATION_DISCIPLINE,
   'Cada hallazgo debe citar evidencia real en evidenceIds usando los ids de factores o cruces recibidos. Si un hallazgo no se sustenta en ningún id recibido, deja evidenceIds vacío.',
   'Marca basis como FACT solo cuando el hallazgo esté explícitamente respaldado por el contexto recibido. En cualquier otro caso usa INFERENCE. Ante la duda, INFERENCE.',
   'Usa insufficientData de forma quirúrgica: solo cuando una dimensión concreta no puede evaluarse por falta de datos, nunca porque el conjunto te parezca amplio. Cada elemento de missingInformation debe ser un dato concreto y accionable de pedir a la empresa, no una queja general.',
@@ -265,6 +574,7 @@ const buildCheckyWork = (context: CheckyContext) => {
     const internalFactor = factorRef(internalId)
     const externalFactor = factorRef(externalId)
     const strategy = cross.strategy?.trim() ?? ''
+    const weighting = (context.weightings ?? []).find((candidate) => candidate.crossId === cross.id) ?? null
     return {
       id: cross.id,
       crossType: cross.crossType,
@@ -278,6 +588,10 @@ const buildCheckyWork = (context: CheckyContext) => {
       externalFactorDescription: externalFactor.description,
       strategy,
       hasStrategy: strategy.length > 0,
+      // Se copia tal cual venía de la BD. Checky lo lee para priorizar, no para recalcularlo.
+      weightedScore: weighting?.weightedScore ?? null,
+      weightingBand: weighting?.weightingBand ?? null,
+      hasWeighting: weighting !== null,
     }
   })
 
@@ -300,6 +614,41 @@ const buildCheckyWork = (context: CheckyContext) => {
     crossCountByType[cross.crossType] = (crossCountByType[cross.crossType] ?? 0) + 1
   }
 
+  // Una estrategia es un cruce que ya tiene texto de estrategia; lo pendiente de ponderar es una
+  // cuenta sobre esas mismas estrategias, nunca sobre los cruces a medio construir.
+  const weightingsByCrossId = new Map((context.weightings ?? []).map((weighting) => [weighting.crossId, weighting]))
+  const strategies = crosses.filter((cross) => cross.hasStrategy)
+  const evaluated = strategies.filter((cross) => weightingsByCrossId.has(cross.id))
+  const pending = strategies.filter((cross) => !weightingsByCrossId.has(cross.id))
+
+  const priorityCounts = Object.fromEntries(
+    CHECKY_WEIGHTING_BANDS.map(({ band }) => [band, evaluated.filter((cross) => cross.weightingBand === band).length]),
+  ) as Record<CheckyWeightingBand, number>
+
+  const summarize = (cross: { id: string; crossType: string; strategy: string }) => {
+    const weighting = weightingsByCrossId.get(cross.id)
+    return {
+      crossId: cross.id,
+      crossType: cross.crossType,
+      strategy: cross.strategy,
+      weightedScore: weighting?.weightedScore ?? null,
+      weightingBand: weighting?.weightingBand ?? null,
+    }
+  }
+
+  // El contraste útil para la conversación: mucho impacto y poca viabilidad. Sale de los niveles ya
+  // guardados, no del ponderado, así que no vuelve a ponderar nada; solo puede cubrir estrategias
+  // ponderadas, porque un cruce sin ponderación no tiene niveles que leer.
+  const lowFeasibilityHighImpact = (context.weightings ?? []).filter((weighting) => isLowFeasibility(weighting.criteria.viabilidad) && isHighImpact(weighting.criteria.impactoEstrategico)).map((weighting) => ({
+    crossId: weighting.crossId,
+    crossType: weighting.crossType,
+    strategy: weighting.strategy,
+    weightedScore: weighting.weightedScore,
+    weightingBand: weighting.weightingBand,
+    viabilidad: weighting.criteria.viabilidad,
+    impactoEstrategico: weighting.criteria.impactoEstrategico,
+  }))
+
   return {
     factorsByType,
     factorCountByType: Object.fromEntries(
@@ -309,10 +658,101 @@ const buildCheckyWork = (context: CheckyContext) => {
     crossCountByType,
     existingPairs: crosses.map((cross) => cross.pairKey),
     crossesWithoutStrategy: crosses.filter((cross) => !cross.hasStrategy).map((cross) => cross.id),
+    strategiesWithoutWeighting: pending.map((cross) => cross.id),
+    totalStrategies: strategies.length,
+    evaluatedStrategies: evaluated.length,
+    pendingStrategies: pending.length,
+    priorityCounts,
+    highPriorityStrategies: evaluated.filter((cross) => cross.weightingBand === HIGH_PRIORITY_BAND).map(summarize),
+    lowFeasibilityHighImpact,
     factorCoverage: context.swotItems.map((item) => {
       const crossIds = crossIdsByFactor.get(item.id) ?? []
       return { id: item.id, type: item.type, crossCount: crossIds.length, crossIds, isUnused: crossIds.length === 0 }
     }),
+  }
+}
+
+type CheckyWorkMap = ReturnType<typeof buildCheckyWork>
+
+/**
+ * Andamiaje de análisis por dimensión, calculado con los datos del diagnóstico. No recomienda nada y
+ * no inventa: solo deja escrito qué huecos existen y con qué ids reales puede apoyarse Checky. Cada
+ * sección alimenta una dimensión concreta, y todas las entradas llevan los ids que el modelo debe
+ * citar en evidenceIds para que el hallazgo no sea una opinión.
+ */
+const buildCheckyAnalysis = (context: CheckyContext, workMap: CheckyWorkMap) => {
+  const weightingByCrossId = new Map((context.weightings ?? []).map((weighting) => [weighting.crossId, weighting]))
+  const crossById = new Map(workMap.crosses.map((cross) => [cross.id, cross]))
+  const crossCountByFactor = new Map(workMap.factorCoverage.map((item) => [item.id, item.crossCount]))
+
+  // Orden de lectura, no de ejecución: el ponderado ordena lo que el usuario ya registró, y esa
+  // jerarquía no es por sí sola una recomendación. Los criterios viajan para que el motivo pueda
+  // apoyarse en ellos y no solo en el número.
+  const priorityRanking = workMap.crosses
+    .filter((cross) => cross.hasWeighting)
+    .map((cross) => {
+      const weighting = weightingByCrossId.get(cross.id)
+      return {
+        crossId: cross.id,
+        crossType: cross.crossType,
+        strategy: cross.strategy,
+        weightedScore: weighting?.weightedScore ?? null,
+        weightingBand: cross.weightingBand,
+        criteria: weighting?.criteria ?? null,
+      }
+    })
+    .sort((left, right) => (right.weightedScore ?? 0) - (left.weightedScore ?? 0))
+
+  const unweightedStrategies = workMap.crosses
+    .filter((cross) => cross.hasStrategy && !cross.hasWeighting)
+    .map((cross) => ({ crossId: cross.id, crossType: cross.crossType, strategy: cross.strategy, factorIds: [cross.internalFactorId, cross.externalFactorId] }))
+
+  // Un cruce ponderado pero sin texto de estrategia es el hueco más incoherente del diagnóstico:
+  // alguien decidió cuánto vale y nunca escribió el qué. Se separa del resto de cruces vacíos.
+  const weightedCrossesWithoutStrategy = workMap.crosses
+    .filter((cross) => !cross.hasStrategy && cross.hasWeighting)
+    .map((cross) => ({ crossId: cross.id, crossType: cross.crossType, weightedScore: cross.weightedScore, weightingBand: cross.weightingBand, factorIds: [cross.internalFactorId, cross.externalFactorId] }))
+
+  const crossesWithoutStrategy = workMap.crosses
+    .filter((cross) => !cross.hasStrategy)
+    .map((cross) => ({ crossId: cross.id, crossType: cross.crossType, hasWeighting: cross.hasWeighting, weightedScore: cross.weightedScore, factorIds: [cross.internalFactorId, cross.externalFactorId] }))
+
+  /**
+   * Señales estructurales, no atribuciones de calidad: el servidor solo puede observar que la
+   * ponderación y el texto no caminan en la misma dirección. Si una señal aparece, es un motivo
+   * para que Checky pregunte, nunca una conclusión que pueda afirmar como hecho.
+   */
+  const strategyWeightingSignals = priorityRanking.flatMap((entry) => {
+    const signals: Array<{ kind: string; crossId: string; crossType: string; weightedScore: number | null; weightingBand: string | null; factorIds: string[]; detail: string }> = []
+    const factorIds = crossById.get(entry.crossId) ? [crossById.get(entry.crossId)!.internalFactorId, crossById.get(entry.crossId)!.externalFactorId] : []
+    if (entry.criteria && isHighImpact(entry.criteria.impactoEstrategico) && isLowFeasibility(entry.criteria.viabilidad)) {
+      signals.push({ kind: 'IMPACT_HIGH_FEASIBILITY_LOW', crossId: entry.crossId, crossType: entry.crossType, weightedScore: entry.weightedScore, weightingBand: entry.weightingBand, factorIds, detail: 'El usuario valora el impacto estratégico por encima de la viabilidad: la estrategia promete mucho y cuesta mucho. Es una decisión legítima, pero conviene que sepa qué está comprando.' })
+    }
+    // Un cruce sin estrategia no es "texto corto": ya tiene su propia sección, weightedCrossesWithoutStrategy.
+    const strategyLength = entry.strategy?.length ?? 0
+    if (strategyLength > 0 && isHighPriorityBand(entry.weightingBand) && strategyLength < THIN_STRATEGY_CHARS) {
+      signals.push({ kind: 'HIGH_PRIORITY_THIN_TEXT', crossId: entry.crossId, crossType: entry.crossType, weightedScore: entry.weightedScore, weightingBand: entry.weightingBand, factorIds, detail: `La estrategia está ponderada en una banda alta pero su texto ocupa ${strategyLength} caracteres: la valoración va por delante de la redacción.` })
+    }
+    const thinnestFactor = factorIds.find((id) => (crossCountByFactor.get(id) ?? 0) === 1)
+    if (isHighPriorityBand(entry.weightingBand) && thinnestFactor && factorIds.length === 2) {
+      signals.push({ kind: 'HIGH_PRIORITY_THIN_EVIDENCE', crossId: entry.crossId, crossType: entry.crossType, weightedScore: entry.weightedScore, weightingBand: entry.weightingBand, factorIds, detail: `Uno de los dos factores solo aparece en este cruce (${thinnestFactor}), así que la prioridad descansa sobre una base empírica estrecha.` })
+    }
+    return signals
+  })
+
+  // No se precalculan pares candidatos: decidir si dos factores se relacionan de verdad es un
+  // juicio que corresponde a Checky y a la compuerta estricta. Aquí solo se le da el inventario
+  // de factores que todavía no participa en ningún cruce, con sus ids reales.
+  const unusedFactors = workMap.factorCoverage.filter((item) => item.isUnused).map((item) => ({ id: item.id, type: item.type }))
+
+  return {
+    priorityRanking,
+    unweightedStrategies,
+    crossesWithoutStrategy,
+    weightedCrossesWithoutStrategy,
+    strategyWeightingSignals,
+    unusedFactors,
+    hasAnyWeighting: weightingByCrossId.size > 0,
   }
 }
 
@@ -433,9 +873,12 @@ export class AIService {
       ...context.swotItems.map((item) => item.id),
       ...context.crosses.map((cross) => cross.id),
     ])
+    const workMap = buildCheckyWork(context)
     const prompt = [
       checkySystemRules,
       'CONTEXTO RECIBIDO (única fuente de verdad). El bloque workMap está calculado por el servidor a partir de los datos de arriba: úsalo para el análisis de cobertura y para no sugerir cruces que ya existen. no sugieras un par que ya figura en existingPairs.',
+      CHECKY_WEIGHTING_RULES,
+      CHECKY_ANALYSIS_SCAFFOLD,
       JSON.stringify({
         question: context.question,
         diagnostic: context.diagnostic,
@@ -443,7 +886,10 @@ export class AIService {
         crosses: context.crosses.map((cross) => ({ ...cross, strategy: cross.strategy ?? '' })),
         aiAnalysis: context.aiAnalysis,
         recommendations: context.recommendations,
-        workMap: buildCheckyWork(context),
+        weightings: context.weightings ?? [],
+        strategies: context.strategies ?? [],
+        workMap,
+        analysis: { ...buildCheckyAnalysis(context, workMap), strategyPrioritization: buildStrategyPrioritization(context.strategies ?? []) },
       }),
     ].join('\n\n')
     try {
@@ -456,7 +902,15 @@ export class AIService {
       let candidate: unknown
       try { candidate = JSON.parse(response.output_text) } catch { throw new AIServiceError('INVALID_RESPONSE') }
       const parsed = buildCheckyConsultSchema(allowedIds).safeParse(candidate)
-      if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
+      if (!parsed.success) {
+        // TEMP logging de diagnóstico: solo rutas, códigos y mensajes de la validación. Sin contenido
+        // generado, sin contexto del diagnóstico y sin credenciales.
+        console.error('[AIService] Checky consult rejected by schema', {
+          issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code, message: issue.message })),
+          allowedIdsSize: allowedIds.size,
+        })
+        throw new AIServiceError('INVALID_RESPONSE')
+      }
       return parsed.data
     } catch (error) {
       this.fail(error)

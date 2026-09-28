@@ -8,10 +8,12 @@ import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossTyp
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
-import { AIService, AIServiceError, type CheckyConsultResult, type CheckyContext, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
+import { AIService, AIServiceError, resolveWeightingBand, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
-import { calculateWeightedScore } from './weighting-service.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
+import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
+import { indexStrategyWeightings, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -62,6 +64,40 @@ const weightingView = (weighting: { id: string; crossId: string; impactoEstrateg
   updatedAt: weighting.updatedAt,
 })
 
+/**
+ * Relación que necesita Checky para leer cruces, sus dos factores y su ponderación en una sola
+ * consulta. No añade ningún campo a la respuesta de la ruta de cruces: solo sirve al contexto.
+ */
+const checkyCrossInclude = { factor1: true, factor2: true, weighting: true } as const
+
+/**
+ * Traduce las filas de strategicCross con su ponderación incluida al shape que consume Checky.
+ * Solo se lee lo que ya está en la BD: weightedScore se copia sin tocarlo y weightingBand se
+ * deduce de ese número con los mismos rangos que ve el usuario en pantalla.
+ */
+const checkyWeightingsFromCrosses = (crosses: Array<Prisma.StrategicCrossGetPayload<{ include: typeof checkyCrossInclude }>>): CheckyWeighting[] => {
+  const factorRef = (factor: { id: string; type: string; description: string }) => ({ id: factor.id, type: factor.type, description: factor.description })
+  return crosses.flatMap((cross) => {
+    if (!cross.weighting) return []
+    return [{
+      crossId: cross.id,
+      crossType: cross.crossType,
+      origin: cross.origin,
+      strategy: cross.strategy,
+      weightedScore: cross.weighting.weightedScore,
+      weightingBand: resolveWeightingBand(cross.weighting.weightedScore),
+      criteria: {
+        impactoEstrategico: cross.weighting.impactoEstrategico,
+        viabilidad: cross.weighting.viabilidad,
+        urgencia: cross.weighting.urgencia,
+        sinergiaInterna: cross.weighting.sinergiaInterna,
+        impactoReputacional: cross.weighting.impactoReputacional,
+      },
+      factors: [factorRef(cross.factor1), factorRef(cross.factor2)],
+    }]
+  })
+}
+
 const checkySessionView = (session: { id: string; diagnosticId: string; title: string | null; createdById: string; createdAt: Date; updatedAt: Date }) => ({
   id: session.id,
   diagnosticId: session.diagnosticId,
@@ -88,13 +124,52 @@ const checkyMessageView = (message: { id: string; sessionId: string; role: strin
   createdAt: message.createdAt,
 })
 
+/**
+ * Traduce la lista consolidada de estrategias al shape que consume Checky. Es la misma lectura que
+ * usa GET /diagnostics/:id/strategies, así que Checky ve exactamente la priorización que el usuario
+ * tiene en pantalla: las tres fuentes, con su ponderado y su banda ya guardados, y en null cuando
+ * todavía no están valoradas.
+ *
+ * factorIds solo lleva ids reales del diagnóstico, y son los únicos que el contrato admite como
+ * evidencia junto a crossId. Una estrategia de IA no tiene cruces ni factores, y por eso llega con
+ * las dos en null: Checky puede leer sus números, pero no tiene ningún id que citar sobre ella.
+ */
+const checkyStrategiesFrom = (strategies: StrategyForPrioritization[]): CheckyConsolidatedStrategy[] =>
+  strategies.map((strategy) => ({
+    strategyRef: strategy.id,
+    source: strategy.source,
+    title: strategy.title,
+    description: strategy.description,
+    crossId: strategy.crossId,
+    crossType: strategy.crossType,
+    origin: strategy.origin,
+    factorIds: [strategy.factor1?.id, strategy.factor2?.id].filter((id): id is string => typeof id === 'string'),
+    weightedScore: strategy.weightedScore,
+    weightingBand: strategy.weightingBand,
+    criteria: strategy.weighting
+      ? {
+          impactoEstrategico: strategy.weighting.impactoEstrategico,
+          viabilidad: strategy.weighting.viabilidad,
+          urgencia: strategy.weighting.urgencia,
+          sinergiaInterna: strategy.weighting.sinergiaInterna,
+          impactoReputacional: strategy.weighting.impactoReputacional,
+        }
+      : null,
+  }))
+
 const buildCheckyContext = async (db: PrismaClient, diagnostic: { id: string; title: string; description: string; status: string }, question: string): Promise<CheckyContext> => {
   const stored = await db.qualityDiagnostic.findUnique({ where: { id: diagnostic.id }, include: { swotAnalysis: { include: { items: { orderBy: { createdAt: 'asc' } } } } } })
   const items = stored?.swotAnalysis?.items ?? []
-  const [crosses, analysis, recommendations] = await Promise.all([
-    db.strategicCross.findMany({ where: { diagnosticId: diagnostic.id }, orderBy: { updatedAt: 'desc' } }),
+  // Los factores y las ponderaciones entran por la misma consulta que los cruces, así que el
+  // alcance multiempresa es el mismo where diagnosticId que ya autoriza la ruta: no hay forma de
+  // traer la ponderación de un cruce ajeno. weightedScore se copia tal cual, sin recalcularlo.
+  // loadDiagnosticStrategies reutiliza la consolidación de la priorización, acotada al mismo
+  // diagnóstico, para que Checky y la pantalla no puedan ver dos listas distintas.
+  const [crosses, analysis, recommendations, strategies] = await Promise.all([
+    db.strategicCross.findMany({ where: { diagnosticId: diagnostic.id }, orderBy: { updatedAt: 'desc' }, include: { factor1: true, factor2: true, weighting: true } }),
     db.aIAnalysis.findUnique({ where: { diagnosticId: diagnostic.id } }),
     db.recommendation.findMany({ where: { diagnosticId: diagnostic.id }, select: { title: true, priority: true, status: true } }),
+    loadDiagnosticStrategies(db, diagnostic.id),
   ])
   return {
     question,
@@ -105,6 +180,8 @@ const buildCheckyContext = async (db: PrismaClient, diagnostic: { id: string; ti
       ? { executiveSummary: analysis.executiveSummary, keyFindings: analysis.keyFindings, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities }
       : null,
     recommendations: recommendations.map((item) => ({ title: item.title, priority: item.priority, status: item.status })),
+    weightings: checkyWeightingsFromCrosses(crosses),
+    strategies: checkyStrategiesFrom(strategies),
   }
 }
 
@@ -137,6 +214,80 @@ const ticketDataFromActionItem = (item: { title: string; description: string; st
   actionItemId: item.actionItemId,
   createdById: item.createdById,
 })
+
+/**
+ * Reúne las estrategias de un diagnóstico desde sus tres fuentes y les engancha la ponderación que
+ * ya está guardada: los cruces desde StrategicCrossWeighting, y las de IA y Checky desde
+ * StrategyWeighting, que se localiza por el hash del texto. Es de solo lectura.
+ *
+ * Vive fuera de las rutas a propósito: la lectura la usa GET /diagnostics/:id/strategies y también
+ * la revalidación de PUT /diagnostics/:id/strategies/weighting, que necesita exactamente la misma
+ * consolidación para comprobar que un sourceRef recibido de verdad pertenece a este diagnóstico. Si
+ * las dos rutas tuvieran su propia consulta, el ancla que valida una podría no ser la que ve la otra.
+ */
+const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string): Promise<StrategyForPrioritization[]> => {
+  const [analysis, crosses, acceptedSuggestions, storedWeightings] = await Promise.all([
+    db.aIAnalysis.findUnique({ where: { diagnosticId }, select: { id: true, foStrategies: true, doStrategies: true, faStrategies: true, daStrategies: true } }),
+    db.strategicCross.findMany({ where: { diagnosticId }, include: { ...crossInclude, weighting: true }, orderBy: { updatedAt: 'desc' } }),
+    // El filtro por diagnosticId en la sesión es lo que mantiene el aislamiento: una sugerencia de
+    // otra empresa nunca llega a la lista aunque el id del mensaje sea válido.
+    db.checkyMessage.findMany({
+      where: { role: 'CHECKY', status: 'ACCEPTED', session: { diagnosticId } },
+      select: { id: true, category: true, evidenceIds: true, suggestedStrategyTitle: true, suggestedStrategyDescription: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    }),
+    db.strategyWeighting.findMany({ where: { diagnosticId } }),
+  ])
+
+  const aiStrategies: AiStrategySource[] = []
+  if (analysis) {
+    const byQuadrant = { FO: analysis.foStrategies, DO: analysis.doStrategies, FA: analysis.faStrategies, DA: analysis.daStrategies }
+    for (const quadrant of AI_STRATEGY_QUADRANTS) {
+      readAiStrategyTexts(byQuadrant[quadrant]).forEach((text, index) => aiStrategies.push({ analysisId: analysis.id, quadrant, index, text }))
+    }
+  }
+
+  // Los factores citados por la sugerencia solo se leen si hay sugerencias que resolver, y siempre
+  // acotados a este diagnóstico.
+  const citedFactorIds = new Set(acceptedSuggestions.flatMap((suggestion) => suggestion.evidenceIds))
+  const citedItems = citedFactorIds.size > 0
+    ? await db.sWOTItem.findMany({ where: { id: { in: [...citedFactorIds] }, swot: { diagnosticId } }, select: { id: true, type: true, description: true } })
+    : []
+  const factorById = new Map<string, StrategyFactor>(citedItems.map((item) => [item.id, { id: item.id, type: item.type, description: item.description }]))
+
+  const checkySuggestions: CheckyStrategySource[] = acceptedSuggestions.map((suggestion) => ({
+    messageId: suggestion.id,
+    category: suggestion.category ?? '',
+    evidenceIds: suggestion.evidenceIds,
+    title: suggestion.suggestedStrategyTitle,
+    description: suggestion.suggestedStrategyDescription,
+    factors: suggestion.evidenceIds.map((id) => factorById.get(id)).filter((item): item is StrategyFactor => item !== undefined),
+  }))
+
+  const crossSources: CrossStrategySource[] = crosses.map((cross) => ({
+    id: cross.id,
+    crossType: cross.crossType,
+    origin: cross.origin,
+    factor1: { id: cross.factor1.id, type: cross.factor1.type, description: cross.factor1.description },
+    factor2: { id: cross.factor2.id, type: cross.factor2.type, description: cross.factor2.description },
+    strategy: cross.strategy,
+    weighting: cross.weighting
+      ? {
+          id: cross.weighting.id,
+          crossId: cross.weighting.crossId,
+          impactoEstrategico: cross.weighting.impactoEstrategico,
+          viabilidad: cross.weighting.viabilidad,
+          urgencia: cross.weighting.urgencia,
+          sinergiaInterna: cross.weighting.sinergiaInterna,
+          impactoReputacional: cross.weighting.impactoReputacional,
+          weightedScore: cross.weighting.weightedScore,
+        }
+      : null,
+  }))
+
+  return collectStrategies({ crosses: crossSources, aiStrategies, checkySuggestions, weightings: indexStrategyWeightings(storedWeightings) })
+}
+
 
 export const createApp = (db: PrismaClient = prisma, aiService: AIService = new AIService()) => {
   const app = express()
@@ -634,6 +785,73 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       orderBy: [{ weightedScore: 'desc' }, { createdAt: 'asc' }],
     })
     response.json({ weightings: weightings.map(weightingView) })
+  }))
+
+  /**
+   * Estrategias consolidadas para la priorización: una sola lista con lo que propuso el análisis con
+   * IA, lo que el usuario escribió en un cruce y lo que Checky dejó aceptado. Es de solo lectura y
+   * no calcula nada: el ponderado sale de la fila guardada, StrategicCrossWeighting para los cruces y
+   * StrategyWeighting para las de IA y Checky, y la banda de resolveWeightingBand, la misma que ve
+   * el resto de la aplicación.
+   */
+  app.get('/api/diagnostics/:id/strategies', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const strategies = await loadDiagnosticStrategies(db, diagnostic.id)
+    response.json({
+      strategies,
+      weightingLevels: WEIGHTING_LEVEL_SCORE,
+    })
+  }))
+
+  /**
+   * Pondera una estrategia consolidada que no es un cruce, sin convertirla en uno. Los cruces
+   * siguen pesándose en PUT /api/crosses/:id/weighting contra StrategicCrossWeighting; esta ruta solo
+   * cubre AI_ANALYSIS y CHECKY, y no toca ninguna de las dos tablas existentes.
+   *
+   * El ancla no se confía: se revalida aquí contra la consolidación real de este diagnóstico. El
+   * sourceRef que llega es el hash del texto, y el servidor vuelve a consolidar para comprobar que ese
+   * texto existe y que su fuente es la que el cliente dice. Un sourceRef inventado, o de otro
+   * diagnóstico o de otra empresa, no encuentra estrategia y se responde 404 en vez de guardarse.
+   * El ponderado se calcula en el servidor: el cuerpo solo trae los cinco niveles.
+   */
+  app.put('/api/diagnostics/:id/strategies/weighting', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const parsed = strategyWeightingSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid weighting data', details: parsed.error.issues })
+      return
+    }
+    const { source, sourceRef, ...criteria } = parsed.data
+
+    const strategies = await loadDiagnosticStrategies(db, diagnostic.id)
+    const matches = strategies.filter((strategy) => strategySourceRef(strategy.description) === sourceRef)
+    if (matches.length === 0) {
+      response.status(404).json({ error: 'Strategy not found' })
+      return
+    }
+    // El mismo texto puede haber llegado desde más de una fuente, pero en la lista consolidada solo
+    // gana una: la que la deduplicación dejó. Pesar con otra fuente significaría atribuir a una
+    // estrategia un valor que el usuario no vio en su fuente.
+    const strategy = matches.find((candidate) => candidate.source === source)
+    if (!strategy) {
+      response.status(400).json({ error: `This strategy belongs to ${matches[0].source}, not to ${source}` })
+      return
+    }
+
+    const weighting = await db.strategyWeighting.upsert({
+      where: { diagnosticId_source_sourceRef: { diagnosticId: diagnostic.id, source, sourceRef } },
+      create: { diagnosticId: diagnostic.id, source, sourceRef, ...strategyWeightingUpsertData(criteria, request.user!.id) },
+      update: strategyWeightingUpsertData(criteria, request.user!.id),
+    })
+    response.json({ weighting: { source: weighting.source, sourceRef: weighting.sourceRef, ...strategyWeightingView(weighting) } })
   }))
 
   app.post('/api/diagnostics/:id/crosses/generate', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {
@@ -1273,7 +1491,15 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(409).json({ error: 'The resource cannot be deleted because it is referenced by other records' })
       return
     }
-    console.error(error instanceof Error ? error.message : error)
+    // Logging de diagnóstico: nombre, código de Prisma y stack. Sin cuerpos de petición, sin
+    // tokens y sin claves. Un P2021 aquí significa que la base de datos está por detrás de las
+    // migraciones del repositorio, que es la causa más habitual de un 500 en estas rutas.
+    const detail = error instanceof Prisma.PrismaClientKnownRequestError
+      ? { name: error.name, code: error.code, model: (error.meta as { modelName?: string } | undefined)?.modelName, message: error.message, stack: error.stack }
+      : error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { value: String(error) }
+    console.error('[api] unhandled error', detail)
     response.status(500).json({ error: 'Internal server error' })
   })
   return app

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeighting, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, Level, Recommendation, RecommendationStatus, Role, StrategicCross, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -80,6 +80,14 @@ const crossDragFlyoutStyle: React.CSSProperties = { position: 'fixed', left: 0, 
 
 const crossOriginIcons: Record<CrossOrigin, string> = { USER: '👤', AI: '✨', BOTH: '👤✨' }
 
+/**
+ * Regla unica de origen para el flujo. `BOTH` es un par que el usuario ya habia creado y que la IA
+ * volvio a proponer sobre el, asi que cuenta como cruce del usuario y nunca como uno generado por la
+ * IA. Las dos pantallas del flujo derivan de aqui, de modo que ningun cruce puede aparecer dos veces
+ * ni quedar fuera de las dos.
+ */
+const isUserCross = (cross: StrategicCross) => cross.origin === 'USER' || cross.origin === 'BOTH'
+
 const weightingLevels: Array<{ value: WeightingLevel; label: string; short: string }> = [
   { value: 'MUY_BAJO', label: 'Muy bajo', short: '1' },
   { value: 'BAJO', label: 'Bajo', short: '2' },
@@ -102,11 +110,6 @@ const weightingBands: Array<{ min: number; label: string; tone: string }> = [
   { min: 3, label: 'Corto plazo', tone: 'short' },
   { min: 2, label: 'Mediano plazo', tone: 'medium' },
   { min: 1, label: 'Largo plazo', tone: 'long' },]
-
-function weightingBand(score: number) { return weightingBands.find((band) => score >= band.min) ?? weightingBands[weightingBands.length - 1] }
-
-function criteriaOf(weighting: CrossWeighting): CrossWeightingCriteria {
-  return { impactoEstrategico: weighting.impactoEstrategico, viabilidad: weighting.viabilidad, urgencia: weighting.urgencia, sinergiaInterna: weighting.sinergiaInterna, impactoReputacional: weighting.impactoReputacional }}
 
 const swotTypeLabels = Object.fromEntries(swotTypes.map((item) => [item.value, item.label])) as Record<SWOTType, string>
 
@@ -367,7 +370,7 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
     return (
       <>
         <div className="diag-standalone-page">
-          <DiagnosticDetail diagnostic={selected} onBack={() => setSelected(null)} onEdit={() => startEdit(selected)} onDelete={() => void removeDiagnostic(selected)} stage={diagStage} onStageChange={onDiagStageChange} />
+          <DiagnosticDetail diagnostic={selected} user={user} onBack={() => setSelected(null)} onEdit={() => startEdit(selected)} onDelete={() => void removeDiagnostic(selected)} stage={diagStage} onStageChange={onDiagStageChange} />
         </div>
         {showForm && <DiagnosticForm draft={draft} setDraft={setDraft} isEdit={Boolean(editing)} saving={saving} onSubmit={saveDiagnostic} onClose={() => { setShowForm(false); setEditing(null) }} error={formError} companies={canCreate ? companies : []} companyId={companyId} onCompanyIdChange={setCompanyId} />}
       </>
@@ -733,11 +736,11 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar la empresa.') } finally { setSaving(false) }
   }
   async function removeCompany(companyToRemove: Company) { if (!window.confirm('¿Eliminar esta empresa?')) return; try { await api(`/companies/${companyToRemove.id}`, { method: 'DELETE' }); setSelected(null); await loadCompanies() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la empresa.') } }
-  return <div className="page companies-page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>}
+  return <div className="page companies-page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>}
 
 function CompanyForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: CompanyDraft; setDraft: React.Dispatch<React.SetStateAction<CompanyDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▥</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR EMPRESA' : 'NUEVA EMPRESA'}</p><h2>{isEdit ? 'Actualizar empresa' : 'Crear empresa'}</h2><p className="company-modal-subtitle">Registra la información de la empresa en el sistema</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Nombre de la empresa<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Acme Consultores" minLength={2} required /></label><div className="form-grid"><label>Identificación<input value={draft.identification} onChange={(event) => setDraft({ ...draft, identification: event.target.value })} placeholder="NIT o identificación" minLength={3} required /></label><label>Industria<input value={draft.industry} onChange={(event) => setDraft({ ...draft, industry: event.target.value })} placeholder="Ej. Tecnología" minLength={2} required /></label></div><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade contexto sobre la empresa..." rows={6} minLength={3} required /></label>{!isEdit && <div className="admin-create-section"><label className="admin-create-toggle"><input type="checkbox" checked={draft.adminEnabled} onChange={(event) => setDraft({ ...draft, adminEnabled: event.target.checked })} /><span className="admin-create-check" aria-hidden="true">✓</span><div className="admin-create-copy"><strong>Crear administrador para esta empresa</strong><small>Se creará un usuario administrador con rol de COMPANY_ADMIN.</small></div></label>{draft.adminEnabled && <div className="admin-fields"><div className="form-grid"><label>Nombre del administrador<input value={draft.adminName} onChange={(event) => setDraft({ ...draft, adminName: event.target.value })} placeholder="Ej. Ana López" minLength={2} required /></label><label>Correo del administrador<input type="email" value={draft.adminEmail} onChange={(event) => setDraft({ ...draft, adminEmail: event.target.value })} placeholder="admin@empresa.com" autoComplete="off" required /></label></div><label>Contraseña inicial<input type="password" value={draft.adminPassword} onChange={(event) => setDraft({ ...draft, adminPassword: event.target.value })} placeholder="Mínimo 8 caracteres" minLength={8} autoComplete="new-password" required /></label></div>}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear empresa'}</button></div></form></div> }
 
-function CompanyDetail({ company: companyToShow, onEdit, onDelete, onClose, detailIntent, onConsumeDetailIntent, onDiagnosticActiveChange, diagStage, onDiagStageChange }: { company: Company; onEdit: () => void; onDelete: () => void; onClose: () => void; detailIntent: DetailIntent | null; onConsumeDetailIntent: () => void; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }) {
+function CompanyDetail({ company: companyToShow, user, onEdit, onDelete, onClose, detailIntent, onConsumeDetailIntent, onDiagnosticActiveChange, diagStage, onDiagStageChange }: { company: Company; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; detailIntent: DetailIntent | null; onConsumeDetailIntent: () => void; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }) {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [selectedDiagnostic, setSelectedDiagnostic] = useState<Diagnostic | null>(null)
   const [diagnosticDraft, setDiagnosticDraft] = useState<DiagnosticDraft>(emptyDiagnosticDraft)
@@ -766,7 +769,7 @@ function CompanyDetail({ company: companyToShow, onEdit, onDelete, onClose, deta
     } catch (requestError) { setDiagnosticError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el diagnóstico.') } finally { setSavingDiagnostic(false) }
   }
   async function removeDiagnostic() { if (!selectedDiagnostic || !window.confirm('¿Eliminar este análisis estratégico y su matriz DOFA?')) return; try { await api(`/diagnostics/${selectedDiagnostic.id}`, { method: 'DELETE' }); setSelectedDiagnostic(null); await loadDiagnostics() } catch { setDiagnosticError('No se pudo eliminar el diagnóstico.') } }
-  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Diagnósticos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error">{diagnosticError}</div>}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando diagnósticos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin diagnósticos" text="Crea el primer diagnóstico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear diagnóstico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>}
+  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} user={user} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Diagnósticos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error">{diagnosticError}</div>}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando diagnósticos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin diagnósticos" text="Crea el primer diagnóstico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear diagnóstico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>}
 
 function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, companies, companyId, onCompanyIdChange, error }: { draft: DiagnosticDraft; setDraft: React.Dispatch<React.SetStateAction<DiagnosticDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void; companies?: Company[]; companyId?: string; onCompanyIdChange?: (id: string) => void; error?: string }) {
   return (
@@ -794,16 +797,13 @@ function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, co
     </div>
   )}
 
-function DiagnosticDetailBase({ diagnostic, crossesVersion = 0 }: { diagnostic: Diagnostic; crossesVersion?: number }) {
+function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses, crossError, setCrossError, loadCrosses }: { diagnostic: Diagnostic; crosses: StrategicCross[]; setCrosses: React.Dispatch<React.SetStateAction<StrategicCross[]>>; loadingCrosses: boolean; crossError: string; setCrossError: (value: string) => void; loadCrosses: () => Promise<void> }) {
   const [items, setItems] = useState<SWOTItem[]>(diagnostic.swotAnalysis?.items ?? [])
   const [itemDraft, setItemDraft] = useState<SWOTDraft>(emptySWOTDraft)
   const [editingItem, setEditingItem] = useState<SWOTItem | null>(null)
   const [showItemForm, setShowItemForm] = useState(false)
   const [savingItem, setSavingItem] = useState(false)
   const [itemError, setItemError] = useState('')
-  const [crosses, setCrosses] = useState<StrategicCross[]>([])
-  const [loadingCrosses, setLoadingCrosses] = useState(true)
-  const [crossError, setCrossError] = useState('')
   const [crossFormError, setCrossFormError] = useState('')
   const [crossFilter, setCrossFilter] = useState<CrossType | 'ALL'>('ALL')
   const [dragCross, setDragCross] = useState<{ itemId: string; type: SWOTType } | null>(null)
@@ -817,12 +817,6 @@ function DiagnosticDetailBase({ diagnostic, crossesVersion = 0 }: { diagnostic: 
   const [savingCross, setSavingCross] = useState(false)
   const [pendingCross, setPendingCross] = useState<{ factor1: SWOTItem | null; factor2: SWOTItem | null; strategy: string } | null>(null)
   const pendingCrossRef = useRef<HTMLDivElement | null>(null)
-  const loadCrosses = useCallback(async () => {
-    try { const result = await api<{ crosses: StrategicCross[] }>(`/diagnostics/${diagnostic.id}/crosses`); setCrosses(result.crosses) } catch { setCrossError('No pudimos cargar los cruces.') } finally { setLoadingCrosses(false) }
-  }, [diagnostic.id])
-  // `crossesVersion` lets the Checky panel ask for a reload after it materializes a strategic cross,
-  // reusing this loader instead of fetching the matrix twice from two different places.
-  useEffect(() => { const timer = window.setTimeout(() => { void loadCrosses() }, 0); return () => window.clearTimeout(timer) }, [loadCrosses, crossesVersion])
   useEffect(() => { if (!pendingCross) return; const timer = window.setTimeout(() => { pendingCrossRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, 30); return () => window.clearTimeout(timer) }, [pendingCross])
   function startItemCreate(type: SWOTType) { setEditingItem(null); setItemDraft({ ...emptySWOTDraft, type }); setShowItemForm(true); setItemError('') }
   function startItemEdit(item: SWOTItem) { setEditingItem(item); setItemDraft({ type: item.type, description: item.description }); setShowItemForm(true); setItemError('') }
@@ -928,132 +922,378 @@ function DiagnosticDetailBase({ diagnostic, crossesVersion = 0 }: { diagnostic: 
   const pendingCrossF2Id = pendingCross?.factor2?.id ?? ''
   const internalCrossOptions = items.filter((item) => item.type === 'STRENGTH' || item.type === 'WEAKNESS')
   const externalCrossOptions = items.filter((item) => item.type === 'OPPORTUNITY' || item.type === 'THREAT')
-  return <section className="diag-card diag-section dofa-section"><div className="diag-section-head"><span className="diag-step-chip">2</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del diagnóstico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Convierte los factores DOFA en estrategias accionables.</p></div><div className="crosses-head-actions"><span className="cross-count">{crosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : crosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && crosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{crosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section><StrategyWeightingPanel diagnosticId={diagnostic.id} crosses={crosses} loadingCrosses={loadingCrosses} />{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{crosses.length}</strong><span>cruces</span></div></div></div></div></section>}
+  // En la matriz DOFA solo se listan los cruces del usuario: los que propuso la IA se leen despues,
+  // en la seccion CRUCES ESTRATÉGICOS que sigue a las inferencias. La lista sigue saliendo de la
+  // misma lista de StrategicCross, solo que recortada por origen, asi que no hay dos fuentes.
+  const userCrosses = crosses.filter(isUserCross)
+  return <section className="diag-card diag-section dofa-section"><div className="diag-section-head"><span className="diag-step-chip">2</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del diagnóstico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{userCrosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los cruces que creaste tú arrastrando factores en la matriz. Los que proponga la IA aparecerán después del análisis.</p></div><div className="crosses-head-actions"><span className="cross-count">{userCrosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : userCrosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && userCrosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{userCrosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{userCrosses.length}</strong><span>cruces</span></div></div></div></div></section>}
 
 function CrossModal({ cross, draft, setDraft, saving, error, onSubmit, onClose }: { cross: StrategicCross; draft: { strategy: string }; setDraft: React.Dispatch<React.SetStateAction<{ strategy: string }>>; saving: boolean; error: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const crossType = cross.crossType
   return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal cross-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon cross-modal-icon">{crossType}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>Editar cruce</h2><p className="company-modal-subtitle">Actualiza la estrategia del cruce.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><div className="cross-type-detect"><span className="cross-type-chip large">{crossType}</span><div className="cross-type-copy"><p className="detail-label">Tipo de cruce</p><strong>{crossTypeCombos[crossType]}</strong></div><span className="factor-type-badge">FO / DO / FA / DA</span></div><label>Factor 1<input type="text" value={`${swotTypeLabels[cross.factor1.type]}: ${cross.factor1.description}`} readOnly /></label><label>Factor 2<input type="text" value={`${swotTypeLabels[cross.factor2.type]}: ${cross.factor2.description}`} readOnly /></label><label>Estrategia<textarea value={draft.strategy} onChange={(event) => setDraft({ ...draft, strategy: event.target.value })} placeholder="Estrategia del cruce..." rows={3} minLength={3} required /></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div>}
 
-function StrategyWeightingPanel({ diagnosticId, crosses, loadingCrosses }: { diagnosticId: string; crosses: StrategicCross[]; loadingCrosses: boolean }) {
-  const [weightings, setWeightings] = useState<CrossWeighting[]>([])
-  const [drafts, setDrafts] = useState<Record<string, CrossWeightingCriteria>>({})
-  const [saveState, setSaveState] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
-  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({})
+const priorityBandRanges: Record<string, string> = { immediate: '4.00 – 5.00', short: '3.00 – 3.99', medium: '2.00 – 2.99', long: '1.00 – 1.99' }
+/* ============================================
+   PONDERACIÓN DE ESTRATEGIAS CONSOLIDADAS (IA, CRUCES Y CHECKY)
+   ============================================ */
+
+/**
+ * Los cruces ya son StrategicCross con `origin`, asi que esta seccion solo los agrupa y los lee: no
+ * crea, no edita y no inventa cruces. Reutiliza las mismas tarjetas y etiquetas que la matriz DOFA.
+ *
+ * Esta pantalla es la segunda mitad del flujo: aqui solo se leen los cruces que propuso la IA. Los
+ * del usuario ya se=listaron en la matriz DOFA y no se repiten, asi que `isUserCross` deja fuera esta
+ * lista tanto los `USER` como los `BOTH`, que tambien son del usuario.
+ */
+function AiStrategicCrosses({ crosses, loading, error, onBackToMatrix }: { crosses: StrategicCross[]; loading: boolean; error: string; onBackToMatrix: () => void }) {
+  // Se deriva de la misma lista de StrategicCross que alimenta la matriz DOFA: no hay segunda fuente.
+  const aiCrosses = crosses.filter((cross) => !isUserCross(cross))
+  if (loading) return <section className="diag-card diag-section crosses-section"><div className="inline-loading"><span className="loader" />Cargando cruces...</div></section>
+  if (error) return <section className="diag-card diag-section crosses-section"><div className="form-error" role="alert">{error}</div></section>
+  return (
+    <section className="diag-card diag-section crosses-section">
+      <div className="diag-section-head">
+        <span className="diag-step-chip crosses-chip" aria-hidden="true">&#x26AF;</span>
+        <div><h3>CRUCES ESTRATÉGICOS GENERADOS POR LA IA</h3><p>Las combinaciones de factores que la IA propuso a partir de este diagnóstico.</p></div>
+        <div className="crosses-head-actions"><span className="cross-count">{aiCrosses.length} cruces</span></div>
+      </div>
+      {aiCrosses.length === 0
+        ? <EmptyState compact title="La IA no propuso cruces" text="Los cruces que crees tú en la matriz DOFA ya están guardados; cuando la IA proponga alguno para estos factores aparecerá aquí." action={<button type="button" className="button secondary small-button" onClick={onBackToMatrix}>Ir a la matriz DOFA</button>} />
+        : <div className="crosses-list">{aiCrosses.map((cross) => (
+            <article className="cross-card" key={cross.id} data-cross-id={cross.id}>
+              <div className="cross-card-head">
+                <span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span>
+                <span className="cross-combo">{crossTypeCombos[cross.crossType]}</span>
+                <span className="cross-origin">{crossOriginIcons[cross.origin]} {crossOriginLabels[cross.origin]}</span>
+                <span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span>
+              </div>
+              <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p>
+              <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>
+              {cross.strategy
+                ? <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>
+                : <p className="cross-strategy"><b>Estrategia:</b> Sin estrategia escrita en este cruce.</p>}
+            </article>
+          ))}</div>}
+    </section>
+  )
+}
+
+const strategySourceVisuals: Record<StrategySource, { label: string; icon: string; tone: string }> = {
+  AI_ANALYSIS: { label: 'Análisis IA', icon: '✨', tone: 'ai' },
+  CHECKY: { label: 'Checky', icon: '✦', tone: 'checky' },
+  STRATEGIC_CROSS: { label: 'Cruce DOFA', icon: '◈', tone: 'cross' },
+}
+
+const serverBandTones: Record<StrategyBand, string> = { INMEDIATA: 'immediate', CORTO_PLAZO: 'short', MEDIANO_PLAZO: 'medium', LARGO_PLAZO: 'long' }
+
+/** La banda la clasifica el backend: aquí solo se traduce a su tono visual, nunca se recalcula. */
+function bandMeta(band: StrategyBand | null) {
+  if (!band) return null
+  const tone = serverBandTones[band]
+  return weightingBands.find((item) => item.tone === tone) ?? null
+}
+
+/** Los cinco niveles de la ponderación, tal como los guarda el backend para las tres fuentes. */
+function criteriaOfStrategy(weighting: StrategyWeighting): CrossWeightingCriteria {
+  return { impactoEstrategico: weighting.impactoEstrategico, viabilidad: weighting.viabilidad, urgencia: weighting.urgencia, sinergiaInterna: weighting.sinergiaInterna, impactoReputacional: weighting.impactoReputacional }
+}
+
+const sameCriteria = (a: CrossWeightingCriteria, b: CrossWeightingCriteria) => weightingCriteriaMeta.every((criterion) => a[criterion.key] === b[criterion.key])
+
+/**
+ * Ancla con la que el backend reconoce una estrategia: SHA-256 de su texto normalizado. Debe
+ * coincidir con la normalización del servidor (recortar, colapsar espacios, minúsculas) porque la
+ * ruta vuelve a validarla contra la consolidación real: si el hash no cuadra responde 404 y no
+ * guarda nada, así que un desajuste falla visiblemente en vez de escribir un valor equivocado.
+ */
+const normalizeStrategyText = (description: string) => description.trim().replace(/\s+/g, ' ').toLowerCase()
+
+async function strategySourceRef(description: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) throw new Error('Este navegador no puede calcular el ancla de la estrategia: abre la aplicación en HTTPS o en localhost.')
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalizeStrategyText(description)))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+// Una sola carga de GET /diagnostics/:id/strategies alimenta la pantalla completa: trae las
+// estrategias de IA, los cruces y las sugerencias de Checky, cada una con la ponderación que el
+// servidor ya guardó. weightingLevels es el valor de la escala que envía el propio backend.
+function useDiagnosticStrategies(diagnosticId: string) {
+  const [strategies, setStrategies] = useState<DiagnosticStrategy[]>([])
+  const [levelScores, setLevelScores] = useState<Record<WeightingLevel, number> | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const loadWeightings = useCallback(async () => {
+  const loadStrategies = useCallback(async () => {
     setLoading(true)
     setLoadError('')
     try {
-      // El endpoint ya viene ordenado por ponderado descendente; aqui solo se guardan los niveles
-      // de cada cruce para que los selectores muestren el valor real que devolvio el servidor.
-      const result = await api<{ weightings: CrossWeighting[] }>(`/diagnostics/${diagnosticId}/weightings`)
-      setWeightings(result.weightings)
-      setDrafts(Object.fromEntries(result.weightings.map((weighting) => [weighting.crossId, criteriaOf(weighting)])))
-    } catch { setLoadError('No pudimos cargar las ponderaciones de las estrategias.') } finally { setLoading(false) }
-  }, [diagnosticId])
-  const crossesKey = crosses.map((cross) => cross.id).join(',')
-  useEffect(() => { const timer = window.setTimeout(() => { void loadWeightings() }, 0); return () => window.clearTimeout(timer) }, [loadWeightings, crossesKey])
-  async function saveWeighting(cross: StrategicCross, criteria: CrossWeightingCriteria) {
-    if (saveState[cross.id] === 'saving') return
-    const previous = weightings.find((weighting) => weighting.crossId === cross.id)
-    const previousDraft = drafts[cross.id] ?? neutralWeightingCriteria
-    setDrafts((current) => ({ ...current, [cross.id]: criteria }))
-    setSaveState((current) => ({ ...current, [cross.id]: 'saving' }))
-    setSaveErrors((current) => { const next = { ...current }; delete next[cross.id]; return next })
-    try {
-      // Solo viajan los cinco niveles: el ponderado lo responde el backend y aqui nunca se calcula.
-      const result = await api<{ weighting: CrossWeighting }>(`/crosses/${cross.id}/weighting`, { method: 'PUT', body: JSON.stringify(criteria) })
-      setWeightings((current) => [result.weighting, ...current.filter((weighting) => weighting.crossId !== result.weighting.crossId)])
-      setSaveState((current) => ({ ...current, [cross.id]: 'saved' }))
+      const result = await api<{ strategies: DiagnosticStrategy[]; weightingLevels: Record<WeightingLevel, number> }>(`/diagnostics/${diagnosticId}/strategies`)
+      setStrategies(result.strategies)
+      setLevelScores(result.weightingLevels)
     } catch (error) {
-      setDrafts((current) => ({ ...current, [cross.id]: previous ? criteriaOf(previous) : previousDraft }))
-      setSaveErrors((current) => ({ ...current, [cross.id]: error instanceof ApiError && error.status === 400 ? 'Este cruce aún no tiene una estrategia que valorar.' : error instanceof ApiError ? error.message : 'No se pudo guardar la valoración.' }))
-      setSaveState((current) => ({ ...current, [cross.id]: 'error' }))
+      setLoadError(error instanceof ApiError && error.status === 404 ? 'Este diagnóstico no existe o no te pertenece.' : 'No pudimos cargar las estrategias del diagnóstico.')
+    } finally {
+      setLoading(false)
+    }
+  }, [diagnosticId])
+  useEffect(() => { const timer = window.setTimeout(() => { void loadStrategies() }, 0); return () => window.clearTimeout(timer) }, [loadStrategies])
+  return { strategies, setStrategies, levelScores, loading, loadError, reload: loadStrategies }
+}
+
+function valuationErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 400) return 'Esta estrategia pertenece a otra fuente. Recarga la pantalla e inténtalo de nuevo.'
+    if (error.status === 403) return 'Tu rol no tiene permiso para valorar estrategias.'
+    if (error.status === 404) return 'La estrategia ya no está en la lista. Recarga la pantalla.'
+    return error.message
+  }
+  if (error instanceof Error && error.message.includes('ancla')) return error.message
+  return 'No se pudo guardar la valoración.'
+}
+
+function StrategyValuationCard({ strategy, draft, levelScores, state, error, canValue, onChange, onSave }: { strategy: DiagnosticStrategy; draft: CrossWeightingCriteria; levelScores: Record<WeightingLevel, number> | null; state: 'idle' | 'saving' | 'saved' | 'error'; error: string; canValue: boolean; onChange: (criteria: CrossWeightingCriteria) => void; onSave: () => void }) {
+  const [open, setOpen] = useState(false)
+  const source = strategySourceVisuals[strategy.source]
+  const band = bandMeta(strategy.weightingBand)
+  // Solo IA y Checky se valoran desde aquí: los cruces conservan su propio flujo en la matriz DOFA.
+  const weightable = strategy.source === 'AI_ANALYSIS' || strategy.source === 'CHECKY'
+  const editable = weightable && canValue && state !== 'saving'
+  const baseline = strategy.weighting ? criteriaOfStrategy(strategy.weighting) : neutralWeightingCriteria
+  const dirty = !sameCriteria(draft, baseline)
+  // El ponderado y la banda se muestran siempre como los devuelve el backend; la barra solo
+  // representa ese número, no lo calcula.
+  const scorePercent = strategy.weighting ? Math.min(100, Math.max(0, (strategy.weighting.weightedScore / 5) * 100)) : 0
+  const tone = band?.tone ?? 'pending'
+  const detailId = `swz-detail-${strategy.id}`
+  return (
+    <article className={`swz-card ${tone}${strategy.weighting ? ' weighed' : ' unweighed'}${open ? ' open' : ''}`} data-strategy-id={strategy.id}>
+      <header className="swz-card-head">
+        <span className={`swz-source ${source.tone}`} title={`Origen: ${source.label}`}><span aria-hidden="true">{source.icon}</span> {source.label}</span>
+        {strategy.crossType && <span className={`cross-type-chip ${strategy.crossType.toLowerCase()}`}>{strategy.crossType}</span>}
+        {strategy.crossType && <span className="cross-combo">{crossTypeCombos[strategy.crossType]}</span>}
+        {strategy.origin && <span className="cross-origin"><span aria-hidden="true">{crossOriginIcons[strategy.origin]}</span> {crossOriginLabels[strategy.origin]}</span>}
+        {band
+          ? <span className={`weighting-band ${band.tone}`}>{band.label}</span>
+          : <span className="weighting-band neutral">Pendiente de valoración</span>}
+        <span className={`swz-score${strategy.weighting ? '' : ' pending'}`}>
+          <span className="swz-score-value">{strategy.weighting ? strategy.weighting.weightedScore.toFixed(2) : '—'}</span>
+          <span className="weighting-score-max">/5</span>
+        </span>
+      </header>
+      <div className="swz-strategy">
+        <strong>{strategy.title}</strong>
+        <p>{strategy.description}</p>
+      </div>
+      {(strategy.factor1 || strategy.factor2) && (
+        <div className="swz-factors">
+          <p className="detail-label">FACTORES RELACIONADOS</p>
+          {strategy.factor1 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor1.type]}</span>{strategy.factor1.description}</p>}
+          {strategy.factor2 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor2.type]}</span>{strategy.factor2.description}</p>}
+        </div>
+      )}
+      <div className="priority-meter">
+        <div className="priority-meter-track" role="img" aria-label={strategy.weighting ? `Ponderado ${strategy.weighting.weightedScore.toFixed(2)} de 5` : 'Sin valorar'}>
+          <span className="priority-meter-fill" style={{ width: `${scorePercent}%` }} />
+        </div>
+      </div>
+      <div className="weighting-criteria">
+        {weightingCriteriaMeta.map((criterion) => {
+          const level = draft[criterion.key]
+          const levelMeta = weightingLevels.find((item) => item.value === level)
+          const levelValue = levelScores?.[level] ?? Number(levelMeta?.short ?? 3)
+          return (
+            <div className="weighting-criterion" key={criterion.key}>
+              <div className="weighting-criterion-copy">
+                <span className="weighting-criterion-label">{criterion.label}</span>
+                <span className="weighting-criterion-hint">{criterion.hint}</span>
+              </div>
+              <div className="weighting-criterion-control">
+                <span className="weighting-weight" title={`Peso de este criterio: ${criterion.weight}`}>{criterion.weight}</span>
+                <select
+                  value={level}
+                  disabled={!editable}
+                  aria-label={`${criterion.label} de ${strategy.title}`}
+                  onChange={(event) => onChange({ ...draft, [criterion.key]: event.target.value as WeightingLevel })}
+                >
+                  {weightingLevels.map((item) => <option value={item.value} key={item.value}>{item.label} ({item.short})</option>)}
+                </select>
+              </div>
+              <div className="swz-level-bar" role="img" aria-label={`${criterion.label}: ${levelMeta?.label ?? level}`}><span style={{ width: `${(levelValue / 5) * 100}%` }} /></div>
+            </div>
+          )
+        })}
+      </div>
+      {!weightable && <p className="weighting-no-strategy">Este cruce se valora en la Matriz DOFA, donde ya tiene su propia ponderación.</p>}
+      {weightable && !canValue && <p className="weighting-no-strategy">Tu rol puede consultar estas valoraciones, pero no guardarlas.</p>}
+      <div className="weighting-foot">
+        <span className={`weighting-status ${state}`}>
+          {state === 'saving' && <><span className="loader" />Guardando...</>}
+          {state === 'saved' && <><span className="weighting-status-dot" aria-hidden="true">✓</span>Guardado</>}
+          {state === 'error' && error}
+          {state === 'idle' && !weightable && 'Ponderación del cruce'}
+          {state === 'idle' && weightable && !canValue && 'Solo lectura'}
+          {state === 'idle' && weightable && canValue && dirty && 'Cambios sin guardar'}
+          {state === 'idle' && weightable && canValue && !dirty && strategy.weighting && `Valorado · ${band?.label ?? 'sin banda'}`}
+          {state === 'idle' && weightable && canValue && !dirty && !strategy.weighting && 'Sin valorar'}
+        </span>
+        {weightable && canValue && (
+          <button type="button" className="button primary small-button" onClick={onSave} disabled={state === 'saving' || !dirty}>
+            {state === 'saving' ? <><span className="button-loader" />Guardando...</> : 'Guardar valoración'}
+          </button>
+        )}
+        <button type="button" className="priority-toggle" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((current) => !current)}>
+          {open ? 'Ocultar detalle' : 'Ver detalle'}
+          <span className="priority-chevron" aria-hidden="true">▾</span>
+        </button>
+      </div>
+      {open && (
+        <div className="priority-detail" id={detailId}>
+          <p className="detail-label">ESTRATEGIA COMPLETA</p>
+          <p className="priority-strategy">{strategy.description}</p>
+          {strategy.weighting && (() => {
+            const saved = criteriaOfStrategy(strategy.weighting)
+            return (
+              <>
+                <p className="detail-label">CRITERIOS VALORADOS</p>
+                <div className="priority-criteria">
+                  {weightingCriteriaMeta.map((criterion) => {
+                    const level = saved[criterion.key]
+                    const levelMeta = weightingLevels.find((item) => item.value === level)
+                    const levelValue = levelScores?.[level] ?? Number(levelMeta?.short ?? 3)
+                    return (
+                      <div className="priority-criterion" key={criterion.key}>
+                        <div className="priority-criterion-head">
+                          <span className="priority-criterion-label">{criterion.label}</span>
+                          <span className="priority-weight" title={`Peso de este criterio en el ponderado: ${criterion.weight}`}>{criterion.weight}</span>
+                        </div>
+                        <div className="priority-criterion-bar" role="img" aria-label={`${criterion.label}: ${levelMeta?.label ?? level} de 5`}>
+                          <span className="priority-criterion-fill" style={{ width: `${(levelValue / 5) * 100}%` }} />
+                        </div>
+                        <span className="priority-criterion-value">{levelMeta?.label ?? level} <b>{levelMeta?.short}</b></span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )
+          })()}
+          {strategy.factor1 || strategy.factor2
+            ? <><p className="detail-label">FACTORES RELACIONADOS</p>{strategy.factor1 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor1.type]}</span>{strategy.factor1.description}</p>}{strategy.factor2 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor2.type]}</span>{strategy.factor2.description}</p>}</>
+            : <p className="cross-pair">Viene directo del análisis, sin factores de un cruce.</p>}
+          {strategy.weighting && <p className="priority-updated">Ponderado {strategy.weighting.weightedScore.toFixed(2)} de 5 · {band?.label ?? 'sin banda'}</p>}
+        </div>
+      )}
+    </article>
+  )
+}
+
+function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnostic; canValue: boolean }) {
+  const { strategies, setStrategies, levelScores, loading, loadError, reload } = useDiagnosticStrategies(diagnostic.id)
+  const [drafts, setDrafts] = useState<Record<string, CrossWeightingCriteria>>({})
+  const [states, setStates] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  // Los selectores siempre muestran lo que devolvió el servidor; lo local solo existe mientras se edita.
+  useEffect(() => { setDrafts(Object.fromEntries(strategies.map((strategy) => [strategy.id, strategy.weighting ? criteriaOfStrategy(strategy.weighting) : neutralWeightingCriteria]))) }, [strategies])
+  const valued = useMemo(() => strategies.filter((strategy) => strategy.weighting), [strategies])
+  const pending = useMemo(() => strategies.filter((strategy) => !strategy.weighting), [strategies])
+  // Cada valorada va al grupo de la banda que le dio el backend, sin recalcularla aquí.
+  const groups = useMemo(() => weightingBands.map((band) => ({
+    band,
+    items: valued.filter((strategy) => bandMeta(strategy.weightingBand)?.tone === band.tone).sort((a, b) => (b.weighting?.weightedScore ?? 0) - (a.weighting?.weightedScore ?? 0)),
+  })), [valued])
+  const bySource = useMemo(() => (Object.keys(strategySourceVisuals) as StrategySource[])
+    .map((source) => ({ source, total: strategies.filter((strategy) => strategy.source === source).length, valued: strategies.filter((strategy) => strategy.source === source && strategy.weighting).length }))
+    .filter((entry) => entry.total > 0), [strategies])
+  async function saveValuation(strategy: DiagnosticStrategy, criteria: CrossWeightingCriteria) {
+    if (states[strategy.id] === 'saving' || !canValue) return
+    setStates((current) => ({ ...current, [strategy.id]: 'saving' }))
+    setErrors((current) => { const next = { ...current }; delete next[strategy.id]; return next })
+    try {
+      // Solo viajan los cinco niveles, el origen y su ancla: el ponderado y la banda los responde el backend.
+      const sourceRef = await strategySourceRef(strategy.description)
+      const result = await api<{ weighting: StrategyWeightingResponse }>(`/diagnostics/${diagnostic.id}/strategies/weighting`, { method: 'PUT', body: JSON.stringify({ source: strategy.source as WeightableStrategySource, sourceRef, ...criteria }) })
+      setStrategies((current) => current.map((item) => item.id === strategy.id ? { ...item, weighting: result.weighting, weightedScore: result.weighting.weightedScore, weightingBand: result.weighting.weightingBand } : item))
+      setStates((current) => ({ ...current, [strategy.id]: 'saved' }))
+    } catch (error) {
+      setErrors((current) => ({ ...current, [strategy.id]: valuationErrorMessage(error) }))
+      setStates((current) => ({ ...current, [strategy.id]: 'error' }))
     }
   }
-  const weightingByCross = useMemo(() => new Map(weightings.map((weighting) => [weighting.crossId, weighting])), [weightings])
-  const ordered = useMemo(() => {
-    // Se ordena con el ponderado que devuelve el servidor. Los cruces sin ponderar quedan al final
-    // y conservan el orden en que los entrega la matriz DOFA.
-    return [...crosses].sort((a, b) => {
-      const left = weightingByCross.get(a.id)
-      const right = weightingByCross.get(b.id)
-      if (left && right) return right.weightedScore - left.weightedScore
-      if (left) return -1
-      if (right) return 1
-      return 0
-    })
-  }, [crosses, weightingByCross])
-  const rankedCount = crosses.filter((cross) => weightingByCross.has(cross.id)).length
+  function cardProps(strategy: DiagnosticStrategy) {
+    return {
+      strategy,
+      draft: drafts[strategy.id] ?? neutralWeightingCriteria,
+      levelScores,
+      state: states[strategy.id] ?? 'idle',
+      error: errors[strategy.id] ?? '',
+      canValue,
+      onChange: (criteria: CrossWeightingCriteria) => { setDrafts((current) => ({ ...current, [strategy.id]: criteria })); setStates((current) => ({ ...current, [strategy.id]: 'idle' })) },
+      onSave: () => void saveValuation(strategy, drafts[strategy.id] ?? neutralWeightingCriteria),
+    }
+  }
+  const progress = strategies.length > 0 ? Math.round((valued.length / strategies.length) * 100) : 0
   return (
-    <section className="diag-card diag-section weighting-section">
+    <section className="diag-card diag-section swz-section">
       <div className="diag-section-head">
-        <span className="diag-step-chip weighting-chip">⚖</span>
-        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora cada estrategia con cinco criterios y ordena las oportunidades por importancia.</p></div>
-        <div className="crosses-head-actions"><span className="cross-count">{rankedCount}/{crosses.length} valore{rankedCount === 1 ? '' : 's'}</span></div>
+        <span className="diag-step-chip weighting-chip" aria-hidden="true">⚖</span>
+        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora con cinco criterios las estrategias del análisis con IA, de los cruces y de Checky.</p></div>
+        <div className="crosses-head-actions">
+          <button type="button" className="button secondary small-button" onClick={() => void reload()} disabled={loading}>↻ Actualizar</button>
+          <span className="cross-count">{valued.length}/{strategies.length} valore{valued.length === 1 ? '' : 's'}</span>
+        </div>
       </div>
       <div className="weighting-scale">
         <span className="detail-label">ESCALA</span>
-        <div className="weighting-scale-levels">{weightingLevels.map((level) => <span className="weighting-scale-level" key={level.value}><b>{level.short}</b>{level.label}</span>)}</div>
-        <span className="weighting-scale-note">Ponderado de 1 a 5 calculado por el servidor</span>
+        <div className="weighting-scale-levels">{weightingLevels.map((level) => <span className="weighting-scale-level" key={level.value}><b>{levelScores?.[level.value] ?? level.short}</b>{level.label}</span>)}</div>
+        <span className="weighting-scale-note">Ponderado de 1 a 5 y banda calculados por el servidor</span>
       </div>
       {loadError && <div className="form-error" role="alert">{loadError}</div>}
-      {loading || loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando ponderaciones...</div> : ordered.length === 0 ? <EmptyState compact title="Sin estrategias" text="Crea cruces estratégicos en la matriz DOFA para poder ponderarlos." /> : <div className="weighting-list">{ordered.map((cross, index) => {
-        const weighting = weightingByCross.get(cross.id)
-        const criteria = drafts[cross.id] ?? neutralWeightingCriteria
-        const state = saveState[cross.id] ?? 'idle'
-        const busy = state === 'saving'
-        const originLabel = crossOriginLabels[cross.origin]
-        const originIcon = crossOriginIcons[cross.origin]
-        const band = weighting ? weightingBand(weighting.weightedScore) : null
-        const evaluable = Boolean(cross.strategy)
-        return (
-          <article className={`weighting-card${weighting ? ' weighed' : ''}`} key={cross.id} data-weighting-cross-id={cross.id}>
-            <div className="weighting-card-head">
-              {weighting && <span className="weighting-rank" title="Posición según el ponderado">#{index + 1}</span>}
-              <span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span>
-              <span className="cross-combo">{crossTypeCombos[cross.crossType]}</span>
-              <span className="cross-origin weighting-origin" title={`Origen: ${originLabel}`}><span aria-hidden="true">{originIcon}</span> {originLabel}</span>
-              <span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span>
-              {weighting && band ? <span className="weighting-score-block"><span className="weighting-score-value">{weighting.weightedScore.toFixed(2)}</span><span className="weighting-score-max">/5</span><span className={`weighting-band ${band.tone}`}>{band.label}</span></span> : <span className="weighting-score-block pending"><span className="weighting-score-value">—</span><span className="weighting-band neutral">Sin ponderar</span></span>}
-            </div>
-            <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p>
-            <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>
-            {cross.strategy ? <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p> : <p className="weighting-no-strategy">Este cruce todavía no tiene estrategia. Edita el cruce para poder ponderarlo.</p>}
-            <div className="weighting-criteria">
-              {weightingCriteriaMeta.map((criterion) => (
-                <label className="weighting-criterion" key={criterion.key}>
-                  <span className="weighting-criterion-copy"><span className="weighting-criterion-label">{criterion.label}</span><span className="weighting-criterion-hint">{criterion.hint}</span></span>
-                  <span className="weighting-criterion-control">
-                    <span className="weighting-weight" title={`Peso de este criterio: ${criterion.weight}`}>{criterion.weight}</span>
-                    <select
-                      value={criteria[criterion.key]}
-                      disabled={!evaluable || busy}
-                      aria-label={`${criterion.label} de la estrategia ${cross.crossType}`}
-                      onChange={(event) => void saveWeighting(cross, { ...criteria, [criterion.key]: event.target.value as WeightingLevel })}
-                    >
-                      {weightingLevels.map((level) => <option value={level.value} key={level.value}>{level.label} ({level.short})</option>)}
-                    </select>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className="weighting-foot">
-              <span className={`weighting-status ${state}`}>
-                {state === 'saving' && <><span className="loader" />Guardando...</>}
-                {state === 'saved' && <><span className="weighting-status-dot" aria-hidden="true">✓</span>Guardado</>}
-                {state === 'error' && saveErrors[cross.id] ? <>{saveErrors[cross.id]}</> : null}
-                {state === 'idle' && !evaluable ? 'Sin estrategia: no se puede valorar' : state === 'idle' && !weighting ? 'Valora los cinco criterios para obtener el ponderado' : state === 'idle' ? `Guardado ${relativeDate(weighting!.updatedAt)}` : null}
-              </span>
-              {weighting && <span className="weighting-updated">Actualizado {relativeDate(weighting.updatedAt)}</span>}
-            </div>
-            {state === 'error' && saveErrors[cross.id] && <div className="form-error" role="alert">{saveErrors[cross.id]}</div>}
-          </article>
-        )
-      })}</div>}
+      {loading ? <div className="inline-loading"><span className="loader" />Cargando estrategias...</div> : strategies.length === 0 ? (
+        <EmptyState icon="◎" title="Sin estrategias que valorar" text="Genera el análisis con IA o crea cruces en la matriz DOFA: las estrategias aparecerán aquí para ponderarlas." />
+      ) : (
+        <>
+          <div className="swz-summary">
+            <div className="swz-summary-card total"><span className="swz-summary-icon" aria-hidden="true">◎</span><div><span>Estrategias totales</span><strong>{strategies.length}</strong></div></div>
+            <div className="swz-summary-card valued"><span className="swz-summary-icon" aria-hidden="true">✓</span><div><span>Valoradas</span><strong>{valued.length}</strong></div></div>
+            <div className="swz-summary-card pending"><span className="swz-summary-icon" aria-hidden="true">◦</span><div><span>Pendientes</span><strong>{pending.length}</strong></div></div>
+            <div className="swz-summary-card progress"><span className="swz-summary-icon" aria-hidden="true">⚖</span><div><span>Avance</span><strong>{progress}%</strong></div><div className="swz-progress"><span style={{ width: `${progress}%` }} /></div></div>
+          </div>
+          <div className="swz-sources">
+            {bySource.map((entry) => {
+              const visual = strategySourceVisuals[entry.source]
+              return <span className={`swz-source ${visual.tone}`} key={entry.source}><span aria-hidden="true">{visual.icon}</span> {visual.label}<b>{entry.valued}/{entry.total}</b></span>
+            })}
+          </div>
+          <div className="swz-counters">
+            {groups.map(({ band, items }) => <span className={`swz-counter ${band.tone}`} key={band.tone}><b>{items.length}</b><span>{band.label}</span><small>{priorityBandRanges[band.tone]}</small></span>)}
+            <span className="swz-counter pending"><b>{pending.length}</b><span>Pendiente</span><small>Sin ponderar</small></span>
+          </div>
+          <div className="priority-groups swz-groups">
+            {groups.filter((group) => group.items.length > 0).map(({ band, items }) => (
+              <section className={`priority-group ${band.tone}`} key={band.tone} aria-label={`Estrategias de ${band.label}`}>
+                <header className="priority-group-head">
+                  <h4>{band.label}</h4>
+                  <span className="priority-group-range">{priorityBandRanges[band.tone]}</span>
+                  <span className="priority-group-count">{items.length}</span>
+                </header>
+                <div className="priority-group-body">{items.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
+              </section>
+            ))}
+            {pending.length > 0 && (
+              <section className="priority-group pending" aria-label="Estrategias pendientes de valoración">
+                <header className="priority-group-head">
+                  <h4>Pendiente de valoración</h4>
+                  <span className="priority-group-range">Sin ponderar</span>
+                  <span className="priority-group-count">{pending.length}</span>
+                </header>
+                <div className="priority-group-body">{pending.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
+              </section>
+            )}
+          </div>
+        </>
+      )}
     </section>
-  )}
+  )
+}
 
 function SWOTItemForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: SWOTDraft; setDraft: React.Dispatch<React.SetStateAction<SWOTDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { const detected = swotTypes.find((item) => item.value === draft.type); const detectedSymbol = draft.type === 'STRENGTH' ? '+' : draft.type === 'WEAKNESS' ? '−' : draft.type === 'OPPORTUNITY' ? '↗' : '!'; return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className={`company-modal-icon factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>{isEdit ? 'Editar factor' : 'Agregar factor'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información del factor.' : 'Detectado automáticamente'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{!isEdit && <div className="factor-type-detect"><span className={`swot-symbol factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</span><div className="factor-type-copy"><p className="detail-label">Tipo detectado</p><strong>{detected?.label}</strong></div><span className="factor-type-badge">Detectado automáticamente</span></div>}{isEdit && <label>Tipo<input type="text" value={detected?.label ?? ''} readOnly /></label>}<label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el factor..." rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar factor' : 'Agregar factor'}</button></div></form></div> }
 
@@ -1110,9 +1350,34 @@ function firstName(name: string) { return name.split(' ')[0] }
 
 function relativeDate(date: string) { const value = new Date(date); const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const target = new Date(value.getFullYear(), value.getMonth(), value.getDate()); const days = Math.round((target.getTime() - today.getTime()) / 86400000); if (days === 0) return 'Hoy'; if (days === -1) return 'Ayer'; if (days === 1) return 'Mañana'; if (days < 0 && days > -7) return `Hace ${Math.abs(days)} días`; if (days > 1 && days < 7) return `En ${days} días`; return value.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) }
 
-function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStageChange }: { diagnostic: Diagnostic; onBack: () => void; onEdit: () => void; onDelete: () => void; stage: DiagStage; onStageChange: (stage: DiagStage) => void }) {
+function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, onStageChange }: { diagnostic: Diagnostic; user: User; onBack: () => void; onEdit: () => void; onDelete: () => void; stage: DiagStage; onStageChange: (stage: DiagStage) => void }) {
   const diagStage = stage
-  function setDiagStage(next: DiagStage) { onStageChange(next) }
+  // Mismas reglas que el resto de rutas de escritura: el backend solo deja valorar a superusuarios
+  // y administradores de empresa, así que la pantalla no ofrece un botón que vaya a fallar.
+  const canValue = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
+  // Pantallas 2, 3 y 4 del flujo estratégico. Solo son válidas mientras siga activo el paso que las
+  // abrió, y el orden es siempre el mismo: matriz DOFA, análisis IA, Checky y ponderación.
+  const [subScreen, setSubScreen] = useState<'analisis' | 'checky' | 'ponderacion' | null>(null)
+  const subScreenOpen = subScreen !== null && diagStage === 'dofa'
+  const showFlow = !subScreenOpen
+  function setDiagStage(next: DiagStage) { setSubScreen(null); onStageChange(next) }
+  type StrategicFlowKey = 'dofa' | 'analisis' | 'checky' | 'ponderacion'
+  const strategicFlow: Array<{ key: StrategicFlowKey; label: string }> = [
+    { key: 'dofa', label: 'Matriz DOFA' },
+    { key: 'analisis', label: 'Análisis IA' },
+    { key: 'checky', label: 'Checky' },
+    { key: 'ponderacion', label: 'Ponderación' },
+  ]
+  // El paso vigente es la subpantalla abierta; si no hay ninguna, la matriz DOFA. Es el mismo valor
+  // que usan el indicador de progreso y los botones de "volver", para que no se contradigan.
+  const flowStep: StrategicFlowKey = subScreenOpen ? (subScreen as StrategicFlowKey) : 'dofa'
+  const flowIndex = Math.max(0, strategicFlow.findIndex((step) => step.key === flowStep))
+    // El indicador marca el paso vigente y habilita volver a los anteriores y avanzar al siguiente.
+  function goToFlowStep(key: StrategicFlowKey) {
+    if (key === 'dofa') { setDiagStage('dofa'); window.scrollTo({ top: 0, behavior: 'smooth' }); return }
+    setSubScreen(key)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
@@ -1122,13 +1387,24 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
     try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`); setAnalysis(result.analysis) } catch (error) { if (!(error instanceof ApiError && error.status === 404)) setAnalysisError('No se pudo cargar el análisis guardado.') } finally { setAnalysisLoading(false) }
   }, [diagnostic.id])
   useEffect(() => { const timer = window.setTimeout(() => { void loadAnalysis() }, 0); return () => window.clearTimeout(timer) }, [loadAnalysis])
-  async function runAnalysis() { if (processing) return; setProcessing(true); setAnalysisError(''); try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`, { method: 'POST' }); setAnalysis(result.analysis) } catch (error) { setAnalysisError(error instanceof ApiError && error.status === 503 ? 'El análisis IA no está configurado todavía. Añade OPENAI_API_KEY en el backend.' : error instanceof ApiError ? error.message : 'No se pudo generar el análisis IA.') } finally { setProcessing(false) } }
+  async function runAnalysis() { if (processing) return; setProcessing(true); setAnalysisError(''); try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`, { method: 'POST' }); setAnalysis(result.analysis); setSubScreen('analisis') } catch (error) { setAnalysisError(error instanceof ApiError && error.status === 503 ? 'El análisis IA no está configurado todavía. Añade OPENAI_API_KEY en el backend.' : error instanceof ApiError ? error.message : 'No se pudo generar el análisis IA.') } finally { setProcessing(false) } }
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [importing, setImporting] = useState(false)
   const [recError, setRecError] = useState('')
   const [createActionFor, setCreateActionFor] = useState<Recommendation | null>(null)
   const [crossesVersion, setCrossesVersion] = useState(0)
   const refreshCrosses = useCallback(() => setCrossesVersion((current) => current + 1), [])
+  // Los cruces se cargan una sola vez aqui y se reparten a la matriz DOFA y a la seccion de cruces
+  // del analisis IA, de modo que las dos pantallas nunca muestran listas distintas. `crossesVersion`
+  // es lo que Checky incrementa cuando materializa un cruce, para que las dos se actualicen.
+  const [crosses, setCrosses] = useState<StrategicCross[]>([])
+  const [loadingCrosses, setLoadingCrosses] = useState(true)
+  const [crossError, setCrossError] = useState('')
+  const loadCrosses = useCallback(async () => {
+    setLoadingCrosses(true)
+    try { const result = await api<{ crosses: StrategicCross[] }>(`/diagnostics/${diagnostic.id}/crosses`); setCrosses(result.crosses); setCrossError('') } catch { setCrossError('No pudimos cargar los cruces.') } finally { setLoadingCrosses(false) }
+  }, [diagnostic.id])
+  useEffect(() => { const timer = window.setTimeout(() => { void loadCrosses() }, 0); return () => window.clearTimeout(timer) }, [loadCrosses, crossesVersion])
   const loadRecommendations = useCallback(async () => {
     try { const result = await api<{ recommendations: Recommendation[] }>(`/diagnostics/${diagnostic.id}/recommendations`); setRecommendations(result.recommendations) } catch { setRecError('No pudimos cargar las recomendaciones.') }
   }, [diagnostic.id])
@@ -1167,7 +1443,7 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
         </div>
       </header>
       <ol className="diag-stepper">{diagSteps.map((step, index) => { const isDone = step.done; const isCurrent = !step.done && index === diagCurrent; const isViewing = diagStageSteps[diagStage].includes(index); return <li key={step.label} className={`${isDone ? 'done' : isCurrent ? 'current' : ''}${isViewing ? ' viewing' : ''}`}><button type="button" className="diag-step-btn" onClick={() => navigateToStep(index)}><span className="diag-step-dot">{isDone ? '✓' : index + 1}</span><span className="diag-step-label">{step.label}</span></button></li> })}</ol>
-      <section className={`diag-stage${diagStage === 'diagnostico' ? ' active' : ''}`}>
+      <section className={`diag-stage${diagStage === 'diagnostico' && showFlow ? ' active' : ''}`}>
         <section className="diag-card diag-info-card">
           <div className="diag-card-head"><h3>INFORMACIÓN GENERAL</h3><button className="button secondary small-button" onClick={onEdit}>Editar</button></div>
           <div className="diag-meta-grid">
@@ -1184,20 +1460,81 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
         </section>
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('dofa')}>Siguiente: Matriz DOFA →</button></div>
       </section>
-      <section className={`diag-stage${diagStage === 'dofa' ? ' active' : ''}`}>
-        <div className="ai-assistant">
-          <div className="ai-assistant-head"><span className="ai-assistant-icon">✦</span><div><p className="detail-label">ANÁLISIS ESTRATÉGICO CON CHECKY</p><h3>Asistente estratégico</h3></div><span className="ai-badge">IA</span></div>
-          <p className="ai-assistant-desc">La IA analiza los factores y cruces estratégicos para identificar oportunidades, riesgos y estrategias.</p>
-          <ul className="ai-assistant-list"><li>Factores de la matriz</li><li>Cruces del usuario</li><li>Patrones estratégicos</li></ul>
-          <div className="ai-assistant-cta">{analysisError && <div className="form-error">{analysisError}</div>}<button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : analysis ? 'Regenerar análisis' : 'Analizar con IA'}</button></div>
+      <section className={`diag-stage${diagStage === 'dofa' && showFlow ? ' active' : ''}`}>
+        <DiagnosticDetailBase diagnostic={diagnostic} crosses={crosses} setCrosses={setCrosses} loadingCrosses={loadingCrosses} crossError={crossError} setCrossError={setCrossError} loadCrosses={loadCrosses} />
+        <div className="diag-next">
+          {analysisError && <span className="form-error">{analysisError}</span>}
+          {/* Con análisis guardado el avance es consultarlo, no volverlo a pedir: regenerarlo gasta la
+              cuota de la IA y además cambia una lectura que la persona ya pudo leer. */}
+          {analysis
+            ? <button className="button primary" onClick={() => goToFlowStep('analisis')}>Ver análisis con IA →</button>
+            : <button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : '✨ Analizar con IA →'}</button>}
         </div>
-        <DiagnosticDetailBase diagnostic={diagnostic} crossesVersion={crossesVersion} />
-        {analysis && <AIAnalysisPanel analysis={analysis} loading={analysisLoading} items={diagnostic.swotAnalysis?.items ?? []} onNavigateToRecommendations={() => setDiagStage('recomendaciones')} />}
-        {analysis && <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} onCrossCreated={refreshCrosses} />}
         {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('recomendaciones')}>Siguiente: Recomendaciones →</button></div>
       </section>
-      <section className={`diag-stage${diagStage === 'recomendaciones' ? ' active' : ''}`}>
+      {subScreenOpen && (
+        <ol className="diag-stepper flow-stepper">{strategicFlow.map((step, index) => {
+          const isCurrent = step.key === flowStep
+          const isDone = index < flowIndex
+          // El indicador deja volver a cualquier paso ya alcanzado y avanzar al siguiente, que es justo
+          // lo que ofrecen los botones del final de cada pantalla. Saltarse mas de un paso sigue sin
+          // ser posible, asi que no se contradice el orden del flujo.
+          const reachable = index <= flowIndex + 1
+          return <li key={step.key} className={`${isDone ? 'done' : isCurrent ? 'current' : ''}${isCurrent ? ' viewing' : ''}`}><button type="button" className="diag-step-btn" disabled={!reachable} onClick={() => goToFlowStep(step.key)}><span className="diag-step-dot">{isDone ? '✓' : index + 1}</span><span className="diag-step-label">{step.label}</span></button></li>
+        })}</ol>
+      )}
+      {subScreenOpen && subScreen === 'analisis' && (
+        <section className="diag-stage active">
+          <div className="diag-card diag-section">
+            <div className="diag-section-head">
+              <span className="diag-step-chip">✦</span>
+              <div><h3>Análisis estratégico con IA</h3><p>Lectura estratégica generada a partir de tu matriz DOFA y tus cruces.</p></div>
+              <button className="button secondary small-button" onClick={() => goToFlowStep('dofa')}>← Volver a la matriz DOFA</button>
+            </div>
+          </div>
+          {analysis
+            ? <AIAnalysisPanel analysis={analysis} loading={analysisLoading} items={diagnostic.swotAnalysis?.items ?? []} />
+            : <div className="diag-card ai-loading"><span className="loader" />Generando análisis...</div>}
+          {/* Los cruces de la IA se leen aqui, debajo de las inferencias. Solo se montan si el analisis
+              ya existe, para que la seccion nunca aparezca sin el analisis que la produjo delante. */}
+          {analysis && <AiStrategicCrosses crosses={crosses} loading={loadingCrosses} error={crossError} onBackToMatrix={() => goToFlowStep('dofa')} />}
+          <div className="diag-nav">
+            <button className="button secondary" onClick={() => goToFlowStep('dofa')}>← Volver a Matriz DOFA</button>
+            <button className="button primary" onClick={() => goToFlowStep('checky')}>Consultar a Checky →</button>
+          </div>
+        </section>
+      )}
+      {subScreenOpen && subScreen === 'checky' && (
+        <section className="diag-stage active">
+          <div className="diag-card diag-section">
+            <div className="diag-section-head">
+              <span className="diag-step-chip">✦</span>
+              <div><h3>Consultar a Checky</h3><p>Profundiza el análisis estratégico de este diagnóstico.</p></div>
+            </div>
+          </div>
+          <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} onCrossCreated={refreshCrosses} />
+          <div className="diag-nav">
+            <button className="button secondary" onClick={() => goToFlowStep('analisis')}>← Volver al análisis IA</button>
+            <button className="button primary" onClick={() => goToFlowStep('ponderacion')}>Ponderar estrategias →</button>
+          </div>
+        </section>
+      )}
+      {subScreenOpen && subScreen === 'ponderacion' && (
+        <section className="diag-stage active">
+          <div className="diag-card diag-section">
+            <div className="diag-section-head">
+              <span className="diag-step-chip">⚖</span>
+              <div><h3>Ponderación de estrategias</h3><p>Una sola lista con las estrategias de la IA, de los cruces y de Checky de este diagnóstico.</p></div>
+            </div>
+          </div>
+          <StrategyWeightingScreen diagnostic={diagnostic} canValue={canValue} />
+          <div className="diag-nav">
+            <button className="button secondary" onClick={() => goToFlowStep('checky')}>← Volver a Checky</button>
+          </div>
+        </section>
+      )}
+      <section className={`diag-stage${diagStage === 'recomendaciones' && showFlow ? ' active' : ''}`}>
         <div className="diag-actionbar">
           <div className="diag-actionbar-info"><p className="detail-label">GESTIÓN</p><span>Prioriza las recomendaciones y conviértelas en acciones del plan.</span></div>
         </div>
@@ -1205,7 +1542,7 @@ function DiagnosticDetail({ diagnostic, onBack, onEdit, onDelete, stage, onStage
         <RecommendationsPanel analysis={analysis} recommendations={recommendations} onImport={importRecommendations} onSetStatus={setRecommendationStatus} onRequestCreateAction={(recommendation) => { setDiagStage('planes'); setCreateActionFor(recommendation) }} importing={importing} />
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('planes')}>Siguiente: Plan de acción →</button></div>
       </section>
-      <section className={`diag-stage${diagStage === 'planes' ? ' active' : ''}`}>
+      <section className={`diag-stage${diagStage === 'planes' && showFlow ? ' active' : ''}`}>
         <ActionPlansPanel diagnostic={diagnostic} recommendations={recommendations} createActionFor={createActionFor} onCreateActionClose={() => setCreateActionFor(null)} />
       </section>
     </div>
@@ -1338,22 +1675,30 @@ function ActionItemEditForm({ draft, setDraft, users, saving, onSubmit, onClose 
 
 function ActionFromRecommendationForm({ recommendation, plans, users, planId, onPlanIdChange, draft, onDraftChange, planDraft, onPlanDraftChange, error, saving, creatingPlan, onSubmit, onPlanCreate, onClose }: { recommendation: Recommendation; plans: ActionPlan[]; users: User[]; planId: string; onPlanIdChange: (value: string) => void; draft: ItemDraft; onDraftChange: React.Dispatch<React.SetStateAction<ItemDraft>>; planDraft: PlanDraft; onPlanDraftChange: React.Dispatch<React.SetStateAction<PlanDraft>>; error: string; saving: boolean; creatingPlan: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onPlanCreate: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">⚑</div><div className="company-modal-title"><p className="eyebrow">RECOMENDACIÓN</p><h2>Crear acción</h2><p className="company-modal-subtitle">Convierte esta recomendación en una acción del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Recomendación relacionada<input type="text" value={recommendation.title} readOnly /></label>{plans.length === 0 ? <div className="modal-plan-empty"><p>No tienes planes de acción para este diagnóstico.</p><form className="factor-form plan-form" onSubmit={onPlanCreate}><div className="factor-form-heading"><h3>Nuevo plan</h3></div><label>Título<input value={planDraft.title} onChange={(event) => onPlanDraftChange({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => onPlanDraftChange({ ...planDraft, description: event.target.value })} rows={2} minLength={3} required /></label><button className="button primary" disabled={creatingPlan}>{creatingPlan ? 'Creando plan...' : '+ Crear plan'}</button></form></div> : <label>Plan de acción<select value={planId} onChange={(event) => onPlanIdChange(event.target.value)} required><option value="">Selecciona un plan</option>{plans.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}<label>Título<input value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => onDraftChange({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Responsable<select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => onDraftChange({ ...draft, dueDate: event.target.value })} /></label>{error && <div className="form-error">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving || creatingPlan || !planId}>{saving ? 'Creando...' : 'Crear acción'}</button></div></form></div> }
 
-function AiKpis({ items, crossCount }: { items: SWOTItem[]; crossCount?: number }) {
-  const kpis = [
-    { label: 'Fortalezas', value: items.filter((item) => item.type === 'STRENGTH').length, icon: '＋', tone: 'strength' },
-    { label: 'Debilidades', value: items.filter((item) => item.type === 'WEAKNESS').length, icon: '－', tone: 'weakness' },
-    { label: 'Oportunidades', value: items.filter((item) => item.type === 'OPPORTUNITY').length, icon: '↗', tone: 'opportunity' },
-    { label: 'Amenazas', value: items.filter((item) => item.type === 'THREAT').length, icon: '⚠', tone: 'threat' },
-    ...(crossCount !== undefined ? [{ label: 'Cruces estratégicos', value: crossCount, icon: '◫', tone: 'strategy' }] : []),
-  ]
-  return <div className="ai-kpis">{kpis.map((kpi) => <div className={`ai-kpi ${kpi.tone}`} key={kpi.label}><span className="ai-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><span>{kpi.label}</span></div></div>)}</div>}
-
 function aiTextParagraphs(text: string): string[] {
   return text.split(/\n+/).map((part) => part.trim()).filter(Boolean)}
 
-type AiQuickRead = { strategies: number; risks: number; opportunities: number }
+function aiDofaCounts(items: SWOTItem[]) {
+  return swotTypes.map((type) => ({ key: type.value, label: type.label, count: items.filter((item) => item.type === type.value).length }))
+}
 
-function AiExecSummary({ text, quickRead }: { text: string; quickRead?: AiQuickRead }) {
+function aiDofaSymbol(type: SWOTType) { return type === 'STRENGTH' ? '+' : type === 'WEAKNESS' ? '−' : type === 'OPPORTUNITY' ? '↗' : '!' }
+
+/** Contexto compacto: cuenta real de factores por cuadrante, sin dato derivado. */
+function AiDofaKpis({ items }: { items: SWOTItem[] }) {
+  if (!items.length) return null
+  return <div className="ai-kpis">{aiDofaCounts(items).map((entry) => <div className={`ai-kpi ${entry.key.toLowerCase()}`} key={entry.key}><span className="ai-kpi-icon" aria-hidden="true">{aiDofaSymbol(entry.key)}</span><div><strong>{entry.count}</strong><span>{entry.label}</span></div></div>)}</div>
+}
+
+/** Barra proporcional: reparte solo la cantidad real de factores de cada cuadrante. */
+function AiDofaBalance({ items }: { items: SWOTItem[] }) {
+  const counts = aiDofaCounts(items)
+  const total = counts.reduce((sum, entry) => sum + entry.count, 0)
+  if (!total) return null
+  return <div className="ai-doqa"><div className="ai-doqa-head"><b>Matriz DOFA</b><span>{total} factores</span></div><div className="ai-doqa-bar">{counts.map((entry) => <i className={entry.key.toLowerCase()} key={entry.key} style={{ flexGrow: entry.count }} title={`${entry.label}: ${entry.count}`} />)}</div><ul className="ai-doqa-legend">{counts.map((entry) => <li className={entry.key.toLowerCase()} key={entry.key}><strong>{entry.count}</strong> {entry.label}</li>)}</ul></div>
+}
+
+function AiExecSummary({ text, items }: { text: string; items: SWOTItem[] }) {
   const paragraphs = aiTextParagraphs(text)
   return (
     <article className="ai-exec-summary">
@@ -1368,20 +1713,12 @@ function AiExecSummary({ text, quickRead }: { text: string; quickRead?: AiQuickR
       <div className="ai-card-body">
         {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
       </div>
-      {quickRead && (
-        <div className="ai-quick-read">
-          <span className="ai-quick-read-label">Lectura rápida</span>
-          <ul className="ai-quick-read-stats">
-            <li><strong>{quickRead.strategies}</strong><span>Estrategias IA</span></li>
-            <li><strong>{quickRead.risks}</strong><span>Riesgos prioritarios</span></li>
-            <li><strong>{quickRead.opportunities}</strong><span>Oportunidades prioritarias</span></li>
-          </ul>
-        </div>
-      )}
+      <AiDofaKpis items={items} />
     </article>
-  )}
+  )
+}
 
-function AiDiagnosis({ text }: { text: string }) {
+function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
   const paragraphs = aiTextParagraphs(text)
   return (
     <article className="ai-diagnosis">
@@ -1395,28 +1732,64 @@ function AiDiagnosis({ text }: { text: string }) {
       <div className="ai-card-body ai-reading-column">
         {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
       </div>
+      <AiDofaBalance items={items} />
     </article>
   )}
 
-function AiFindings({ findings }: { findings: Array<{ basis: 'FACT' | 'INFERENCE'; finding: string }> }) {
-  const [openIndex, setOpenIndex] = useState<number | null>(null)
-  return <section className="ai-section ai-findings"><h4>Hallazgos</h4>{findings.length === 0 ? <p className="ai-empty">Sin hallazgos.</p> : <div className="ai-findings-list">{findings.map((item, index) => { const isOpen = openIndex === index; return <article className={`ai-finding${isOpen ? ' open' : ''}`} key={`${item.finding}-${index}`}><button type="button" className="ai-finding-head" aria-expanded={isOpen} onClick={() => setOpenIndex(isOpen ? null : index)}><span className="ai-finding-num">{String(index + 1).padStart(2, '0')}</span><span className="ai-finding-content"><span className={`ai-finding-tag ${item.basis === 'FACT' ? 'fact' : 'inference'}`}>{item.basis === 'FACT' ? 'Hecho' : 'Inferencia'}</span><p>{item.finding}</p></span><span className="ai-finding-chevron" aria-hidden="true">▾</span></button></article> })}</div>}</section>}
+/** Divide el texto de la inferencia en un resumen breve y su resto, sin alterar el contenido. */
+function splitInference(text: string, limit = 120): { brief: string; rest: string } {
+  const clean = text.trim()
+  if (clean.length <= limit) return { brief: clean, rest: '' }
+  const cut = clean.lastIndexOf(' ', limit)
+  const head = clean.slice(0, cut > 70 ? cut : limit)
+  return { brief: `${head}…`, rest: clean.slice(head.length).trim() }
+}
 
-function AiStrategyTabs({ strategies }: { strategies: Array<{ key: 'FO' | 'DO' | 'FA' | 'DA'; label: string; tone: string; items: string[] }> }) {
-  const [active, setActive] = useState<string>(strategies[0]?.key ?? 'FO')
-  const current = strategies.find((entry) => entry.key === active) ?? strategies[0]
-  return <section className="ai-section ai-strategy"><div className="ai-strategy-head"><h4>Matriz estratégica</h4><span className="ai-strategy-hint">Estrategias por combinación de factores</span></div><div className="ai-strategy-tabs" role="tablist">{strategies.map((entry) => <button type="button" role="tab" aria-selected={active === entry.key} className={`ai-strategy-tab ${entry.tone}${active === entry.key ? ' active' : ''}`} key={entry.key} onClick={() => setActive(entry.key)}><span className="ai-strategy-tab-icon" aria-hidden="true">{entry.key}</span><span>{entry.label}</span><small>{entry.items.length}</small></button>)}</div>{current && <div className="ai-strategy-panel" role="tabpanel">{current.items.length ? current.items.map((item, index) => <div className="ai-strategy-item" key={`${current.key}-${item}-${index}`}><span className="ai-strategy-item-check" aria-hidden="true">✓</span><p>{item}</p></div>) : <p className="ai-empty">Sin estrategias generadas para esta combinación.</p>}</div>}</section>}
+function AiInferenceCard({ index, finding, basis }: { index: number; finding: string; basis: 'FACT' | 'INFERENCE' }) {
+  const [open, setOpen] = useState(false)
+  const { brief, rest } = splitInference(finding)
+  const isFact = basis === 'FACT'
+  return (
+    <article className={`ai-finding${open ? ' open' : ''}`}>
+      <button type="button" className="ai-finding-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="ai-finding-num">{String(index + 1).padStart(2, '0')}</span>
+        <span className="ai-finding-content">
+          <span className={`ai-finding-tag ${isFact ? 'fact' : 'inference'}`}>{isFact ? 'Hecho' : 'Inferencia'}</span>
+          <p className="ai-finding-summary">{brief}</p>
+        </span>
+        <span className="ai-finding-chevron" aria-hidden="true">▾</span>
+      </button>
+      {rest && <div className="ai-finding-body"><div><p className="ai-finding-detail">{rest}</p></div></div>}
+    </article>
+  )
+}
 
-function AiPrioritySection({ title, tone, items }: { title: string; tone: string; items: string[] }) {
-  return <article className={`ai-priority-card ${tone}`}><div className="ai-priority-head"><h4>{title}</h4><span className="ai-priority-count">{items.length}</span></div>{items.length ? <ul className="ai-priority-list">{items.map((item, index) => <li key={`${title}-${item}-${index}`}>{item}</li>)}</ul> : <p className="ai-empty">Sin elementos.</p>}</article>}
+function AiFindings({ findings, title = 'Inferencias' }: { findings: Array<{ basis: 'FACT' | 'INFERENCE'; finding: string }>; title?: string }) {
+  return <section className="ai-section ai-findings"><h4>{title}</h4>{findings.length === 0 ? <p className="ai-empty">Sin {title.toLowerCase()}.</p> : <div className="ai-findings-list">{findings.map((item, index) => <AiInferenceCard key={`${item.finding}-${index}`} index={index} finding={item.finding} basis={item.basis} />)}</div>}</section>}
 
-function AIAnalysisPanel({ analysis, loading, items = [], crossCount, onNavigateToRecommendations }: { analysis: AIAnalysis; loading: boolean; items?: SWOTItem[]; crossCount?: number; onNavigateToRecommendations?: () => void }) {
-  const quickRead: AiQuickRead = {
-    strategies: analysis.foStrategies.length + analysis.doStrategies.length + analysis.faStrategies.length + analysis.daStrategies.length,
-    risks: analysis.priorityRisks.length,
-    opportunities: analysis.priorityOpportunities.length,
-  }
-  return <section className="ai-analysis-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">3</span><div><p className="detail-label">ESTRATEGIA</p><h3>Análisis con IA</h3><p className="ai-panel-subtitle">Lectura estratégica generada con IA a partir de la DOFA.</p></div></div><span className="ai-badge">IA</span></div>{loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}<AiKpis items={items} crossCount={crossCount} /><AiExecSummary text={analysis.executiveSummary} quickRead={quickRead} /><AiDiagnosis text={analysis.diagnosis} /><AiFindings findings={analysis.keyFindings} /><AiStrategyTabs strategies={[{ key: 'FO', label: 'Estrategias FO', tone: 'fo', items: analysis.foStrategies }, { key: 'DO', label: 'Estrategias DO', tone: 'do', items: analysis.doStrategies }, { key: 'FA', label: 'Estrategias FA', tone: 'fa', items: analysis.faStrategies }, { key: 'DA', label: 'Estrategias DA', tone: 'da', items: analysis.daStrategies }]} /><div className="ai-priority-grid"><AiPrioritySection title="Riesgos prioritarios" tone="risk" items={analysis.priorityRisks} /><AiPrioritySection title="Oportunidades prioritarias" tone="opportunity" items={analysis.priorityOpportunities} /></div><div className="ai-recommendations"><h4>Recomendaciones</h4>{analysis.recommendations.map((recommendation) => <article className="ai-recommendation" key={recommendation.title}><div><strong>{recommendation.title}</strong><span className={`level-pill ${recommendation.priority.toLowerCase()}`}>{recommendation.priority === 'HIGH' ? 'Alta' : recommendation.priority === 'MEDIUM' ? 'Media' : 'Baja'}</span></div><p>{recommendation.description}</p><small><b>Impacto esperado:</b> {recommendation.expectedImpact}</small><small><b>Acción sugerida:</b> {recommendation.suggestedAction}</small></article>)}</div>{onNavigateToRecommendations && <article className="ai-next-card"><div className="ai-next-copy"><span className="ai-next-icon" aria-hidden="true">→</span><div><h4>¿Qué sigue?</h4><p>Convierte estas estrategias y recomendaciones en un plan de acción.</p></div></div><button type="button" className="button primary" onClick={onNavigateToRecommendations}>Ver recomendaciones →</button></article>}</section>}/* ============================================   CHECKY · ASISTENTE ESTRATÉGICO   ============================================ */
+function AIAnalysisPanel({ analysis, loading, items = [] }: { analysis: AIAnalysis; loading: boolean; items?: SWOTItem[] }) {
+  // `keyFindings` mezcla hechos e inferencias; en esta pantalla solo se leen las inferencias.
+  const inferences = analysis.keyFindings.filter((finding) => finding.basis === 'INFERENCE')
+  return (
+    <section className="ai-analysis-panel">
+      <div className="ai-panel-heading">
+        <div className="ai-panel-heading-main">
+          <span className="ai-exec-icon" aria-hidden="true">✦</span>
+          <div>
+            <p className="detail-label">ESTRATEGIA</p>
+            <h3>Análisis con IA</h3>
+            <p className="ai-panel-subtitle">Lectura estratégica generada con IA a partir de la DOFA.</p>
+          </div>
+        </div>
+        <span className="ai-badge">IA</span>
+      </div>
+      {loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}
+      <AiExecSummary text={analysis.executiveSummary} items={items} />
+      <AiDiagnosis text={analysis.diagnosis} items={items} />
+      <AiFindings findings={inferences} />
+    </section>
+  )
+}
 
 type CheckyStatus = 'idle' | 'loading' | 'success' | 'error' | 'insufficientData'
 

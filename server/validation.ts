@@ -196,6 +196,23 @@ export const crossWeightingSchema = z.object({
   impactoReputacional: weightingLevelSchema,
 }).strict()
 
+/**
+ * Fuentes que admiten ponderación consolidada. Los cruces no entran aquí: se pesan con
+ * crossWeightingSchema contra su propio cruce.
+ */
+export const weightableStrategySourceSchema = z.enum(['AI_ANALYSIS', 'CHECKY'])
+
+/**
+ * Ponderación de una estrategia consolidada. El ancla (`source` y `sourceRef`) llega del cliente
+ * pero el servidor la revalida contra la consolidación real del diagnóstico, así que aquí solo se
+ * comprueba la forma. `strict()` hace que weightedScore, diagnosticId, createdById, id o cualquier
+ * otro campo inesperado sean un error en lugar de ignorarse: el ponderado es del servidor.
+ */
+export const strategyWeightingSchema = crossWeightingSchema.extend({
+  source: weightableStrategySourceSchema,
+  sourceRef: z.string().trim().min(1).max(128),
+}).strict()
+
 export const crossAnalyzeSchema = z.object({
   crosses: z.array(z.string().cuid()).max(200).optional(),
   origin: crossOriginSchema.optional(),
