@@ -5,6 +5,7 @@ import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
 import { LoadingState } from './components/ui/LoadingState'
+import { askConfirm, ConfirmHost } from './components/ui/useConfirm'
 import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart'
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import logo from './assets/logokanban.png'
@@ -97,7 +98,7 @@ const weightingLevels: Array<{ value: WeightingLevel; label: string; short: stri
 // calcula el backend, aqui no se replica ninguna formula ni se estiman puntuaciones.
 
 const weightingCriteriaMeta: Array<{ key: CrossWeightingCriterion; label: string; weight: string; hint: string }> = [
-  { key: 'impactoEstrategico', label: 'Impacto estrategico', weight: '20%', hint: 'Que tanto mueve la estrategia el objetivo del diagnostico.' },
+  { key: 'impactoEstrategico', label: 'Impacto estrategico', weight: '20%', hint: 'Que tanto mueve la estrategia el objetivo del análisis estratégico.' },
   { key: 'viabilidad', label: 'Viabilidad', weight: '25%', hint: 'Cuanto se puede sostener con los recursos actuales.' },
   { key: 'urgencia', label: 'Urgencia / Oportunidad', weight: '20%', hint: 'Que tan rapido hay que actuar o que ventana se pierde.' },
   { key: 'sinergiaInterna', label: 'Sinergia interna', weight: '15%', hint: 'Cuanto se apoya en las fortalezas que ya existen.' },
@@ -112,6 +113,31 @@ const weightingBands: Array<{ min: number; label: string; tone: string }> = [
   { min: 1, label: 'Largo plazo', tone: 'long' },]
 
 const swotTypeLabels = Object.fromEntries(swotTypes.map((item) => [item.value, item.label])) as Record<SWOTType, string>
+
+/** Las tres etapas intermedias se muestran sobre la vista de la matriz DOFA, que es la que las abre. */
+type StrategicScreen = 'analisis' | 'checky' | 'ponderacion'
+
+/** Etapas del análisis estratégico, en el único orden en el que se recorren. */
+type FlowStep = 'diagnostico' | 'dofa' | StrategicScreen
+
+/**
+ * Unico recorrido del análisis. El indicador del detalle y los chips numerados de cada bloque salen de
+ * aqui, de modo que ninguna pantalla puede anunciar una etapa que el indicador no tiene ni repetirla.
+ *
+ * Las secciones de recomendaciones y planes de acción quedan deliberadamente fuera: no son una etapa
+ * del análisis estratégico, asi que no aparecen en el indicador. Se siguen alcanzando desde el
+ * contenido del propio análisis y desde las rutas que ya existen.
+ */
+const diagFlow: Array<{ key: FlowStep; label: string }> = [
+  { key: 'diagnostico', label: 'Análisis estratégico' },
+  { key: 'dofa', label: 'Matriz DOFA' },
+  { key: 'analisis', label: 'Análisis IA' },
+  { key: 'checky', label: 'Checky' },
+  { key: 'ponderacion', label: 'Ponderación' },
+]
+
+/** Numero de etapa que anuncia el indicador. Solo lo consumen los bloques que llevan chip numerado. */
+const flowStepNumber = (key: FlowStep) => diagFlow.findIndex((step) => step.key === key) + 1
 
 function crossTypeForPair(a: SWOTType, b: SWOTType): CrossType | null {
   if (a === b) return null
@@ -233,23 +259,31 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     tickets: 'Tickets',
     users: 'Usuarios',
   }
+  // El menu anuncia solo los dos puntos de entrada. Las cinco etapas viven en un unico indicador
+  // dentro del detalle, y las secciones de recomendaciones y planes de accion siguen alcanzables
+  // desde el contenido del propio analisis y desde las rutas que ya existen.
   const qualityViews: Array<{ key: View; icon: string; label: string }> = [
     { key: 'companies', icon: '▥', label: 'Empresas' },
     { key: 'diagnostics', icon: '◫', label: 'Análisis estratégico' },
-    { key: 'swot', icon: '◈', label: 'Matriz DOFA' },
-    { key: 'recommendations', icon: '◆', label: 'Recomendaciones' },
-    { key: 'action-plans', icon: '▤', label: 'Planes de acción' },
   ]
   const qualityViewsIntentMap: Record<string, CompaniesIntent> = {
     swot: { kind: 'open-first-diagnostic' },
     recommendations: { kind: 'open-first-diagnostic' },
     'action-plans': { kind: 'open-first-diagnostic' },
   }
+  // Las vistas que ocupa el modulo de analisis son las que mapea cada una de sus etapas, de modo que
+  // la lista no se desincroniza del mapa de navegacion.
+  const analysisViews: View[] = Object.values(diagStageToView)
+  // Al quedar una sola entrada para el analisis, esa entrada se marca activa durante todo el recorrido:
+  // las cinco etapas del indicador mas las secciones de recomendaciones y planes de accion.
+  const isQualityActive = (key: View) => key === 'diagnostics'
+    ? diagnosticActive || analysisViews.includes(view)
+    : view === key && !diagnosticActive
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileMenu ? 'open' : ''}`}>
         <div className="sidebar-top">
-          <div className="brand"><span className="brand-mark small"><img src={logo} alt="Kanban Consultoría" /></span><span>Kanban <b>Consultoria</b></span></div>
+          <div className="brand"><span className="brand-mark"><img src={logo} alt="Kanban Consultoría" /></span><span>Kanban <b>Consultoria</b></span></div>
           <button className="icon-button mobile-only" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú">×</button>
         </div>
         <div className="workspace-chip"><span className="workspace-dot" /><div><small>ESPACIO ACTIVO</small><strong>Operaciones</strong></div><span className="chevron">⌄</span></div>
@@ -260,7 +294,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </button>
           <p className="nav-heading">GESTIÓN DE CALIDAD</p>
           {qualityViews.map((item) => (
-            <button key={item.key} className={`nav-item ${(diagnosticActive ? diagStageToView[diagStage] : view) === item.key ? 'active' : ''}`} onClick={() => handleQualityNav(item.key)}>
+            <button key={item.key} className={`nav-item ${isQualityActive(item.key) ? 'active' : ''}`} onClick={() => handleQualityNav(item.key)}>
               <span className="nav-icon">{item.icon}</span> {item.label}
             </button>
           ))}
@@ -289,10 +323,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       <main className="main-content">
         <header className="topbar">
           <button className="icon-button mobile-only menu-button" onClick={() => setMobileMenu(true)} aria-label="Abrir menú">☰</button>
-          <div className="breadcrumb"><span>Operaciones</span><b>/</b><strong>{viewLabels[diagnosticActive ? diagStageToView[diagStage] : view]}</strong></div>
+          <div className="breadcrumb"><span>Operaciones</span><b>/</b><strong>{viewLabels[diagnosticActive ? 'diagnostics' : view]}</strong></div>
           <div className="topbar-actions">
             <span className="date-label">{new Intl.DateTimeFormat('es-CO', { dateStyle: 'long' }).format(new Date())}</span>
-            <span className="notification" title="Notificaciones próximamente">♧<i /></span>
             <div className="avatar top-avatar">{initials(user.name)}</div>
           </div>
         </header>
@@ -304,6 +337,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         )}
         {view === 'users' && (user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN') && <Users user={user} />}
       </main>
+      <ConfirmHost />
     </div>
   )}
 
@@ -321,8 +355,9 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
   const [formError, setFormError] = useState('')
   const [draft, setDraft] = useState<DiagnosticDraft>(emptyDiagnosticDraft)
   const [companyId, setCompanyId] = useState('')
+  const [loadError, setLoadError] = useState('')
   const loadDiagnostics = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setLoadError('')
     try {
       const companiesResult = await api<{ companies: Company[] }>('/companies')
       const accessibleCompanies = companiesResult.companies
@@ -330,7 +365,7 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
       setCompanyId((current) => accessibleCompanies.some((company) => company.id === current) ? current : (accessibleCompanies[0]?.id ?? ''))
       const grouped = await Promise.all(accessibleCompanies.map((company) => api<{ diagnostics: Diagnostic[] }>(`/companies/${company.id}/diagnostics`).then((result) => result.diagnostics).catch(() => [] as Diagnostic[])))
       setDiagnostics(grouped.flat())
-    } catch { setError('No pudimos cargar los diagnósticos.') } finally { setLoading(false) }
+    } catch { setLoadError('No pudimos cargar los análisis estratégicos.') } finally { setLoading(false) }
   }, [])
   useEffect(() => { const timer = window.setTimeout(() => { void loadDiagnostics() }, 0); return () => window.clearTimeout(timer) }, [loadDiagnostics])
   useEffect(() => { onDiagnosticActiveChange(Boolean(selected)) }, [selected, onDiagnosticActiveChange])
@@ -346,7 +381,7 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
   async function saveDiagnostic(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSaving(true); setFormError('')
     try {
-      if (!companyId) { setFormError('Selecciona una empresa para el diagnóstico.'); setSaving(false); return }
+      if (!companyId) { setFormError('Selecciona una empresa para el análisis estratégico.'); setSaving(false); return }
       if (editing) {
         const result = await api<{ diagnostic: Diagnostic }>(`/diagnostics/${editing.id}`, { method: 'PATCH', body: JSON.stringify(draft) })
         setDiagnostics((current) => current.map((item) => item.id === result.diagnostic.id ? result.diagnostic : item))
@@ -356,15 +391,16 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
         setDiagnostics((current) => [result.diagnostic, ...current])
       }
       setShowForm(false)
-    } catch (requestError) { setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el diagnóstico.') } finally { setSaving(false) }
+    } catch (requestError) { setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el análisis estratégico.') } finally { setSaving(false) }
   }
   async function removeDiagnostic(diagnostic: Diagnostic) {
-    if (!window.confirm('¿Eliminar este análisis estratégico y su matriz DOFA?')) return
+    const confirmed = await askConfirm({ title: 'Eliminar análisis estratégico', message: `Se eliminará «${diagnostic.title}» junto con su matriz DOFA, sus recomendaciones y sus planes de acción. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
+    if (!confirmed) return
     try {
       await api(`/diagnostics/${diagnostic.id}`, { method: 'DELETE' })
       setDiagnostics((current) => current.filter((item) => item.id !== diagnostic.id))
       if (selected && selected.id === diagnostic.id) setSelected(null)
-    } catch { setError('No se pudo eliminar el diagnóstico.') }
+    } catch { setError('No se pudo eliminar el análisis estratégico.') }
   }
   if (selected) {
     return (
@@ -377,27 +413,28 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
     )
   }
   return (
-    <div className="page diagnostics-page">
+    <div className="page">
       <div className="page-heading">
         <div>
           <p className="eyebrow">GESTIÓN DE CALIDAD</p>
-          <h1>Diagnósticos</h1>
-          <p className="muted">Consulta y gestiona los diagnósticos de calidad de tus empresas.</p>
+          <h1>Análisis estratégicos</h1>
+          <p className="muted">Consulta y gestiona los análisis estratégicos de calidad de tus empresas.</p>
         </div>
-        {canCreate && <button className="button primary" onClick={startCreate}>+ Nuevo diagnóstico</button>}
+        {canCreate && <button className="button primary" onClick={startCreate}>+ Nuevo análisis estratégico</button>}
       </div>
-      {error && <div className="form-error page-alert">{error}</div>}
-      <section className="panel diagnostics-panel">
+      {error && <div className="form-error page-alert" role="alert">{error}</div>}
+      {loadError && <ErrorBanner message={loadError} onRetry={() => void loadDiagnostics()} />}
+      <section className="panel">
         <div className="filters">
           <div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por título, empresa o creador..." /></div>
         </div>
         {loading ? <LoadingState /> : filtered.length === 0 ? (
-          <EmptyState title={search ? 'Sin resultados' : 'No encontramos diagnósticos'} text={search ? 'Ningún diagnóstico coincide con tu búsqueda.' : 'Crea el primer diagnóstico para comenzar la evaluación de calidad.'} action={canCreate ? <button className="button secondary" onClick={startCreate}>Crear diagnóstico</button> : undefined} />
+          <EmptyState title={search ? 'Sin resultados' : 'No encontramos análisis estratégicos'} text={search ? 'Ningún análisis estratégico coincide con tu búsqueda.' : 'Crea el primer análisis estratégico para comenzar la evaluación de calidad.'} action={canCreate ? <button className="button secondary" onClick={startCreate}>Crear análisis estratégico</button> : undefined} />
         ) : (
           <div className="company-table-wrap">
             <table>
               <thead>
-                <tr><th>Diagnóstico</th><th>Empresa</th><th>Estado</th><th>Creador</th><th>Actualizada</th><th /></tr>
+                <tr><th>Análisis estratégico</th><th>Empresa</th><th>Estado</th><th>Creador</th><th>Actualizada</th><th /></tr>
               </thead>
               <tbody>
                 {filtered.map((diagnostic) => (
@@ -409,7 +446,7 @@ function DiagnosticsPage({ user, onDiagnosticActiveChange, diagStage, onDiagStag
                     <td className="date-cell">{relativeDate(diagnostic.updatedAt)}</td>
                     <td>
                       <span className="table-actions">
-                      <button className="button primary small-button" onClick={(event) => { event.stopPropagation(); openDetail(diagnostic) }}>Ver diagnóstico</button>
+                      <button className="button primary small-button" onClick={(event) => { event.stopPropagation(); openDetail(diagnostic) }}>Ver análisis estratégico</button>
                       <button className="row-action" title="Editar" onClick={(event) => { event.stopPropagation(); startEdit(diagnostic) }}>✎</button>
                       </span>
                     </td>
@@ -435,12 +472,13 @@ function Users({ user }: { user: User }) {
   const [draft, setDraft] = useState<UserDraft>(emptyUserDraft)
   const [editing, setEditing] = useState<User | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const loadUsers = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setLoadError('')
     try {
       const result = await api<{ users: User[] }>('/users')
       setUsers(result.users)
-    } catch { setError('No pudimos cargar los usuarios.') } finally { setLoading(false) }
+    } catch { setLoadError('No pudimos cargar los usuarios.') } finally { setLoading(false) }
   }, [])
   useEffect(() => { const timer = window.setTimeout(() => { void loadUsers() }, 0); return () => window.clearTimeout(timer) }, [loadUsers])
   useEffect(() => { if (isSuperuser) api<{ companies: Company[] }>('/companies').then((result) => setCompanies(result.companies)).catch(() => undefined) }, [isSuperuser])
@@ -480,7 +518,8 @@ function Users({ user }: { user: User }) {
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el usuario.') } finally { setSaving(false) }
   }
   async function removeUser(target: User) {
-    if (!window.confirm(`¿Eliminar al usuario ${target.name}? Esta acción no se puede deshacer.`)) return
+    const confirmed = await askConfirm({ title: 'Eliminar usuario', message: `Se eliminará el acceso de ${target.name}. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
+    if (!confirmed) return
     setError(''); setNotice('')
     try {
       await api(`/users/${target.id}`, { method: 'DELETE' })
@@ -489,7 +528,7 @@ function Users({ user }: { user: User }) {
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el usuario.') }
   }
   return (
-    <div className="page users-page">
+    <div className="page">
       <div className="page-heading">
         <div>
           <p className="eyebrow">ADMINISTRACIÓN</p>
@@ -501,6 +540,7 @@ function Users({ user }: { user: User }) {
         </div>
       </div>
       {error && <div className="form-error page-alert" role="alert">{error}</div>}
+      {loadError && <ErrorBanner message={loadError} onRetry={() => void loadUsers()} />}
       {notice && <div className="form-success page-alert">{notice}</div>}
       <section className="panel users-panel">
         {loading ? <LoadingState /> : users.length === 0 ? <EmptyState title="Sin usuarios" text="Crea el primer usuario para comenzar." action={<button className="button secondary" onClick={openCreate}>Crear usuario</button>} /> : (
@@ -584,15 +624,22 @@ function UserForm({ draft, setDraft, editing, isSuperuser, companies, saving, on
 
 function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, intent?: CompaniesIntent) => void }) {
   const [data, setData] = useState<DashboardData | null>(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  useEffect(() => { api<DashboardData>('/dashboard').then(setData).catch(() => setError('No pudimos cargar el resumen. Intenta de nuevo.')) }, [])
-  if (error) return <PageError message={error} />
-  if (!data) return <LoadingState />
+  // El resumen se recarga con un callback para que el estado de error ofrezca un reintento de verdad
+  // en lugar de dejar a la persona en una pantalla sin salida.
+  const loadDashboard = useCallback(async () => {
+    setLoading(true); setError('')
+    try { setData(await api<DashboardData>('/dashboard')) } catch { setError('No pudimos cargar el resumen.') } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { const timer = window.setTimeout(() => { void loadDashboard() }, 0); return () => window.clearTimeout(timer) }, [loadDashboard])
+  if (error) return <PageError message={error} onRetry={() => void loadDashboard()} />
+  if (loading || !data) return <LoadingState />
   const { summary } = data
   const greeting = new Date().getHours() < 12 ? 'Buenos días' : new Date().getHours() < 19 ? 'Buenas tardes' : 'Buenas noches'
   const attentionItems: Array<{ type: string; label: string; count: number; tone: string; view: View }> = []
   if (summary.overdueActionItems > 0) attentionItems.push({ type: 'alert', label: 'Acciones vencidas', count: summary.overdueActionItems, tone: 'red', view: 'action-plans' })
-  if (summary.inProgressDiagnostics > 0) attentionItems.push({ type: 'progress', label: 'Diagnósticos en curso', count: summary.inProgressDiagnostics, tone: 'amber', view: 'diagnostics' })
+  if (summary.inProgressDiagnostics > 0) attentionItems.push({ type: 'progress', label: 'Análisis estratégicos en curso', count: summary.inProgressDiagnostics, tone: 'amber', view: 'diagnostics' })
   if (summary.pendingRecommendations > 0) attentionItems.push({ type: 'pending', label: 'Recomendaciones pendientes', count: summary.pendingRecommendations, tone: 'purple', view: 'recommendations' })
   if (summary.pendingActionItems > summary.overdueActionItems) attentionItems.push({ type: 'tasks', label: 'Acciones pendientes', count: summary.pendingActionItems - summary.overdueActionItems, tone: 'blue', view: 'action-plans' })
   return (
@@ -605,12 +652,12 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
         </div>
         <div className="page-actions">
           <button className="button secondary" onClick={() => onNavigate('companies', { kind: 'create-company' })}>+ Nueva empresa</button>
-          <button className="button primary" onClick={() => onNavigate('diagnostics', { kind: 'open-first-diagnostic' })}>Ver diagnósticos</button>
+          <button className="button primary" onClick={() => onNavigate('diagnostics', { kind: 'open-first-diagnostic' })}>Ver análisis estratégicos</button>
         </div>
       </div>
       <section className="metric-grid executive-kpis">
         <KPICard icon="▥" label="Empresas" value={summary.totalCompanies} tone="blue" />
-        <KPICard icon="◫" label="Diagnósticos" value={summary.totalDiagnostics} tone="purple" />
+        <KPICard icon="◫" label="Análisis estratégicos" value={summary.totalDiagnostics} tone="purple" />
         <KPICard icon="◆" label="Recomendaciones" value={summary.pendingRecommendations} tone="red" />
         <KPICard icon="▤" label="Planes activos" value={summary.activeActionPlans} tone="green" />
         <KPICard icon="↗" label="Acciones pendientes" value={summary.pendingActionItems} tone="amber" />
@@ -643,12 +690,12 @@ function Dashboard({ user, onNavigate }: { user: User; onNavigate: (view: View, 
         <div className="dashboard-col">
           <div className="panel">
             <div className="panel-heading">
-              <div><p className="detail-label">ACTIVIDAD RECIENTE</p><h2>Diagnósticos</h2></div>
+              <div><p className="detail-label">ACTIVIDAD RECIENTE</p><h2>Análisis estratégicos</h2></div>
               <button className="text-button" onClick={() => onNavigate('diagnostics', { kind: 'open-first-diagnostic' })}>Ver todos →</button>
             </div>
             <div className="quality-list">
               {data.recentDiagnostics.length === 0 ? (
-                <div className="empty-state compact"><p style={{ margin: 0, color: '#64748b', fontSize: 12 }}>Sin diagnósticos recientes</p></div>
+                <div className="empty-state compact"><p style={{ margin: 0, color: '#64748b', fontSize: 12 }}>Sin análisis estratégicos recientes</p></div>
               ) : (
                 data.recentDiagnostics.map((d) => (
                   <button key={d.id} className="quality-row" onClick={() => onNavigate('companies', { kind: 'open-diagnostic', companyId: d.company.id, diagnosticId: d.id })}>
@@ -698,14 +745,15 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [loadError, setLoadError] = useState('')
   const loadCompanies = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setLoadError('')
     try {
       const params = new URLSearchParams()
       if (debouncedSearch) params.set('search', debouncedSearch)
       const result = await api<{ companies: Company[] }>(`/companies?${params}`)
       setCompanies(result.companies)
-    } catch { setError('No pudimos cargar las empresas.') } finally { setLoading(false) }
+    } catch { setLoadError('No pudimos cargar las empresas.') } finally { setLoading(false) }
   }, [debouncedSearch])
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 350); return () => window.clearTimeout(timer) }, [search])
   useEffect(() => { const timer = window.setTimeout(() => { void loadCompanies() }, 0); return () => window.clearTimeout(timer) }, [loadCompanies])
@@ -735,8 +783,8 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
       setShowForm(false); setSelected(result.company); await loadCompanies()
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar la empresa.') } finally { setSaving(false) }
   }
-  async function removeCompany(companyToRemove: Company) { if (!window.confirm('¿Eliminar esta empresa?')) return; try { await api(`/companies/${companyToRemove.id}`, { method: 'DELETE' }); setSelected(null); await loadCompanies() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la empresa.') } }
-  return <div className="page companies-page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>}
+  async function removeCompany(companyToRemove: Company) { const confirmed = await askConfirm({ title: 'Eliminar empresa', message: `Se eliminará «${companyToRemove.name}» con todos sus análisis estratégicos y planes de acción. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/companies/${companyToRemove.id}`, { method: 'DELETE' }); setSelected(null); await loadCompanies() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la empresa.') } }
+  return <div className="page">{!diagnosticActive && <><div className="page-heading"><div><p className="eyebrow">GESTIÓN DE CLIENTES</p><h1>Empresas</h1><p className="muted">Consulta y organiza las empresas a tu cargo.</p></div>{user.role === 'SUPERUSER' && <button className="button primary" onClick={startCreate}>+ Crear empresa</button>}</div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadCompanies()} />}<section className="panel companies-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, identificación o industria..." /></div></div>{loading ? <LoadingState /> : companies.length === 0 ? <EmptyState title={search ? 'Sin resultados' : 'No encontramos empresas'} text={search ? 'Ninguna empresa coincide con tu búsqueda.' : 'Crea la primera empresa para comenzar.'} action={user.role === 'SUPERUSER' ? <button className="button secondary" onClick={startCreate}>Crear empresa</button> : undefined} /> : <div className="company-table-wrap"><table><thead><tr><th>Empresa</th><th>Identificación</th><th>Industria</th><th>Administrador</th><th>Actualizada</th><th /></tr></thead><tbody>{companies.map((companyToShow) => <tr key={companyToShow.id} className={selected?.id === companyToShow.id ? 'selected-row' : ''} onClick={() => setSelected(companyToShow)}><td><div className="ticket-title"><strong>{companyToShow.name}</strong><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div></td><td>{companyToShow.identification}</td><td><span className="industry-chip">{companyToShow.industry}</span></td><td>{companyToShow.admin ? <div className="assignee"><span className="avatar tiny">{initials(companyToShow.admin.name)}</span>{companyToShow.admin.name}</div> : <span className="unassigned">Sin administrador</span>}</td><td className="date-cell">{relativeDate(companyToShow.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(companyToShow) }}>⋯</button></td></tr>)}</tbody></table></div>}</section></>}{selected && !showForm && <CompanyDetail company={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeCompany(selected)} onClose={() => setSelected(null)} detailIntent={detailIntent} onConsumeDetailIntent={consumeDetailIntent} onDiagnosticActiveChange={onDiagnosticActiveChange} diagStage={diagStage} onDiagStageChange={onDiagStageChange} />}{showForm && <CompanyForm draft={draft} setDraft={setDraft} isEdit={Boolean(selected)} saving={saving} onSubmit={saveCompany} onClose={() => setShowForm(false)} />}</div>}
 
 function CompanyForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: CompanyDraft; setDraft: React.Dispatch<React.SetStateAction<CompanyDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▥</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR EMPRESA' : 'NUEVA EMPRESA'}</p><h2>{isEdit ? 'Actualizar empresa' : 'Crear empresa'}</h2><p className="company-modal-subtitle">Registra la información de la empresa en el sistema</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Nombre de la empresa<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Acme Consultores" minLength={2} required /></label><div className="form-grid"><label>Identificación<input value={draft.identification} onChange={(event) => setDraft({ ...draft, identification: event.target.value })} placeholder="NIT o identificación" minLength={3} required /></label><label>Industria<input value={draft.industry} onChange={(event) => setDraft({ ...draft, industry: event.target.value })} placeholder="Ej. Tecnología" minLength={2} required /></label></div><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade contexto sobre la empresa..." rows={6} minLength={3} required /></label>{!isEdit && <div className="admin-create-section"><label className="admin-create-toggle"><input type="checkbox" checked={draft.adminEnabled} onChange={(event) => setDraft({ ...draft, adminEnabled: event.target.checked })} /><span className="admin-create-check" aria-hidden="true">✓</span><div className="admin-create-copy"><strong>Crear administrador para esta empresa</strong><small>Se creará un usuario administrador con rol de COMPANY_ADMIN.</small></div></label>{draft.adminEnabled && <div className="admin-fields"><div className="form-grid"><label>Nombre del administrador<input value={draft.adminName} onChange={(event) => setDraft({ ...draft, adminName: event.target.value })} placeholder="Ej. Ana López" minLength={2} required /></label><label>Correo del administrador<input type="email" value={draft.adminEmail} onChange={(event) => setDraft({ ...draft, adminEmail: event.target.value })} placeholder="admin@empresa.com" autoComplete="off" required /></label></div><label>Contraseña inicial<input type="password" value={draft.adminPassword} onChange={(event) => setDraft({ ...draft, adminPassword: event.target.value })} placeholder="Mínimo 8 caracteres" minLength={8} autoComplete="new-password" required /></label></div>}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear empresa'}</button></div></form></div> }
 
@@ -747,13 +795,14 @@ function CompanyDetail({ company: companyToShow, user, onEdit, onDelete, onClose
   const [showDiagnosticForm, setShowDiagnosticForm] = useState(false)
   const [loadingDiagnostics, setLoadingDiagnostics] = useState(true)
   const [diagnosticError, setDiagnosticError] = useState('')
+  const [diagnosticLoadError, setDiagnosticLoadError] = useState('')
   const [savingDiagnostic, setSavingDiagnostic] = useState(false)
   const loadDiagnostics = useCallback(async () => {
-    setLoadingDiagnostics(true); setDiagnosticError('')
+    setLoadingDiagnostics(true); setDiagnosticLoadError('')
     try {
       const result = await api<{ diagnostics: Diagnostic[] }>(`/companies/${companyToShow.id}/diagnostics`)
       setDiagnostics(result.diagnostics)
-    } catch { setDiagnosticError('No pudimos cargar los diagnósticos.') } finally { setLoadingDiagnostics(false) }
+    } catch { setDiagnosticLoadError('No pudimos cargar los análisis estratégicos.') } finally { setLoadingDiagnostics(false) }
   }, [companyToShow.id])
   useEffect(() => { const timer = window.setTimeout(() => { void loadDiagnostics() }, 0); return () => window.clearTimeout(timer) }, [loadDiagnostics])
   useEffect(() => { if (!detailIntent) return; const timer = window.setTimeout(() => { if (detailIntent.kind === 'create-diagnostic') { setSelectedDiagnostic(null); setDiagnosticDraft(emptyDiagnosticDraft); setShowDiagnosticForm(true); onConsumeDetailIntent(); return } if ((detailIntent.kind === 'open-first-diagnostic' || detailIntent.kind === 'open-diagnostic') && !loadingDiagnostics && diagnostics.length > 0) { const target = detailIntent.kind === 'open-diagnostic' ? diagnostics.find((item) => item.id === detailIntent.diagnosticId) : diagnostics[0]; if (target) setSelectedDiagnostic(target); onConsumeDetailIntent() } }, 0); return () => window.clearTimeout(timer) }, [detailIntent, diagnostics, loadingDiagnostics, onConsumeDetailIntent])
@@ -766,10 +815,10 @@ function CompanyDetail({ company: companyToShow, user, onEdit, onDelete, onClose
       const result = selectedDiagnostic ? await api<{ diagnostic: Diagnostic }>(`/diagnostics/${selectedDiagnostic.id}`, { method: 'PATCH', body: JSON.stringify(diagnosticDraft) }) : await api<{ diagnostic: Diagnostic }>(`/companies/${companyToShow.id}/diagnostics`, { method: 'POST', body: JSON.stringify(diagnosticDraft) })
       setDiagnostics((current) => selectedDiagnostic ? current.map((item) => item.id === result.diagnostic.id ? result.diagnostic : item) : [result.diagnostic, ...current])
       setSelectedDiagnostic(result.diagnostic); setShowDiagnosticForm(false)
-    } catch (requestError) { setDiagnosticError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el diagnóstico.') } finally { setSavingDiagnostic(false) }
+    } catch (requestError) { setDiagnosticError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el análisis estratégico.') } finally { setSavingDiagnostic(false) }
   }
-  async function removeDiagnostic() { if (!selectedDiagnostic || !window.confirm('¿Eliminar este análisis estratégico y su matriz DOFA?')) return; try { await api(`/diagnostics/${selectedDiagnostic.id}`, { method: 'DELETE' }); setSelectedDiagnostic(null); await loadDiagnostics() } catch { setDiagnosticError('No se pudo eliminar el diagnóstico.') } }
-  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} user={user} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Diagnósticos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error">{diagnosticError}</div>}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando diagnósticos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin diagnósticos" text="Crea el primer diagnóstico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear diagnóstico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>}
+  async function removeDiagnostic() { if (!selectedDiagnostic) return; const confirmed = await askConfirm({ title: 'Eliminar análisis estratégico', message: `Se eliminará «${selectedDiagnostic.title}» junto con su matriz DOFA, sus recomendaciones y sus planes de acción. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/diagnostics/${selectedDiagnostic.id}`, { method: 'DELETE' }); setSelectedDiagnostic(null); await loadDiagnostics() } catch { setDiagnosticError('No se pudo eliminar el análisis estratégico.') } }
+  return <>{selectedDiagnostic ? <div className="diag-standalone-page"><DiagnosticDetail diagnostic={selectedDiagnostic} user={user} onBack={() => setSelectedDiagnostic(null)} onEdit={() => startDiagnosticEdit(selectedDiagnostic)} onDelete={removeDiagnostic} stage={diagStage} onStageChange={onDiagStageChange} /></div> : <><div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DE EMPRESA</p><h2>{companyToShow.name}</h2><small>#{companyToShow.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="company-detail-label"><span className="industry-chip">{companyToShow.industry}</span><strong>{companyToShow.identification}</strong></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{companyToShow.description}</p></div><div className="detail-meta"><div><span>Administrador</span><strong>{companyToShow.admin?.name ?? 'Sin asignar'}</strong></div><div><span>Creada</span><strong>{relativeDate(companyToShow.createdAt)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(companyToShow.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button><button className="button danger" onClick={onDelete}>Eliminar</button></div><div className="diagnostics-section"><div className="section-heading"><div><p className="detail-label">Evaluación</p><h3>Análisis estratégicos</h3></div><button className="button primary small-button" onClick={startDiagnosticCreate}>+ Nuevo</button></div>{diagnosticError && <div className="form-error" role="alert">{diagnosticError}</div>}{diagnosticLoadError && <ErrorBanner message={diagnosticLoadError} onRetry={() => void loadDiagnostics()} />}{loadingDiagnostics ? <div className="inline-loading"><span className="loader" />Cargando análisis estratégicos...</div> : diagnostics.length === 0 ? <EmptyState compact title="Sin análisis estratégicos" text="Crea el primer análisis estratégico de esta empresa." action={<button className="button secondary" onClick={startDiagnosticCreate}>Crear análisis estratégico</button>} /> : <div className="diagnostic-list">{diagnostics.map((item) => <button className="diagnostic-row" key={item.id} onClick={() => setSelectedDiagnostic(item)}><span className="diagnostic-icon">◈</span><span className="diagnostic-row-content"><strong>{item.title}</strong><small>{diagnosticStatusLabel[item.status]} · {relativeDate(item.updatedAt)}</small></span><span>›</span></button>)}</div>}</div></aside></div></>}{showDiagnosticForm && <DiagnosticForm draft={diagnosticDraft} setDraft={setDiagnosticDraft} isEdit={Boolean(selectedDiagnostic)} saving={savingDiagnostic} onSubmit={saveDiagnostic} onClose={() => setShowDiagnosticForm(false)} />}</>}
 
 function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, companies, companyId, onCompanyIdChange, error }: { draft: DiagnosticDraft; setDraft: React.Dispatch<React.SetStateAction<DiagnosticDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void; companies?: Company[]; companyId?: string; onCompanyIdChange?: (id: string) => void; error?: string }) {
   return (
@@ -786,7 +835,7 @@ function DiagnosticForm({ draft, setDraft, isEdit, saving, onSubmit, onClose, co
         </div>
         {error && <div className="form-error">{error}</div>}
         {!isEdit && companies && companies.length > 0 && <label>Empresa<select value={companyId} onChange={(event) => onCompanyIdChange?.(event.target.value)} required>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>}
-        <label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Ej. Diagnóstico operativo 2026" minLength={3} required /></label>
+        <label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Ej. Análisis estratégico 2026" minLength={3} required /></label>
         <label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el alcance de la evaluación..." rows={7} minLength={3} required /></label>
         <label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as DiagnosticStatus })}>{diagnosticStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         <div className="drawer-actions">
@@ -821,7 +870,7 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
   function startItemCreate(type: SWOTType) { setEditingItem(null); setItemDraft({ ...emptySWOTDraft, type }); setShowItemForm(true); setItemError('') }
   function startItemEdit(item: SWOTItem) { setEditingItem(item); setItemDraft({ type: item.type, description: item.description }); setShowItemForm(true); setItemError('') }
   async function saveItem(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setSavingItem(true); setItemError(''); try { const payload = editingItem ? { description: itemDraft.description } : { type: itemDraft.type, description: itemDraft.description }; const result = editingItem ? await api<{ item: SWOTItem }>(`/swot/items/${editingItem.id}`, { method: 'PATCH', body: JSON.stringify(payload) }) : await api<{ item: SWOTItem }>(`/diagnostics/${diagnostic.id}/swot/items`, { method: 'POST', body: JSON.stringify(payload) }); setItems((current) => editingItem ? current.map((item) => item.id === result.item.id ? result.item : item) : [...current, result.item]); setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) } catch (requestError) { setItemError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el factor.') } finally { setSavingItem(false) } }
-  async function removeItem(item: SWOTItem) { if (!window.confirm('¿Eliminar este factor?')) return; try { await api(`/swot/items/${item.id}`, { method: 'DELETE' }); setItems((current) => current.filter((currentItem) => currentItem.id !== item.id)) } catch { setItemError('No se pudo eliminar el factor.') } }
+  async function removeItem(item: SWOTItem) { const relatedCrosses = crosses.filter((cross) => cross.factor1.id === item.id || cross.factor2.id === item.id); const cascadeWarning = relatedCrosses.length === 0 ? '' : relatedCrosses.length === 1 ? ' También se eliminará el cruce estratégico asociado y la ponderación de ese cruce.' : ` También se eliminarán sus ${relatedCrosses.length} cruces estratégicos asociados y las ponderaciones de esos cruces.`; const confirmed = await askConfirm({ title: 'Eliminar factor', message: `Se eliminará «${item.description}» de la matriz DOFA.${cascadeWarning} Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/swot/items/${item.id}`, { method: 'DELETE' }); setItems((current) => current.filter((currentItem) => currentItem.id !== item.id)) } catch { setItemError('No se pudo eliminar el factor.') } }
   function startPendingCross(factor1: SWOTItem | null, factor2: SWOTItem | null) { setCrossError(''); setCrossFormError(''); setPendingCross((current) => (current?.strategy.trim() ? current : { factor1, factor2, strategy: '' })) }
   function cancelPendingCross() { setPendingCross(null); setCrossFormError(''); setCrossError('') }
   function openEditCross(cross: StrategicCross) { setCrossError(''); setCrossFormError(''); setCrossDraft({ strategy: cross.strategy ?? '' }); setCrossModal({ cross }) }
@@ -850,7 +899,7 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
       const internal = factor1.type === 'STRENGTH' || factor1.type === 'WEAKNESS' ? factor1 : factor2
       const external = internal.id === factor1.id ? factor2 : factor1
       if (!isCompatibleCrossPair(internal.type, external.type)) { setSavingCross(false); setCrossFormError('Estos factores no forman un cruce válido (FO, DO, FA o DA).'); return }
-      if (crosses.some((cross) => crossPairKey(cross.factor1, cross.factor2) === crossPairKey(internal, external))) { setSavingCross(false); setCrossFormError('Este cruce ya existe para este diagnóstico.'); return }
+      if (crosses.some((cross) => crossPairKey(cross.factor1, cross.factor2) === crossPairKey(internal, external))) { setSavingCross(false); setCrossFormError('Este cruce ya existe para este análisis estratégico.'); return }
       const strategy = pendingCross.strategy.trim()
       const payload: Record<string, string> = { factor1Id: internal.id, factor2Id: external.id }
       if (strategy) payload.strategy = strategy
@@ -858,12 +907,12 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
       setPendingCross(null)
       await loadCrosses()
     } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 409) setCrossFormError('Este cruce ya existe para este diagnóstico.')
-      else if (requestError instanceof ApiError && requestError.status === 400) setCrossFormError('Los datos del cruce no son válidos. Revisa que la estrategia tenga al menos 3 caracteres y que ambos factores pertenezcan al diagnóstico.')
+      if (requestError instanceof ApiError && requestError.status === 409) setCrossFormError('Este cruce ya existe para este análisis estratégico.')
+      else if (requestError instanceof ApiError && requestError.status === 400) setCrossFormError('Los datos del cruce no son válidos. Revisa que la estrategia tenga al menos 3 caracteres y que ambos factores pertenezcan al análisis estratégico.')
       else setCrossFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el cruce.')
     } finally { setSavingCross(false) }
   }
-  async function removeCross(cross: StrategicCross) { if (!window.confirm('¿Estás seguro de eliminar este cruce?')) return; try { await api(`/crosses/${cross.id}`, { method: 'DELETE' }); setCrosses((current) => current.filter((item) => item.id !== cross.id)) } catch { setCrossError('No se pudo eliminar el cruce.') } }
+  async function removeCross(cross: StrategicCross) { const confirmed = await askConfirm({ title: 'Eliminar cruce', message: 'Se eliminará el cruce y su estrategia asociada de la matriz DOFA. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/crosses/${cross.id}`, { method: 'DELETE' }); setCrosses((current) => current.filter((item) => item.id !== cross.id)) } catch { setCrossError('No se pudo eliminar el cruce.') } }
   function crossPointerDown(item: SWOTItem, event: React.PointerEvent<HTMLDivElement>) {
     if (event.pointerType === 'mouse' && event.button !== 0) return
     if (event.target instanceof Element && event.target.closest('button, input, select, textarea, a')) return
@@ -926,7 +975,7 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
   // en la seccion CRUCES ESTRATÉGICOS que sigue a las inferencias. La lista sigue saliendo de la
   // misma lista de StrategicCross, solo que recortada por origen, asi que no hay dos fuentes.
   const userCrosses = crosses.filter(isUserCross)
-  return <section className="diag-card diag-section dofa-section"><div className="diag-section-head"><span className="diag-step-chip">2</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del diagnóstico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{userCrosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los cruces que creaste tú arrastrando factores en la matriz. Los que proponga la IA aparecerán después del análisis.</p></div><div className="crosses-head-actions"><span className="cross-count">{userCrosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : userCrosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && userCrosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{userCrosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{userCrosses.length}</strong><span>cruces</span></div></div></div></div></section>}
+  return <section className="diag-card diag-section"><div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('dofa')}</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del análisis estratégico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{userCrosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)} disabled={loadingCrosses}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los cruces que creaste tú arrastrando factores en la matriz. Los que proponga la IA aparecerán después del análisis.</p></div><div className="crosses-head-actions"><span className="cross-count">{userCrosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : userCrosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && userCrosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{userCrosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{userCrosses.length}</strong><span>cruces</span></div></div></div></div></section>}
 
 function CrossModal({ cross, draft, setDraft, saving, error, onSubmit, onClose }: { cross: StrategicCross; draft: { strategy: string }; setDraft: React.Dispatch<React.SetStateAction<{ strategy: string }>>; saving: boolean; error: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const crossType = cross.crossType
@@ -954,7 +1003,7 @@ function AiStrategicCrosses({ crosses, loading, error, onBackToMatrix }: { cross
     <section className="diag-card diag-section crosses-section">
       <div className="diag-section-head">
         <span className="diag-step-chip crosses-chip" aria-hidden="true">&#x26AF;</span>
-        <div><h3>CRUCES ESTRATÉGICOS GENERADOS POR LA IA</h3><p>Las combinaciones de factores que la IA propuso a partir de este diagnóstico.</p></div>
+        <div><h3>CRUCES ESTRATÉGICOS GENERADOS POR LA IA</h3><p>Las combinaciones de factores que la IA propuso a partir de este análisis estratégico.</p></div>
         <div className="crosses-head-actions"><span className="cross-count">{aiCrosses.length} cruces</span></div>
       </div>
       {aiCrosses.length === 0
@@ -1030,7 +1079,7 @@ function useDiagnosticStrategies(diagnosticId: string) {
       setStrategies(result.strategies)
       setLevelScores(result.weightingLevels)
     } catch (error) {
-      setLoadError(error instanceof ApiError && error.status === 404 ? 'Este diagnóstico no existe o no te pertenece.' : 'No pudimos cargar las estrategias del diagnóstico.')
+      setLoadError(error instanceof ApiError && error.status === 404 ? 'Este análisis estratégico no existe o no te pertenece.' : 'No pudimos cargar las estrategias del análisis estratégico.')
     } finally {
       setLoading(false)
     }
@@ -1310,8 +1359,9 @@ function Tickets({ user }: { user: User }) {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
+  const [loadError, setLoadError] = useState('')
   const loadTickets = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setLoadError('')
     try {
       const params = new URLSearchParams()
       if (debouncedSearch) params.set('search', debouncedSearch)
@@ -1319,7 +1369,7 @@ function Tickets({ user }: { user: User }) {
       if (priorityFilter) params.set('priority', priorityFilter)
       const result = await api<{ tickets: Ticket[] }>(`/tickets?${params}`)
       setTickets(result.tickets)
-    } catch { setError('No pudimos cargar los tickets.') } finally { setLoading(false) }
+    } catch { setLoadError('No pudimos cargar los tickets.') } finally { setLoading(false) }
   }, [debouncedSearch, statusFilter, priorityFilter])
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 350); return () => window.clearTimeout(timer) }, [search])
   useEffect(() => { const timer = window.setTimeout(() => { void loadTickets() }, 0); return () => window.clearTimeout(timer) }, [loadTickets])
@@ -1335,14 +1385,24 @@ function Tickets({ user }: { user: User }) {
       setShowForm(false); setSelected(result.ticket); await loadTickets()
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.') } finally { setSaving(false) }
   }
-  async function removeTicket(ticket: Ticket) { if (!window.confirm('¿Eliminar este ticket?')) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
-  return <div className="page tickets-page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert">{error}</div>}<section className="panel tickets-panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
+  async function removeTicket(ticket: Ticket) { const confirmed = await askConfirm({ title: 'Eliminar ticket', message: `Se eliminará «${ticket.title}». Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
+  return <div className="page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadTickets()} />}<section className="panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
 
 function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
 
 function TicketDetail({ ticket, user, onEdit, onDelete, onClose }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void }) { return <div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div><div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div></aside></div> }
 
-function PageError({ message }: { message: string }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p></div></div> }
+function PageError({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p>{onRetry && <button className="button primary" onClick={onRetry}>Reintentar</button>}</div></div> }
+
+/** Banner de error de carga con reintento real: el boton vuelve a pedir los datos, no solo los esconde. */
+function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="form-error page-alert alert-retry" role="alert">
+      <span>{message}</span>
+      <button type="button" className="button secondary small-button" onClick={onRetry}>Reintentar</button>
+    </div>
+  )
+}
 
 function initials(name: string) { return name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase() }
 
@@ -1355,27 +1415,20 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
   // Mismas reglas que el resto de rutas de escritura: el backend solo deja valorar a superusuarios
   // y administradores de empresa, así que la pantalla no ofrece un botón que vaya a fallar.
   const canValue = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
-  // Pantallas 2, 3 y 4 del flujo estratégico. Solo son válidas mientras siga activo el paso que las
-  // abrió, y el orden es siempre el mismo: matriz DOFA, análisis IA, Checky y ponderación.
-  const [subScreen, setSubScreen] = useState<'analisis' | 'checky' | 'ponderacion' | null>(null)
-  const subScreenOpen = subScreen !== null && diagStage === 'dofa'
-  const showFlow = !subScreenOpen
+  // Pantallas intermedias del recorrido. Cuelgan de la matriz DOFA, que es la vista que las abre, asi
+  // que la etapa vigente se compone de la etapa mas la subpantalla: si no hay ninguna abierta, la
+  // propia matriz DOFA. Es el mismo valor que usan el indicador y los botones de "volver".
+  const [subScreen, setSubScreen] = useState<StrategicScreen | null>(null)
   function setDiagStage(next: DiagStage) { setSubScreen(null); onStageChange(next) }
-  type StrategicFlowKey = 'dofa' | 'analisis' | 'checky' | 'ponderacion'
-  const strategicFlow: Array<{ key: StrategicFlowKey; label: string }> = [
-    { key: 'dofa', label: 'Matriz DOFA' },
-    { key: 'analisis', label: 'Análisis IA' },
-    { key: 'checky', label: 'Checky' },
-    { key: 'ponderacion', label: 'Ponderación' },
-  ]
-  // El paso vigente es la subpantalla abierta; si no hay ninguna, la matriz DOFA. Es el mismo valor
-  // que usan el indicador de progreso y los botones de "volver", para que no se contradigan.
-  const flowStep: StrategicFlowKey = subScreenOpen ? (subScreen as StrategicFlowKey) : 'dofa'
-  const flowIndex = Math.max(0, strategicFlow.findIndex((step) => step.key === flowStep))
-    // El indicador marca el paso vigente y habilita volver a los anteriores y avanzar al siguiente.
-  function goToFlowStep(key: StrategicFlowKey) {
-    if (key === 'dofa') { setDiagStage('dofa'); window.scrollTo({ top: 0, behavior: 'smooth' }); return }
-    setSubScreen(key)
+  // La etapa vigente es la unica que decide que pantalla se muestra. Cuando el analisis esta en una
+  // seccion que no pertenece al recorrido (recomendaciones o planes de accion) no hay ninguna.
+  const activeFlow: FlowStep | null = diagStage === 'diagnostico' ? 'diagnostico' : diagStage === 'dofa' ? subScreen ?? 'dofa' : null
+  const activeIndex = activeFlow ? diagFlow.findIndex((step) => step.key === activeFlow) : -1
+  // Un solo recorrido: elegir una etapa del indicador deja el analisis en esa etapa y cierra la
+  // subpantalla anterior, en vez de abrir un segundo indicador dentro de la matriz DOFA.
+  function goToFlowStep(key: FlowStep) {
+    if (key === 'diagnostico' || key === 'dofa') setDiagStage(key)
+    else { setSubScreen(key); onStageChange('dofa') }
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null)
@@ -1387,7 +1440,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
     try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`); setAnalysis(result.analysis) } catch (error) { if (!(error instanceof ApiError && error.status === 404)) setAnalysisError('No se pudo cargar el análisis guardado.') } finally { setAnalysisLoading(false) }
   }, [diagnostic.id])
   useEffect(() => { const timer = window.setTimeout(() => { void loadAnalysis() }, 0); return () => window.clearTimeout(timer) }, [loadAnalysis])
-  async function runAnalysis() { if (processing) return; setProcessing(true); setAnalysisError(''); try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`, { method: 'POST' }); setAnalysis(result.analysis); setSubScreen('analisis') } catch (error) { setAnalysisError(error instanceof ApiError && error.status === 503 ? 'El análisis IA no está configurado todavía. Añade OPENAI_API_KEY en el backend.' : error instanceof ApiError ? error.message : 'No se pudo generar el análisis IA.') } finally { setProcessing(false) } }
+  async function runAnalysis() { if (processing) return; setProcessing(true); setAnalysisError(''); try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`, { method: 'POST' }); setAnalysis(result.analysis); goToFlowStep('analisis') } catch (error) { setAnalysisError(error instanceof ApiError && error.status === 503 ? 'El análisis IA no está configurado todavía. Añade OPENAI_API_KEY en el backend.' : error instanceof ApiError ? error.message : 'No se pudo generar el análisis IA.') } finally { setProcessing(false) } }
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [importing, setImporting] = useState(false)
   const [recError, setRecError] = useState('')
@@ -1412,16 +1465,21 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
   async function importRecommendations() { if (importing) return; setImporting(true); setRecError(''); try { await api(`/diagnostics/${diagnostic.id}/recommendations/import`, { method: 'POST' }); await loadRecommendations() } catch (requestError) { setRecError(requestError instanceof ApiError ? requestError.message : 'No se pudo importar.') } finally { setImporting(false) } }
   async function setRecommendationStatus(recommendation: Recommendation, status: RecommendationStatus) { setRecError(''); try { const result = await api<{ recommendation: Recommendation }>(`/recommendations/${recommendation.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); setRecommendations((current) => current.map((item) => item.id === result.recommendation.id ? result.recommendation : item)); if (status === 'ACCEPTED') { setCreateActionFor(result.recommendation); setDiagStage('planes') } } catch (requestError) { setRecError(requestError instanceof ApiError ? requestError.message : 'No se pudo actualizar.') } }
   const swotItemCount = diagnostic.swotAnalysis?.items.length ?? 0
-  const diagSteps = [
-    { label: 'Análisis estratégico', done: diagnostic.status !== 'DRAFT' },
-    { label: 'Matriz DOFA', done: swotItemCount > 0 },
-    { label: 'Recomendaciones', done: recommendations.length > 0 },
-    { label: 'Plan de acción', done: diagnostic.status === 'COMPLETED' },
-  ]
-  const diagCurrent = diagSteps.findIndex((step) => !step.done)
-  const diagModules: Array<{ key: DiagStage; label: string }> = [{ key: 'diagnostico', label: 'Análisis estratégico' }, { key: 'dofa', label: 'Matriz DOFA' }, { key: 'recomendaciones', label: 'Recomendaciones' }, { key: 'planes', label: 'Plan de acción' }]
-  const diagStageSteps: Record<DiagStage, number[]> = { diagnostico: [0], dofa: [1], recomendaciones: [2], planes: [3] }
-  function navigateToStep(index: number) { const next = diagModules[index]?.key; if (next) setDiagStage(next); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  // El avance real de cada etapa se lee de los datos que ya estan cargados, y las dos ultimas se
+  // marcan como completadas al haberlas superado, que es el criterio que ya usaba el indicador
+  // interior. Asi ninguna etapa pierde su estado al navegar.
+  const isFlowDone = (key: FlowStep, index: number) => {
+    if (key === 'diagnostico') return diagnostic.status !== 'DRAFT'
+    if (key === 'dofa') return swotItemCount > 0
+    if (key === 'analisis') return Boolean(analysis)
+    return index < activeIndex
+  }
+  // El indicador deja volver a cualquier etapa ya alcanzada y avanzar solo a la siguiente, que es
+  // justo lo que ofrecen los botones del final de cada pantalla: saltarse mas de una sigue sin ser
+  // posible. Desde una seccion ajena al recorrido se habilita el tramo inicial, porque el analisis
+  // guardado es lo que marca hasta donde se puede llegar.
+  const furthestIndex = activeIndex >= 0 ? activeIndex : analysis ? 2 : 1
+  const isFlowReachable = (index: number) => index <= furthestIndex + 1
   return (
     <div className="diag-page">
       <header className="diag-hero">
@@ -1442,8 +1500,13 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </div>
       </header>
-      <ol className="diag-stepper">{diagSteps.map((step, index) => { const isDone = step.done; const isCurrent = !step.done && index === diagCurrent; const isViewing = diagStageSteps[diagStage].includes(index); return <li key={step.label} className={`${isDone ? 'done' : isCurrent ? 'current' : ''}${isViewing ? ' viewing' : ''}`}><button type="button" className="diag-step-btn" onClick={() => navigateToStep(index)}><span className="diag-step-dot">{isDone ? '✓' : index + 1}</span><span className="diag-step-label">{step.label}</span></button></li> })}</ol>
-      <section className={`diag-stage${diagStage === 'diagnostico' && showFlow ? ' active' : ''}`}>
+      <ol className="diag-stepper">{diagFlow.map((step, index) => {
+        const isDone = isFlowDone(step.key, index)
+        const isCurrent = step.key === activeFlow
+        const isReachable = isFlowReachable(index)
+        return <li key={step.key} className={`${isDone ? 'done' : isCurrent ? 'current' : ''}${isCurrent ? ' viewing' : ''}`}><button type="button" className="diag-step-btn" disabled={!isReachable} onClick={() => goToFlowStep(step.key)}><span className="diag-step-dot">{isDone ? '✓' : index + 1}</span><span className="diag-step-label">{step.label}</span></button></li>
+      })}</ol>
+      <section className={`diag-stage${activeFlow === 'diagnostico' ? ' active' : ''}`}>
         <section className="diag-card diag-info-card">
           <div className="diag-card-head"><h3>INFORMACIÓN GENERAL</h3><button className="button secondary small-button" onClick={onEdit}>Editar</button></div>
           <div className="diag-meta-grid">
@@ -1455,12 +1518,12 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </section>
         <section className="diag-card diag-section">
-          <div className="diag-section-head"><span className="diag-step-chip">1</span><div><h3>Análisis estratégico</h3><p>Información de contexto y alcance del análisis estratégico.</p></div><span className={`diagnostic-status ${diagnostic.status.toLowerCase()}`}>{diagnosticStatusLabel[diagnostic.status]}</span></div>
+          <div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('diagnostico')}</span><div><h3>Análisis estratégico</h3><p>Información de contexto y alcance del análisis estratégico.</p></div><span className={`diagnostic-status ${diagnostic.status.toLowerCase()}`}>{diagnosticStatusLabel[diagnostic.status]}</span></div>
           <p className="diag-section-text">{diagnostic.description}</p>
         </section>
-        <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('dofa')}>Siguiente: Matriz DOFA →</button></div>
+        <div className="diag-next"><button className="button primary" onClick={() => goToFlowStep('dofa')}>Siguiente: Matriz DOFA →</button></div>
       </section>
-      <section className={`diag-stage${diagStage === 'dofa' && showFlow ? ' active' : ''}`}>
+      <section className={`diag-stage${activeFlow === 'dofa' ? ' active' : ''}`}>
         <DiagnosticDetailBase diagnostic={diagnostic} crosses={crosses} setCrosses={setCrosses} loadingCrosses={loadingCrosses} crossError={crossError} setCrossError={setCrossError} loadCrosses={loadCrosses} />
         <div className="diag-next">
           {analysisError && <span className="form-error">{analysisError}</span>}
@@ -1471,26 +1534,14 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
             : <button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : '✨ Analizar con IA →'}</button>}
         </div>
         {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
-        <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('recomendaciones')}>Siguiente: Recomendaciones →</button></div>
+        <div className="diag-next"><button className="button secondary" onClick={() => setDiagStage('recomendaciones')}>Saltar a Recomendaciones →</button></div>
       </section>
-      {subScreenOpen && (
-        <ol className="diag-stepper flow-stepper">{strategicFlow.map((step, index) => {
-          const isCurrent = step.key === flowStep
-          const isDone = index < flowIndex
-          // El indicador deja volver a cualquier paso ya alcanzado y avanzar al siguiente, que es justo
-          // lo que ofrecen los botones del final de cada pantalla. Saltarse mas de un paso sigue sin
-          // ser posible, asi que no se contradice el orden del flujo.
-          const reachable = index <= flowIndex + 1
-          return <li key={step.key} className={`${isDone ? 'done' : isCurrent ? 'current' : ''}${isCurrent ? ' viewing' : ''}`}><button type="button" className="diag-step-btn" disabled={!reachable} onClick={() => goToFlowStep(step.key)}><span className="diag-step-dot">{isDone ? '✓' : index + 1}</span><span className="diag-step-label">{step.label}</span></button></li>
-        })}</ol>
-      )}
-      {subScreenOpen && subScreen === 'analisis' && (
+      {activeFlow === 'analisis' && (
         <section className="diag-stage active">
           <div className="diag-card diag-section">
             <div className="diag-section-head">
               <span className="diag-step-chip">✦</span>
               <div><h3>Análisis estratégico con IA</h3><p>Lectura estratégica generada a partir de tu matriz DOFA y tus cruces.</p></div>
-              <button className="button secondary small-button" onClick={() => goToFlowStep('dofa')}>← Volver a la matriz DOFA</button>
             </div>
           </div>
           {analysis
@@ -1505,12 +1556,12 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </section>
       )}
-      {subScreenOpen && subScreen === 'checky' && (
+      {activeFlow === 'checky' && (
         <section className="diag-stage active">
           <div className="diag-card diag-section">
             <div className="diag-section-head">
               <span className="diag-step-chip">✦</span>
-              <div><h3>Consultar a Checky</h3><p>Profundiza el análisis estratégico de este diagnóstico.</p></div>
+              <div><h3>Consultar a Checky</h3><p>Profundiza este análisis estratégico.</p></div>
             </div>
           </div>
           <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} onCrossCreated={refreshCrosses} />
@@ -1520,12 +1571,12 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </section>
       )}
-      {subScreenOpen && subScreen === 'ponderacion' && (
+      {activeFlow === 'ponderacion' && (
         <section className="diag-stage active">
           <div className="diag-card diag-section">
             <div className="diag-section-head">
               <span className="diag-step-chip">⚖</span>
-              <div><h3>Ponderación de estrategias</h3><p>Una sola lista con las estrategias de la IA, de los cruces y de Checky de este diagnóstico.</p></div>
+              <div><h3>Ponderación de estrategias</h3><p>Una sola lista con las estrategias de la IA, de los cruces y de Checky de este análisis estratégico.</p></div>
             </div>
           </div>
           <StrategyWeightingScreen diagnostic={diagnostic} canValue={canValue} />
@@ -1534,7 +1585,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </section>
       )}
-      <section className={`diag-stage${diagStage === 'recomendaciones' && showFlow ? ' active' : ''}`}>
+      <section className={`diag-stage${diagStage === 'recomendaciones' ? ' active' : ''}`}>
         <div className="diag-actionbar">
           <div className="diag-actionbar-info"><p className="detail-label">GESTIÓN</p><span>Prioriza las recomendaciones y conviértelas en acciones del plan.</span></div>
         </div>
@@ -1542,7 +1593,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
         <RecommendationsPanel analysis={analysis} recommendations={recommendations} onImport={importRecommendations} onSetStatus={setRecommendationStatus} onRequestCreateAction={(recommendation) => { setDiagStage('planes'); setCreateActionFor(recommendation) }} importing={importing} />
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('planes')}>Siguiente: Plan de acción →</button></div>
       </section>
-      <section className={`diag-stage${diagStage === 'planes' && showFlow ? ' active' : ''}`}>
+      <section className={`diag-stage${diagStage === 'planes' ? ' active' : ''}`}>
         <ActionPlansPanel diagnostic={diagnostic} recommendations={recommendations} createActionFor={createActionFor} onCreateActionClose={() => setCreateActionFor(null)} />
       </section>
     </div>
@@ -1576,7 +1627,7 @@ function RecommendationsPanel({ analysis, recommendations, onImport, onSetStatus
           <p className="detail-label">GESTIÓN · RECOMENDACIONES</p>
           <h3>Recomendaciones IA</h3>
           <p className="ai-panel-subtitle">Recomendaciones priorizadas para abordar los hallazgos.</p>
-          <span className="rec-ai-note">✦ Generadas por Checky · Análisis estratégico</span>
+          <span className="rec-ai-note">✦ Generadas por el análisis con IA</span>
         </div>
         <span className="ai-badge">IA</span>
       </div>
@@ -1600,9 +1651,9 @@ function RecommendationsPanel({ analysis, recommendations, onImport, onSetStatus
               <h4 className="rec-card-title">{ai.title}</h4>
               <p className="rec-card-desc">{ai.description}</p>
               <button type="button" className="rec-toggle" aria-expanded={open} onClick={() => toggleCard(ai.title)}><span className="rec-toggle-icon">▾</span>{open ? 'Ocultar análisis' : 'Ver análisis completo'}</button>
-              <div className="rec-details"><div className="rec-details-inner"><div className="rec-details-divider" /><div className="rec-detail-block"><span className="rec-detail-label">Objetivo</span><p>{ai.description}</p></div><div className="rec-detail-block"><span className="rec-detail-label">Impacto esperado</span><p>{ai.expectedImpact}</p></div><div className="rec-detail-block"><span className="rec-detail-label">Acción sugerida</span><p>{ai.suggestedAction}</p></div></div></div>
+              <div className="rec-details"><div className="rec-details-divider" /><div className="rec-detail-block"><span className="rec-detail-label">Objetivo</span><p>{ai.description}</p></div><div className="rec-detail-block"><span className="rec-detail-label">Impacto esperado</span><p>{ai.expectedImpact}</p></div><div className="rec-detail-block"><span className="rec-detail-label">Acción sugerida</span><p>{ai.suggestedAction}</p></div></div>
               <div className="rec-card-actions">
-                <span className="rec-ai-tag">✦ Generada por Checky</span>
+                <span className="rec-ai-tag">✦ Generada por el análisis con IA</span>
                 <div className="rec-actions">
                   {rec ? (rec.status === 'ACCEPTED' ? <button type="button" className="button primary small-button" onClick={() => onRequestCreateAction(rec)}>Crear acción →</button> : rec.status === 'PENDING' ? <><button type="button" className="button secondary small-button" onClick={() => void applyStatus(rec, 'REJECTED')} disabled={busy}>Rechazar</button><button type="button" className="button primary small-button" onClick={() => void applyStatus(rec, 'ACCEPTED')} disabled={busy}>{busy ? <><span className="button-loader" />Procesando...</> : 'Aceptar'}</button></> : null) : <button type="button" className="button primary small-button" onClick={() => void onImport()} disabled={importing}>{importing ? <><span className="button-loader" />Importando...</> : 'Importar'}</button>}
                 </div>
@@ -1619,6 +1670,7 @@ function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCrea
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
   const [savingPlan, setSavingPlan] = useState(false)
   const [savingItem, setSavingItem] = useState(false)
   const [showPlanForm, setShowPlanForm] = useState(false)
@@ -1640,8 +1692,8 @@ function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCrea
   const [modalPlanDraft, setModalPlanDraft] = useState<PlanDraft>(emptyPlanDraft)
   const [creatingModalPlan, setCreatingModalPlan] = useState(false)
   const loadPlans = useCallback(async () => {
-    setLoading(true); setError('')
-    try { const result = await api<{ actionPlans: ActionPlan[] }>(`/diagnostics/${diagnostic.id}/action-plans`); setPlans(result.actionPlans) } catch { setError('No pudimos cargar los planes de acción.') } finally { setLoading(false) }
+    setLoading(true); setLoadError('')
+    try { const result = await api<{ actionPlans: ActionPlan[] }>(`/diagnostics/${diagnostic.id}/action-plans`); setPlans(result.actionPlans) } catch { setLoadError('No pudimos cargar los planes de acción.') } finally { setLoading(false) }
   }, [diagnostic.id])
   useEffect(() => { const timer = window.setTimeout(() => { void loadPlans() }, 0); return () => window.clearTimeout(timer) }, [loadPlans])
   useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
@@ -1654,15 +1706,15 @@ function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCrea
   function onColumnDragOver(event: React.DragEvent<HTMLDivElement>, status: ActionItemStatus) { if (!dragState) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(status) }
   function onColumnDragLeave(event: React.DragEvent<HTMLDivElement>, status: ActionItemStatus) { if (dropTarget === status && event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) { setDropTarget(null) } }
   function onColumnDrop(event: React.DragEvent<HTMLDivElement>, status: ActionItemStatus) { event.preventDefault(); const current = dragState; setDragState(null); setDropTarget(null); if (!current || current.fromStatus === status) return; const item = plans.flatMap((entry) => entry.items).find((entry) => entry.id === current.itemId); if (item) void updateItem(item, { status }) }
-  async function removeItem(item: ActionItem) { if (!window.confirm('¿Eliminar esta acción?')) return; try { await api(`/action-items/${item.id}`, { method: 'DELETE' }); await loadPlans() } catch { setError('No se pudo eliminar la acción.') } }
+  async function removeItem(item: ActionItem) { const ticketWarning = item.ticket ? ` También se eliminará el ticket #${item.ticket.id.slice(-6).toUpperCase()} asociado a esta acción.` : ''; const confirmed = await askConfirm({ title: 'Eliminar acción', message: `Se eliminará «${item.title}» del plan de acción.${ticketWarning} Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/action-items/${item.id}`, { method: 'DELETE' }); await loadPlans() } catch { setError('No se pudo eliminar la acción.') } }
   async function updatePlan(plan: ActionPlan, status: ActionPlanStatus) { setError(''); try { await api(`/action-plans/${plan.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); await loadPlans() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo actualizar el plan.') } }
   function startPlanEdit(plan: ActionPlan) { setPlanEditDraft({ title: plan.title, description: plan.description, status: plan.status }); setEditingPlan(plan) }
   async function savePlanEdit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!editingPlan) return; setSavingPlanEdit(true); setError(''); try { await api(`/action-plans/${editingPlan.id}`, { method: 'PATCH', body: JSON.stringify({ title: planEditDraft.title, description: planEditDraft.description, status: planEditDraft.status }) }); setEditingPlan(null); await loadPlans() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo actualizar el plan.') } finally { setSavingPlanEdit(false) } }
-  async function removePlan(plan: ActionPlan) { if (!window.confirm('¿Eliminar este plan de acción y sus actividades?')) return; try { await api(`/action-plans/${plan.id}`, { method: 'DELETE' }); await loadPlans() } catch { setError('No se pudo eliminar el plan.') } }
+  async function removePlan(plan: ActionPlan) { const confirmed = await askConfirm({ title: 'Eliminar plan de acción', message: `Se eliminará «${plan.title}» con todas sus actividades. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/action-plans/${plan.id}`, { method: 'DELETE' }); await loadPlans() } catch { setError('No se pudo eliminar el plan.') } }
   function startItemEdit(item: ActionItem) { setEditingItem(item); setItemEditDraft({ title: item.title, description: item.description, priority: item.priority, status: item.status, recommendationId: item.recommendationId ?? '', responsibleId: item.responsibleId ?? '', dueDate: item.dueDate ? item.dueDate.slice(0, 10) : '' }) }
   async function saveItemEdit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!editingItem) return; setSavingItemEdit(true); setError(''); try { const payload = { title: itemEditDraft.title, description: itemEditDraft.description, priority: itemEditDraft.priority, status: itemEditDraft.status, responsibleId: itemEditDraft.responsibleId || null, dueDate: itemEditDraft.dueDate || null }; await api(`/action-items/${editingItem.id}`, { method: 'PATCH', body: JSON.stringify(payload) }); setEditingItem(null); await loadPlans() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo actualizar la acción.') } finally { setSavingItemEdit(false) } }
   async function saveRecAction(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!createActionFor || !recActionPlanId || savingRecAction) return; setSavingRecAction(true); setRecActionError(''); try { const payload = { ...recActionDraft, recommendationId: createActionFor.id, responsibleId: recActionDraft.responsibleId || null, dueDate: recActionDraft.dueDate || null }; await api(`/action-plans/${recActionPlanId}/items`, { method: 'POST', body: JSON.stringify(payload) }); onCreateActionClose(); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear la acción.') } finally { setSavingRecAction(false) } }
-  async function createPlanFromModal(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (creatingModalPlan) return; setCreatingModalPlan(true); setRecActionError(''); try { const result = await api<{ actionPlan: ActionPlan }>(`/diagnostics/${diagnostic.id}/action-plans`, { method: 'POST', body: JSON.stringify(modalPlanDraft) }); setRecActionPlanId(result.actionPlan.id); setModalPlanDraft(emptyPlanDraft); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear el plan.') } finally { setCreatingModalPlan(false) } }return <section className="ai-analysis-panel plans-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><span className="diag-step-chip">5</span><div><p className="detail-label">EJECUCIÓN</p><h3>Planes de Acción</h3><p className="ai-panel-subtitle">Organiza la ejecución de las recomendaciones.</p></div></div><button className="button primary small-button" onClick={() => { setPlanDraft(emptyPlanDraft); setShowPlanForm(!showPlanForm) }}>{showPlanForm ? 'Cerrar' : '+ Nuevo plan'}</button></div>{error && <div className="form-error">{error}</div>}{showPlanForm && <form className="factor-form plan-form" onSubmit={savePlan}><div className="factor-form-heading"><h3>Nuevo plan de acción</h3><button type="button" className="icon-button" onClick={() => setShowPlanForm(false)}>×</button></div><label>Título<input value={planDraft.title} onChange={(event) => setPlanDraft({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => setPlanDraft({ ...planDraft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setShowPlanForm(false)}>Cancelar</button><button className="button primary" disabled={savingPlan}>{savingPlan ? 'Creando...' : 'Crear plan'}</button></div></form>}{loading ? <div className="ai-loading"><span className="loader" />Cargando planes...</div> : plans.length === 0 ? <EmptyState compact title="Sin planes de acción" text="Crea el primer plan para organizar la ejecución." /> : <><div className="plan-kpis">{[{ label: 'Planes activos', value: plans.filter((entry) => entry.status === 'ACTIVE').length, tone: 'active', icon: '▤' }, { label: 'Acciones totales', value: plans.reduce((sum, entry) => sum + entry.items.length, 0), tone: 'total', icon: '◫' }, { label: 'Completadas', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'COMPLETED').length, 0), tone: 'completed', icon: '✓' }, { label: 'En progreso', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'IN_PROGRESS').length, 0), tone: 'progress', icon: '↻' }].map((kpi) => <div className={`plan-kpi${kpi.tone ? ` ${kpi.tone}` : ''}`} key={kpi.label}><span className="plan-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><small>{kpi.label}</small></div></div>)}</div><div className="plans-list">{plans.map((plan) => <article className="plan-card" key={plan.id}><header className="plan-card-head"><div className="plan-card-main"><div className="plan-title-row"><h4>{plan.title}</h4><span className={`plan-pill ${plan.status.toLowerCase()}`}>{planStatusLabel[plan.status]}</span></div><p className="plan-description">{plan.description}</p><small className="plan-createdby">Creado por {plan.createdBy.name}</small></div><div className="plan-actions"><label className="plan-status-field"><span className="plan-status-label">Estado</span><select value={plan.status} onChange={(event) => void updatePlan(plan, event.target.value as ActionPlanStatus)} aria-label="Estado del plan">{actionPlanStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="plan-actions-buttons"><button className="button secondary small-button" onClick={() => startPlanEdit(plan)}>Editar</button><button className="button danger small-button" onClick={() => void removePlan(plan)}>Eliminar</button></div></div></header>{itemFormFor === plan.id && <form className="factor-form item-form" onSubmit={saveItem}><div className="factor-form-heading"><h3>Nueva acción</h3><button type="button" className="icon-button" onClick={() => setItemFormFor(null)}>×</button></div><label>Título<input value={itemDraft.title} onChange={(event) => setItemDraft({ ...itemDraft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={itemDraft.description} onChange={(event) => setItemDraft({ ...itemDraft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={itemDraft.priority} onChange={(event) => setItemDraft({ ...itemDraft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Recomendación<select value={itemDraft.recommendationId} onChange={(event) => setItemDraft({ ...itemDraft, recommendationId: event.target.value })}><option value="">Sin relacionar</option>{recommendations.filter((item) => item.status !== 'REJECTED').map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={itemDraft.responsibleId} onChange={(event) => setItemDraft({ ...itemDraft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={itemDraft.dueDate} onChange={(event) => setItemDraft({ ...itemDraft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setItemFormFor(null)}>Cancelar</button><button className="button primary" disabled={savingItem}>{savingItem ? 'Agregando...' : 'Agregar acción'}</button></div></form>}<div className="plan-board">{boardColumns.map((column) => { const columnItems = plan.items.filter((item) => item.status === column.status); return <div className={`kanban-column ${column.status.toLowerCase()}${dragState ? ' drop-enabled' : ''}${dropTarget === column.status ? ' drop-target' : ''}`} key={column.status} onDragOver={(event) => onColumnDragOver(event, column.status)} onDragLeave={(event) => onColumnDragLeave(event, column.status)} onDrop={(event) => onColumnDrop(event, column.status)}><div className="kanban-column-header"><span className="kanban-column-name"><span className={`kanban-column-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><span className="kanban-column-title">{column.label}</span></span><span className="kanban-column-count">{columnItems.length}</span></div>{dragState && dropTarget === column.status && <div className="kanban-drop-hint">Soltar aquí</div>}{columnItems.length === 0 ? <div className="kanban-column-empty"><span className={`kanban-empty-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><strong>{kanbanColumnVisuals[column.status].emptyTitle}</strong><small>{kanbanColumnVisuals[column.status].emptyText}</small></div> : columnItems.map((item) => <KanbanActionCard key={item.id} item={item} isDragging={dragState?.itemId === item.id} onDragStart={onCardDragStart} onDragEnd={onCardDragEnd} onChangeStatus={(entry, status) => void updateItem(entry, { status })} onEdit={startItemEdit} onRemove={(entry) => void removeItem(entry)} />)}</div> })}</div><footer className="plan-card-footer"><button className="text-button" onClick={() => { setItemDraft(emptyItemDraft); setItemFormFor(itemFormFor === plan.id ? null : plan.id) }}>{itemFormFor === plan.id ? 'Cerrar formulario' : '+ Agregar acción'}</button></footer></article>)}</div></>}{editingPlan && <PlanEditForm draft={planEditDraft} setDraft={setPlanEditDraft} saving={savingPlanEdit} onSubmit={savePlanEdit} onClose={() => setEditingPlan(null)} />}{editingItem && <ActionItemEditForm draft={itemEditDraft} setDraft={setItemEditDraft} users={users} saving={savingItemEdit} onSubmit={saveItemEdit} onClose={() => setEditingItem(null)} />}{createActionFor && <ActionFromRecommendationForm recommendation={createActionFor} plans={plans} users={users} planId={recActionPlanId} onPlanIdChange={setRecActionPlanId} draft={recActionDraft} onDraftChange={setRecActionDraft} planDraft={modalPlanDraft} onPlanDraftChange={setModalPlanDraft} error={recActionError} saving={savingRecAction} creatingPlan={creatingModalPlan} onSubmit={saveRecAction} onPlanCreate={createPlanFromModal} onClose={onCreateActionClose} />}</section> }
+  async function createPlanFromModal(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (creatingModalPlan) return; setCreatingModalPlan(true); setRecActionError(''); try { const result = await api<{ actionPlan: ActionPlan }>(`/diagnostics/${diagnostic.id}/action-plans`, { method: 'POST', body: JSON.stringify(modalPlanDraft) }); setRecActionPlanId(result.actionPlan.id); setModalPlanDraft(emptyPlanDraft); await loadPlans() } catch (requestError) { setRecActionError(requestError instanceof ApiError ? requestError.message : 'No se pudo crear el plan.') } finally { setCreatingModalPlan(false) } }return <section className="ai-analysis-panel plans-panel"><div className="ai-panel-heading"><div className="ai-panel-heading-main"><div><p className="detail-label">EJECUCIÓN</p><h3>Planes de Acción</h3><p className="ai-panel-subtitle">Organiza la ejecución de las recomendaciones.</p></div></div><button className="button primary small-button" onClick={() => { setPlanDraft(emptyPlanDraft); setShowPlanForm(!showPlanForm) }}>{showPlanForm ? 'Cerrar' : '+ Nuevo plan'}</button></div>{error && <div className="form-error" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadPlans()} />}{showPlanForm && <form className="factor-form plan-form" onSubmit={savePlan}><div className="factor-form-heading"><h3>Nuevo plan de acción</h3><button type="button" className="icon-button" onClick={() => setShowPlanForm(false)}>×</button></div><label>Título<input value={planDraft.title} onChange={(event) => setPlanDraft({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => setPlanDraft({ ...planDraft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setShowPlanForm(false)}>Cancelar</button><button className="button primary" disabled={savingPlan}>{savingPlan ? 'Creando...' : 'Crear plan'}</button></div></form>}{loading ? <div className="ai-loading"><span className="loader" />Cargando planes...</div> : plans.length === 0 ? <EmptyState compact title="Sin planes de acción" text="Crea el primer plan para organizar la ejecución." /> : <><div className="plan-kpis">{[{ label: 'Planes activos', value: plans.filter((entry) => entry.status === 'ACTIVE').length, tone: 'active', icon: '▤' }, { label: 'Acciones totales', value: plans.reduce((sum, entry) => sum + entry.items.length, 0), tone: 'total', icon: '◫' }, { label: 'Completadas', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'COMPLETED').length, 0), tone: 'completed', icon: '✓' }, { label: 'En progreso', value: plans.reduce((sum, entry) => sum + entry.items.filter((item) => item.status === 'IN_PROGRESS').length, 0), tone: 'progress', icon: '↻' }].map((kpi) => <div className={`plan-kpi${kpi.tone ? ` ${kpi.tone}` : ''}`} key={kpi.label}><span className="plan-kpi-icon" aria-hidden="true">{kpi.icon}</span><div><strong>{kpi.value}</strong><small>{kpi.label}</small></div></div>)}</div><div className="plans-list">{plans.map((plan) => <article className="plan-card" key={plan.id}><header className="plan-card-head"><div className="plan-card-main"><div className="plan-title-row"><h4>{plan.title}</h4><span className={`plan-pill ${plan.status.toLowerCase()}`}>{planStatusLabel[plan.status]}</span></div><p className="plan-description">{plan.description}</p><small className="plan-createdby">Creado por {plan.createdBy.name}</small></div><div className="plan-actions"><label className="plan-status-field"><span className="plan-status-label">Estado</span><select value={plan.status} onChange={(event) => void updatePlan(plan, event.target.value as ActionPlanStatus)} aria-label="Estado del plan">{actionPlanStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="plan-actions-buttons"><button className="button secondary small-button" onClick={() => startPlanEdit(plan)}>Editar</button><button className="button danger small-button" onClick={() => void removePlan(plan)}>Eliminar</button></div></div></header>{itemFormFor === plan.id && <form className="factor-form" onSubmit={saveItem}><div className="factor-form-heading"><h3>Nueva acción</h3><button type="button" className="icon-button" onClick={() => setItemFormFor(null)}>×</button></div><label>Título<input value={itemDraft.title} onChange={(event) => setItemDraft({ ...itemDraft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={itemDraft.description} onChange={(event) => setItemDraft({ ...itemDraft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={itemDraft.priority} onChange={(event) => setItemDraft({ ...itemDraft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Recomendación<select value={itemDraft.recommendationId} onChange={(event) => setItemDraft({ ...itemDraft, recommendationId: event.target.value })}><option value="">Sin relacionar</option>{recommendations.filter((item) => item.status !== 'REJECTED').map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={itemDraft.responsibleId} onChange={(event) => setItemDraft({ ...itemDraft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={itemDraft.dueDate} onChange={(event) => setItemDraft({ ...itemDraft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={() => setItemFormFor(null)}>Cancelar</button><button className="button primary" disabled={savingItem}>{savingItem ? 'Agregando...' : 'Agregar acción'}</button></div></form>}<div className="plan-board">{boardColumns.map((column) => { const columnItems = plan.items.filter((item) => item.status === column.status); return <div className={`kanban-column ${column.status.toLowerCase()}${dragState ? ' drop-enabled' : ''}${dropTarget === column.status ? ' drop-target' : ''}`} key={column.status} onDragOver={(event) => onColumnDragOver(event, column.status)} onDragLeave={(event) => onColumnDragLeave(event, column.status)} onDrop={(event) => onColumnDrop(event, column.status)}><div className="kanban-column-header"><span className="kanban-column-name"><span className={`kanban-column-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><span className="kanban-column-title">{column.label}</span></span><span className="kanban-column-count">{columnItems.length}</span></div>{dragState && dropTarget === column.status && <div className="kanban-drop-hint">Soltar aquí</div>}{columnItems.length === 0 ? <div className="kanban-column-empty"><span className={`kanban-empty-icon ${column.status.toLowerCase()}`} aria-hidden="true">{kanbanColumnVisuals[column.status].icon}</span><strong>{kanbanColumnVisuals[column.status].emptyTitle}</strong><small>{kanbanColumnVisuals[column.status].emptyText}</small></div> : columnItems.map((item) => <KanbanActionCard key={item.id} item={item} isDragging={dragState?.itemId === item.id} onDragStart={onCardDragStart} onDragEnd={onCardDragEnd} onChangeStatus={(entry, status) => void updateItem(entry, { status })} onEdit={startItemEdit} onRemove={(entry) => void removeItem(entry)} />)}</div> })}</div><footer className="plan-card-footer"><button className="text-button" onClick={() => { setItemDraft(emptyItemDraft); setItemFormFor(itemFormFor === plan.id ? null : plan.id) }}>{itemFormFor === plan.id ? 'Cerrar formulario' : '+ Agregar acción'}</button></footer></article>)}</div></>}{editingPlan && <PlanEditForm draft={planEditDraft} setDraft={setPlanEditDraft} saving={savingPlanEdit} onSubmit={savePlanEdit} onClose={() => setEditingPlan(null)} />}{editingItem && <ActionItemEditForm draft={itemEditDraft} setDraft={setItemEditDraft} users={users} saving={savingItemEdit} onSubmit={saveItemEdit} onClose={() => setEditingItem(null)} />}{createActionFor && <ActionFromRecommendationForm recommendation={createActionFor} plans={plans} users={users} planId={recActionPlanId} onPlanIdChange={setRecActionPlanId} draft={recActionDraft} onDraftChange={setRecActionDraft} planDraft={modalPlanDraft} onPlanDraftChange={setModalPlanDraft} error={recActionError} saving={savingRecAction} creatingPlan={creatingModalPlan} onSubmit={saveRecAction} onPlanCreate={createPlanFromModal} onClose={onCreateActionClose} />}</section> }
 
 function KanbanActionCard({ item, isDragging, onDragStart, onDragEnd, onChangeStatus, onEdit, onRemove }: { item: ActionItem; isDragging: boolean; onDragStart: (item: ActionItem) => void; onDragEnd: () => void; onChangeStatus: (item: ActionItem, status: ActionItemStatus) => void; onEdit: (item: ActionItem) => void; onRemove: (item: ActionItem) => void }) {
   const [expanded, setExpanded] = useState(false)
@@ -1673,7 +1725,7 @@ function PlanEditForm({ draft, setDraft, saving, onSubmit, onClose }: { draft: P
 
 function ActionItemEditForm({ draft, setDraft, users, saving, onSubmit, onClose }: { draft: ItemDraft; setDraft: React.Dispatch<React.SetStateAction<ItemDraft>>; users: User[]; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">✓</div><div className="company-modal-title"><p className="eyebrow">ACTIVIDAD</p><h2>Editar acción</h2><p className="company-modal-subtitle">Actualiza la información y el responsable de la actividad.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ActionItemStatus })}>{actionItemStatuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div><div className="form-grid"><label>Responsable<select value={draft.responsibleId} onChange={(event) => setDraft({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} /></label></div><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div> }
 
-function ActionFromRecommendationForm({ recommendation, plans, users, planId, onPlanIdChange, draft, onDraftChange, planDraft, onPlanDraftChange, error, saving, creatingPlan, onSubmit, onPlanCreate, onClose }: { recommendation: Recommendation; plans: ActionPlan[]; users: User[]; planId: string; onPlanIdChange: (value: string) => void; draft: ItemDraft; onDraftChange: React.Dispatch<React.SetStateAction<ItemDraft>>; planDraft: PlanDraft; onPlanDraftChange: React.Dispatch<React.SetStateAction<PlanDraft>>; error: string; saving: boolean; creatingPlan: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onPlanCreate: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">⚑</div><div className="company-modal-title"><p className="eyebrow">RECOMENDACIÓN</p><h2>Crear acción</h2><p className="company-modal-subtitle">Convierte esta recomendación en una acción del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Recomendación relacionada<input type="text" value={recommendation.title} readOnly /></label>{plans.length === 0 ? <div className="modal-plan-empty"><p>No tienes planes de acción para este diagnóstico.</p><form className="factor-form plan-form" onSubmit={onPlanCreate}><div className="factor-form-heading"><h3>Nuevo plan</h3></div><label>Título<input value={planDraft.title} onChange={(event) => onPlanDraftChange({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => onPlanDraftChange({ ...planDraft, description: event.target.value })} rows={2} minLength={3} required /></label><button className="button primary" disabled={creatingPlan}>{creatingPlan ? 'Creando plan...' : '+ Crear plan'}</button></form></div> : <label>Plan de acción<select value={planId} onChange={(event) => onPlanIdChange(event.target.value)} required><option value="">Selecciona un plan</option>{plans.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}<label>Título<input value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => onDraftChange({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Responsable<select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => onDraftChange({ ...draft, dueDate: event.target.value })} /></label>{error && <div className="form-error">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving || creatingPlan || !planId}>{saving ? 'Creando...' : 'Crear acción'}</button></div></form></div> }
+function ActionFromRecommendationForm({ recommendation, plans, users, planId, onPlanIdChange, draft, onDraftChange, planDraft, onPlanDraftChange, error, saving, creatingPlan, onSubmit, onPlanCreate, onClose }: { recommendation: Recommendation; plans: ActionPlan[]; users: User[]; planId: string; onPlanIdChange: (value: string) => void; draft: ItemDraft; onDraftChange: React.Dispatch<React.SetStateAction<ItemDraft>>; planDraft: PlanDraft; onPlanDraftChange: React.Dispatch<React.SetStateAction<PlanDraft>>; error: string; saving: boolean; creatingPlan: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onPlanCreate: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">⚑</div><div className="company-modal-title"><p className="eyebrow">RECOMENDACIÓN</p><h2>Crear acción</h2><p className="company-modal-subtitle">Convierte esta recomendación en una acción del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Recomendación relacionada<input type="text" value={recommendation.title} readOnly /></label>{plans.length === 0 ? <div className="modal-plan-empty"><p>No tienes planes de acción para este análisis estratégico.</p><form className="factor-form plan-form" onSubmit={onPlanCreate}><div className="factor-form-heading"><h3>Nuevo plan</h3></div><label>Título<input value={planDraft.title} onChange={(event) => onPlanDraftChange({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => onPlanDraftChange({ ...planDraft, description: event.target.value })} rows={2} minLength={3} required /></label><button className="button primary" disabled={creatingPlan}>{creatingPlan ? 'Creando plan...' : '+ Crear plan'}</button></form></div> : <label>Plan de acción<select value={planId} onChange={(event) => onPlanIdChange(event.target.value)} required><option value="">Selecciona un plan</option>{plans.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}<label>Título<input value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => onDraftChange({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Responsable<select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => onDraftChange({ ...draft, dueDate: event.target.value })} /></label>{error && <div className="form-error">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving || creatingPlan || !planId}>{saving ? 'Creando...' : 'Crear acción'}</button></div></form></div> }
 
 function aiTextParagraphs(text: string): string[] {
   return text.split(/\n+/).map((part) => part.trim()).filter(Boolean)}
@@ -1725,7 +1777,7 @@ function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
       <header className="ai-card-head">
         <span className="ai-diagnosis-icon" aria-hidden="true">◫</span>
         <div className="ai-card-headings">
-          <h4>Diagnóstico</h4>
+          <h4>Análisis estratégico</h4>
           <p className="ai-card-subtitle">Lectura estratégica de la situación actual</p>
         </div>
       </header>
@@ -1827,7 +1879,7 @@ const checkyStatusVisuals: Record<CheckySuggestionStatus, { label: string; icon:
   REJECTED: { label: 'Rechazada', icon: '✕' },}
 
 const checkyBasisCopy: Record<CheckyFindingBasis, { text: string; hint: string }> = {
-  FACT: { text: 'Basado directamente en información registrada.', hint: 'El hallazgo se apoya en datos que ya existen en el diagnóstico.' },
+  FACT: { text: 'Basado directamente en información registrada.', hint: 'El hallazgo se apoya en datos que ya existen en el análisis estratégico.' },
   INFERENCE: { text: 'Inferencia realizada por Checky a partir de los datos disponibles.', hint: 'El hallazgo es una lectura razonada, no un dato registrado.' },}
 
 const checkyDefaultQuestion = 'Revisa mi análisis estratégico completo (factores, cruces y estrategias) e identifica los aspectos que debería considerar antes de avanzar.'/** El servidor guarda cada hallazgo como `${title}\n${detail}`; lo recuperamos sin inventar nada. */
@@ -1841,7 +1893,7 @@ function checkyErrorMessage(error: unknown): string {
     if (error.status === 503) return 'Checky no está configurado todavía. Añade OPENAI_API_KEY en el backend.'
     if (error.status === 429) return 'Alcanzaste el límite de consultas de Checky. Inténtalo de nuevo más tarde.'
     if (error.status === 502) return 'Checky no pudo completar la revisión en este momento. Inténtalo de nuevo.'
-    if (error.status === 403) return 'Tu rol no tiene permiso para consultar a Checky en este diagnóstico.'
+    if (error.status === 403) return 'Tu rol no tiene permiso para consultar a Checky en este análisis estratégico.'
     return error.message
   }
   return 'No se pudo completar la consulta a Checky.'}
@@ -2117,7 +2169,7 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
       {hasResults && reply && <p className="checky-reply">{reply.content}</p>}
       {hasResults && <CheckySummary counts={counts} />}
       {status === 'idle' && !hasResults && (
-        <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu diagnóstico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
+        <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu análisis estratégico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
       )}
       {hasResults && (
         <div className="checky-groups">

@@ -15,8 +15,8 @@ export function DiagnosticStatusChart({ draft, inProgress, completed }: { draft:
 
   return (
     <div className="chart-card">
-      <h3>Estado de diagnósticos</h3>
-      <p className="chart-subtitle">{total} diagnóstico{total === 1 ? '' : 's'} en total</p>
+      <h3>Estado de análisis estratégicos</h3>
+      <p className="chart-subtitle">{total} análisis estratégico{total === 1 ? '' : 's'} en total</p>
       <ResponsiveContainer width="100%" height={220}>
         <PieChart>
           <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none">
