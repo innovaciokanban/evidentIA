@@ -72,6 +72,8 @@ const swotTypes: Array<{ value: SWOTType; label: string; short: string }> = [{ v
 const crossTypeCombos: Record<CrossType, string> = { FO: 'Fortaleza + Oportunidad', DO: 'Debilidad + Oportunidad', FA: 'Fortaleza + Amenaza', DA: 'Debilidad + Amenaza' }
 
 const crossOriginLabels: Record<CrossOrigin, string> = { USER: 'Usuario', AI: 'IA', BOTH: 'Usuario + IA' }
+/** Mismo vocabulario que las prioridades de un ticket, para que la palabra no cambie segun la pantalla. */
+const crossPriorityLabels: Record<Level, string> = { LOW: 'Baja', MEDIUM: 'Media', HIGH: 'Alta' }
 
 const crossFilterTabs: Array<{ value: CrossType | 'ALL'; label: string }> = [{ value: 'ALL', label: 'Todos' }, { value: 'FO', label: 'FO' }, { value: 'DO', label: 'DO' }, { value: 'FA', label: 'FA' }, { value: 'DA', label: 'DA' }]
 
@@ -855,6 +857,9 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
   const [itemError, setItemError] = useState('')
   const [crossFormError, setCrossFormError] = useState('')
   const [crossFilter, setCrossFilter] = useState<CrossType | 'ALL'>('ALL')
+  const [generatingCrosses, setGeneratingCrosses] = useState(false)
+  const [generateCrossError, setGenerateCrossError] = useState('')
+  const [openCrossId, setOpenCrossId] = useState<string | null>(null)
   const [dragCross, setDragCross] = useState<{ itemId: string; type: SWOTType } | null>(null)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [dropDeniedId, setDropDeniedId] = useState<string | null>(null)
@@ -911,6 +916,16 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
       else if (requestError instanceof ApiError && requestError.status === 400) setCrossFormError('Los datos del cruce no son válidos. Revisa que la estrategia tenga al menos 3 caracteres y que ambos factores pertenezcan al análisis estratégico.')
       else setCrossFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el cruce.')
     } finally { setSavingCross(false) }
+  }
+  async function generateCrosses() {
+    if (generatingCrosses) return
+    setGeneratingCrosses(true); setGenerateCrossError('')
+    try {
+      const result = await api<{ crosses: StrategicCross[] }>(`/diagnostics/${diagnostic.id}/crosses/generate`, { method: 'POST' })
+      setCrosses(result.crosses)
+    } catch (requestError) {
+      setGenerateCrossError(requestError instanceof ApiError ? requestError.message : 'No se pudieron generar cruces con la IA.')
+    } finally { setGeneratingCrosses(false) }
   }
   async function removeCross(cross: StrategicCross) { const confirmed = await askConfirm({ title: 'Eliminar cruce', message: 'Se eliminará el cruce y su estrategia asociada de la matriz DOFA. Esta acción no se puede deshacer.', confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/crosses/${cross.id}`, { method: 'DELETE' }); setCrosses((current) => current.filter((item) => item.id !== cross.id)) } catch { setCrossError('No se pudo eliminar el cruce.') } }
   function crossPointerDown(item: SWOTItem, event: React.PointerEvent<HTMLDivElement>) {
@@ -971,11 +986,9 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
   const pendingCrossF2Id = pendingCross?.factor2?.id ?? ''
   const internalCrossOptions = items.filter((item) => item.type === 'STRENGTH' || item.type === 'WEAKNESS')
   const externalCrossOptions = items.filter((item) => item.type === 'OPPORTUNITY' || item.type === 'THREAT')
-  // En la matriz DOFA solo se listan los cruces del usuario: los que propuso la IA se leen despues,
-  // en la seccion CRUCES ESTRATÉGICOS que sigue a las inferencias. La lista sigue saliendo de la
-  // misma lista de StrategicCross, solo que recortada por origen, asi que no hay dos fuentes.
-  const userCrosses = crosses.filter(isUserCross)
-  return <section className="diag-card diag-section"><div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('dofa')}</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del análisis estratégico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{userCrosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)} disabled={loadingCrosses}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los cruces que creaste tú arrastrando factores en la matriz. Los que proponga la IA aparecerán después del análisis.</p></div><div className="crosses-head-actions"><span className="cross-count">{userCrosses.length} cruces</span><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}{crossError && <div className="form-error">{crossError}</div>}<div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${crossFilter === tab.value ? ' active' : ''}`} onClick={() => setCrossFilter(tab.value)}>{tab.label}</button>)}</div>{loadingCrosses ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div> : userCrosses.length === 0 ? <EmptyState compact title="Sin cruces" text="Arrastra un factor sobre otro compatible para crear el primer cruce estratégico." /> : crossFilter !== 'ALL' && userCrosses.filter((cross) => cross.crossType === crossFilter).length === 0 ? <EmptyState compact title="Sin cruces de este tipo" text="Prueba otro filtro o crea un nuevo cruce." /> : <div className="crosses-list">{userCrosses.filter((cross) => crossFilter === 'ALL' || cross.crossType === crossFilter).map((cross) => <article className="cross-card" key={cross.id} data-cross-id={cross.id}><div className="cross-card-head"><span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span><span className="cross-combo">{crossTypeCombos[cross.crossType]}</span><span className="cross-origin">{crossOriginLabels[cross.origin]}</span><span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span></div><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p><p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>{cross.strategy && <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>}<div className="cross-actions"><button className="button secondary small-button" onClick={() => openEditCross(cross)}>Editar</button><button className="button danger small-button" onClick={() => void removeCross(cross)}>Eliminar</button></div></article>)}</div>}</section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}<div className="swot-summary"><div className="swot-summary-head"><p className="detail-label">RESUMEN DE LA MATRIZ</p></div><div className="swot-summary-grid">{swotTypes.map((type) => <div className={`swot-summary-card ${type.value.toLowerCase()}`} key={type.value}><span className="swot-summary-icon">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><div><strong>{items.filter((item) => item.type === type.value).length}</strong><span>{type.label}s</span></div></div>)}<div className="swot-summary-card crosses"><span className="swot-summary-icon">×2</span><div><strong>{userCrosses.length}</strong><span>cruces</span></div></div></div></div></section>}
+  // El reparto por origen no vive aquí: la sección de cruces de abajo agrupa los dos grupos sobre esta
+  // misma lista de StrategicCross, así que no hay dos fuentes ni dos lugares donde contarlos.
+  return <section className="diag-card diag-section"><div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('dofa')}</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del análisis estratégico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)} disabled={loadingCrosses}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los que creaste combinando factores en la matriz y los que propuso la IA. Cada cruce aparece una sola vez, con su origen.</p></div><div className="crosses-head-actions"><span className="cross-count">{crosses.length} cruces</span><button type="button" className="button primary small-button" onClick={() => void generateCrosses()} disabled={generatingCrosses}>{generatingCrosses ? <><span className="button-loader" />Generando...</> : 'Generar con IA'}</button><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}<CrossesIndex crosses={crosses} filter={crossFilter} onFilter={setCrossFilter} loading={loadingCrosses} error={crossError} generateError={generateCrossError} generating={generatingCrosses} openCrossId={openCrossId} onToggleOpen={setOpenCrossId} onEdit={openEditCross} onDelete={removeCross} /></section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}</section>}
 
 function CrossModal({ cross, draft, setDraft, saving, error, onSubmit, onClose }: { cross: StrategicCross; draft: { strategy: string }; setDraft: React.Dispatch<React.SetStateAction<{ strategy: string }>>; saving: boolean; error: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const crossType = cross.crossType
@@ -987,43 +1000,132 @@ const priorityBandRanges: Record<string, string> = { immediate: '4.00 – 5.00',
    ============================================ */
 
 /**
- * Los cruces ya son StrategicCross con `origin`, asi que esta seccion solo los agrupa y los lee: no
- * crea, no edita y no inventa cruces. Reutiliza las mismas tarjetas y etiquetas que la matriz DOFA.
+ * Índice de cruces: los que creó la persona y los que propuso la IA, cada uno una sola vez.
  *
- * Esta pantalla es la segunda mitad del flujo: aqui solo se leen los cruces que propuso la IA. Los
- * del usuario ya se=listaron en la matriz DOFA y no se repiten, asi que `isUserCross` deja fuera esta
- * lista tanto los `USER` como los `BOTH`, que tambien son del usuario.
+ * `isUserCross` ya cubre USER y BOTH, así que BOTH cae en el grupo del usuario y conserva su badge
+ * "Usuario + IA" de `crossOriginLabels`; el servidor además promueve a BOTH el cruce que la IA propone
+ * sobre un par que ya existía, de modo que ese cruce nunca se muestra dos veces. Los KPIs se derivan
+ * siempre de la lista completa y no del filtro: el filtro es una decisión de lectura, no un recorte
+ * de los datos, así que un conteo nunca puede depender de qué se esté mirando.
  */
-function AiStrategicCrosses({ crosses, loading, error, onBackToMatrix }: { crosses: StrategicCross[]; loading: boolean; error: string; onBackToMatrix: () => void }) {
-  // Se deriva de la misma lista de StrategicCross que alimenta la matriz DOFA: no hay segunda fuente.
+function CrossesIndex({ crosses, filter, onFilter, loading, error, generateError, generating, openCrossId, onToggleOpen, onEdit, onDelete }: {
+  crosses: StrategicCross[]
+  filter: CrossType | 'ALL'
+  onFilter: (value: CrossType | 'ALL') => void
+  loading: boolean
+  error: string
+  generateError: string
+  generating: boolean
+  openCrossId: string | null
+  onToggleOpen: (crossId: string) => void
+  onEdit: (cross: StrategicCross) => void
+  onDelete: (cross: StrategicCross) => void
+}) {
+  const userCrosses = crosses.filter(isUserCross)
   const aiCrosses = crosses.filter((cross) => !isUserCross(cross))
-  if (loading) return <section className="diag-card diag-section crosses-section"><div className="inline-loading"><span className="loader" />Cargando cruces...</div></section>
-  if (error) return <section className="diag-card diag-section crosses-section"><div className="form-error" role="alert">{error}</div></section>
+  const countByType: Record<CrossType, number> = { FO: 0, DO: 0, FA: 0, DA: 0 }
+  for (const cross of crosses) countByType[cross.crossType] += 1
+  const matches = (cross: StrategicCross) => filter === 'ALL' || cross.crossType === filter
+  const groups = [
+    { key: 'user', title: 'Cruces creados por el usuario', note: 'Los que combinaste en la matriz. Puedes editarlos o eliminarlos.', items: userCrosses.filter(matches) },
+    { key: 'ai', title: 'Cruces sugeridos por IA', note: 'Los que propuso la IA a partir de los mismos factores. Se actualizan al volver a generarlos.', items: aiCrosses.filter(matches) },
+  ]
+  const visibleGroups = groups.filter((group) => group.items.length > 0)
+  const typeFilters = crossFilterTabs.filter((tab) => tab.value !== 'ALL')
   return (
-    <section className="diag-card diag-section crosses-section">
-      <div className="diag-section-head">
-        <span className="diag-step-chip crosses-chip" aria-hidden="true">&#x26AF;</span>
-        <div><h3>CRUCES ESTRATÉGICOS GENERADOS POR LA IA</h3><p>Las combinaciones de factores que la IA propuso a partir de este análisis estratégico.</p></div>
-        <div className="crosses-head-actions"><span className="cross-count">{aiCrosses.length} cruces</span></div>
+    <>
+      <div className="crosses-kpis">
+        <div className="crosses-kpi-lead">
+          <strong>{crosses.length}</strong>
+          <span>Total de cruces</span>
+        </div>
+        <div className="crosses-kpi-origin">
+          <span className="crosses-kpi-cell"><b>{userCrosses.length}</b>Del usuario</span>
+          <span className="crosses-kpi-cell"><b>{aiCrosses.length}</b>Sugeridos por IA</span>
+        </div>
+        <div className="crosses-kpi-types">
+          {typeFilters.map((tab) => {
+            const value = tab.value as CrossType
+            return <button type="button" key={value} className={`crosses-kpi-type ${value.toLowerCase()}${filter === value ? ' active' : ''}`} onClick={() => onFilter(filter === value ? 'ALL' : value)} aria-pressed={filter === value}><b>{countByType[value]}</b><span>{value}</span></button>
+          })}
+        </div>
       </div>
-      {aiCrosses.length === 0
-        ? <EmptyState compact title="La IA no propuso cruces" text="Los cruces que crees tú en la matriz DOFA ya están guardados; cuando la IA proponga alguno para estos factores aparecerá aquí." action={<button type="button" className="button secondary small-button" onClick={onBackToMatrix}>Ir a la matriz DOFA</button>} />
-        : <div className="crosses-list">{aiCrosses.map((cross) => (
-            <article className="cross-card" key={cross.id} data-cross-id={cross.id}>
-              <div className="cross-card-head">
-                <span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span>
-                <span className="cross-combo">{crossTypeCombos[cross.crossType]}</span>
-                <span className="cross-origin">{crossOriginIcons[cross.origin]} {crossOriginLabels[cross.origin]}</span>
-                <span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span>
-              </div>
-              <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p>
-              <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>
-              {cross.strategy
-                ? <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>
-                : <p className="cross-strategy"><b>Estrategia:</b> Sin estrategia escrita en este cruce.</p>}
-            </article>
-          ))}</div>}
-    </section>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {generateError && <div className="form-error" role="alert">{generateError}</div>}
+      {loading
+        ? <div className="inline-loading"><span className="loader" />Cargando cruces...</div>
+        : <div className="crosses-tabs">{crossFilterTabs.map((tab) => <button type="button" key={tab.value} className={`cross-filter-tab${filter === tab.value ? ' active' : ''}`} onClick={() => onFilter(tab.value)} aria-pressed={filter === tab.value}>{tab.label}</button>)}</div>}
+      {loading ? null : crosses.length === 0
+        ? <EmptyState compact title="Todavía no hay cruces" text={generating ? 'La IA está buscando combinaciones entre tus factores.' : 'Combina dos factores en la matriz o pídele a la IA que proponga cruces para ellos.'} />
+        : visibleGroups.length === 0
+          ? <EmptyState compact title={`Sin cruces de tipo ${filter}`} text="Prueba otro filtro o genera cruces nuevos con la IA." />
+          : <div className="crosses-groups">{visibleGroups.map((group) => (
+              <section className="crosses-group" key={group.key} aria-label={group.title}>
+                <div className="crosses-group-head">
+                  <h4>{group.title}</h4>
+                  <span className="cross-count">{group.items.length}</span>
+                  <p>{group.note}</p>
+                </div>
+                <div className="crosses-list">
+                  {group.items.map((cross) => (
+                    <CrossCard key={cross.id} cross={cross} open={openCrossId === cross.id} onToggle={() => onToggleOpen(cross.id)} onEdit={onEdit} onDelete={onDelete} />
+                  ))}
+                </div>
+              </section>
+            ))}</div>}
+    </>
+  )
+}
+
+/**
+ * La tarjeta es la misma en los dos grupos. El origen decide si la persona puede tocarla: `isUserCross`
+ * cubre USER y BOTH, que también son suyos, y lo que propuso la IA queda en solo lectura. "Ver cruce"
+ * no abre una vista aparte: despliega dentro de la tarjeta los datos que el cruce ya traía y la
+ * tarjeta no mostraba, es decir la lectura de la IA cuando existe, y la prioridad y las fechas siempre.
+ */
+function CrossCard({ cross, open, onToggle, onEdit, onDelete }: { cross: StrategicCross; open: boolean; onToggle: () => void; onEdit: (cross: StrategicCross) => void; onDelete: (cross: StrategicCross) => void }) {
+  const editable = isUserCross(cross)
+  const analysis = cross.aiAnalysis
+  const priority = cross.priority ?? analysis?.priority ?? null
+  const dateFormat: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' }
+  return (
+    <article className={`cross-card${open ? ' open' : ''}`} data-cross-id={cross.id}>
+      <div className="cross-card-head">
+        <span className={`cross-type-chip ${cross.crossType.toLowerCase()}`}>{cross.crossType}</span>
+        <span className="cross-combo">{crossTypeCombos[cross.crossType]}</span>
+        <span className={`cross-origin ${cross.origin.toLowerCase()}`}><span aria-hidden="true">{crossOriginIcons[cross.origin]}</span> {crossOriginLabels[cross.origin]}</span>
+        <span className="cross-created">#{cross.id.slice(-6).toUpperCase()}</span>
+      </div>
+      <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor1.type]}</span>{cross.factor1.description}</p>
+      <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[cross.factor2.type]}</span>{cross.factor2.description}</p>
+      {cross.strategy
+        ? <p className="cross-strategy"><b>Estrategia:</b> {cross.strategy}</p>
+        : <p className="cross-strategy empty"><b>Estrategia:</b> Sin estrategia escrita en este cruce.</p>}
+      <div className="cross-actions">
+        <button type="button" className="cross-view-toggle" onClick={onToggle} aria-expanded={open}>{open ? 'Ocultar detalle' : 'Ver cruce'}</button>
+        {editable && <button type="button" className="button secondary small-button" onClick={() => onEdit(cross)}>Editar</button>}
+        {editable && <button type="button" className="button danger small-button" onClick={() => onDelete(cross)}>Eliminar</button>}
+      </div>
+      {open && (
+        <div className="cross-detail">
+          <dl className="cross-detail-meta">
+            <div><dt>Origen</dt><dd>{crossOriginLabels[cross.origin]}</dd></div>
+            <div><dt>Prioridad</dt><dd>{priority ? crossPriorityLabels[priority] : 'Sin valorar'}</dd></div>
+            <div><dt>Creado</dt><dd>{new Date(cross.createdAt).toLocaleDateString('es-CO', dateFormat)}</dd></div>
+            <div><dt>Actualizado</dt><dd>{new Date(cross.updatedAt).toLocaleDateString('es-CO', dateFormat)}</dd></div>
+          </dl>
+          {analysis
+            ? <>
+                <p className="cross-detail-note"><b>Por qué importa.</b> {analysis.relevance}</p>
+                <p className="cross-detail-note"><b>Impacto esperado.</b> {analysis.expectedImpact}</p>
+                {analysis.risks.length > 0 && <div className="cross-detail-block"><h5>Riesgos</h5><ul>{analysis.risks.map((risk) => <li key={risk}>{risk}</li>)}</ul></div>}
+                {analysis.opportunities.length > 0 && <div className="cross-detail-block"><h5>Oportunidades</h5><ul>{analysis.opportunities.map((opportunity) => <li key={opportunity}>{opportunity}</li>)}</ul></div>}
+                {analysis.recommendation && <p className="cross-detail-note"><b>Recomendación de la IA.</b> {analysis.recommendation}</p>}
+              </>
+            : <p className="cross-detail-note">Creaste este cruce a mano, así que todavía no tiene lectura de la IA. Al generar cruces con la IA puede aparecer.</p>}
+        </div>
+      )}
+    </article>
   )
 }
 
@@ -1122,7 +1224,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
         {strategy.origin && <span className="cross-origin"><span aria-hidden="true">{crossOriginIcons[strategy.origin]}</span> {crossOriginLabels[strategy.origin]}</span>}
         {band
           ? <span className={`weighting-band ${band.tone}`}>{band.label}</span>
-          : <span className="weighting-band neutral">Pendiente de valoración</span>}
+          : <span className="weighting-band neutral">Pendiente de ponderación</span>}
         <span className={`swz-score${strategy.weighting ? '' : ' pending'}`}>
           <span className="swz-score-value">{strategy.weighting ? strategy.weighting.weightedScore.toFixed(2) : '—'}</span>
           <span className="weighting-score-max">/5</span>
@@ -1242,16 +1344,32 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
   const [errors, setErrors] = useState<Record<string, string>>({})
   // Los selectores siempre muestran lo que devolvió el servidor; lo local solo existe mientras se edita.
   useEffect(() => { setDrafts(Object.fromEntries(strategies.map((strategy) => [strategy.id, strategy.weighting ? criteriaOfStrategy(strategy.weighting) : neutralWeightingCriteria]))) }, [strategies])
-  const valued = useMemo(() => strategies.filter((strategy) => strategy.weighting), [strategies])
-  const pending = useMemo(() => strategies.filter((strategy) => !strategy.weighting), [strategies])
+  /**
+   * Aceptación real de cada origen, sin inventar ningún estado nuevo:
+   *  - CHECKY: `CheckyMessage.status` es PENDING | ACCEPTED | REJECTED. El endpoint solo trae las
+   *    ACCEPTED (`server/app.ts`), así que una sugerencia pendiente o rechazada nunca llega aquí.
+   *  - STRATEGIC_CROSS: `StrategicCross` no tiene columna `status`. El cruce existe porque alguien
+   *    lo creó, y cuando nace de Checky el cruce y su `status: 'ACCEPTED'` se escriben juntos en la
+   *    misma transacción, de modo que no hay cruces pendientes.
+   *  - AI_ANALYSIS: `AIAnalysis` no tiene columna `status` y es uno por diagnóstico (upsert), así que
+   *    el análisis guardado es el vigente, no uno descartado.
+   * Por eso lo que llega ya está aceptado, y la aceptación no se deduce de `weighting`,
+   * `weightedScore` ni `weightingBand`. Aquí se dibujan las aceptadas enteras: las que ya tienen
+   * ponderación, con su score y su banda del backend, y las que aún no, para que el usuario pueda
+   * valuedorlas. Lo que no aparece en esta pantalla es lo no aceptado, y el endpoint ya lo excluye.
+   */
+  const accepted = strategies
+  const valued = useMemo(() => accepted.filter((strategy) => strategy.weighting), [accepted])
+  // Aceptada y todavía sin ponderar: se muestran con sus cinco selectores, no se esconden.
+  const pending = useMemo(() => accepted.filter((strategy) => !strategy.weighting), [accepted])
   // Cada valorada va al grupo de la banda que le dio el backend, sin recalcularla aquí.
   const groups = useMemo(() => weightingBands.map((band) => ({
     band,
     items: valued.filter((strategy) => bandMeta(strategy.weightingBand)?.tone === band.tone).sort((a, b) => (b.weighting?.weightedScore ?? 0) - (a.weighting?.weightedScore ?? 0)),
   })), [valued])
   const bySource = useMemo(() => (Object.keys(strategySourceVisuals) as StrategySource[])
-    .map((source) => ({ source, total: strategies.filter((strategy) => strategy.source === source).length, valued: strategies.filter((strategy) => strategy.source === source && strategy.weighting).length }))
-    .filter((entry) => entry.total > 0), [strategies])
+    .map((source) => ({ source, total: accepted.filter((strategy) => strategy.source === source).length, valued: accepted.filter((strategy) => strategy.source === source && strategy.weighting).length }))
+    .filter((entry) => entry.total > 0), [accepted])
   async function saveValuation(strategy: DiagnosticStrategy, criteria: CrossWeightingCriteria) {
     if (states[strategy.id] === 'saving' || !canValue) return
     setStates((current) => ({ ...current, [strategy.id]: 'saving' }))
@@ -1279,15 +1397,17 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
       onSave: () => void saveValuation(strategy, drafts[strategy.id] ?? neutralWeightingCriteria),
     }
   }
-  const progress = strategies.length > 0 ? Math.round((valued.length / strategies.length) * 100) : 0
+  // El denominador es el total de aceptadas, así que "pendientes de ponderación" nunca se cuela en
+  // el total ni en el avance: son justo lo que falta por valorar de lo ya aceptado.
+  const progress = accepted.length > 0 ? Math.round((valued.length / accepted.length) * 100) : 0
   return (
     <section className="diag-card diag-section swz-section">
       <div className="diag-section-head">
         <span className="diag-step-chip weighting-chip" aria-hidden="true">⚖</span>
-        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora con cinco criterios las estrategias del análisis con IA, de los cruces y de Checky.</p></div>
+        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora con cinco criterios las estrategias aceptadas del análisis con IA, de los cruces y de Checky.</p></div>
         <div className="crosses-head-actions">
           <button type="button" className="button secondary small-button" onClick={() => void reload()} disabled={loading}>↻ Actualizar</button>
-          <span className="cross-count">{valued.length}/{strategies.length} valore{valued.length === 1 ? '' : 's'}</span>
+          <span className="cross-count">{valued.length}/{accepted.length} pobre{valued.length === 1 ? '' : 's'}</span>
         </div>
       </div>
       <div className="weighting-scale">
@@ -1296,14 +1416,14 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
         <span className="weighting-scale-note">Ponderado de 1 a 5 y banda calculados por el servidor</span>
       </div>
       {loadError && <div className="form-error" role="alert">{loadError}</div>}
-      {loading ? <div className="inline-loading"><span className="loader" />Cargando estrategias...</div> : strategies.length === 0 ? (
-        <EmptyState icon="◎" title="Sin estrategias que valorar" text="Genera el análisis con IA o crea cruces en la matriz DOFA: las estrategias aparecerán aquí para ponderarlas." />
+      {loading ? <div className="inline-loading"><span className="loader" />Cargando estrategias...</div> : accepted.length === 0 ? (
+        <EmptyState icon="◎" title="No hay estrategias aceptadas para ponderar" text="Acepta sugerencias de Checky, crea cruces o genera el análisis con IA: las estrategias aceptadas aparecerán aquí para ponderarlas." />
       ) : (
         <>
           <div className="swz-summary">
-            <div className="swz-summary-card total"><span className="swz-summary-icon" aria-hidden="true">◎</span><div><span>Estrategias totales</span><strong>{strategies.length}</strong></div></div>
-            <div className="swz-summary-card valued"><span className="swz-summary-icon" aria-hidden="true">✓</span><div><span>Valoradas</span><strong>{valued.length}</strong></div></div>
-            <div className="swz-summary-card pending"><span className="swz-summary-icon" aria-hidden="true">◦</span><div><span>Pendientes</span><strong>{pending.length}</strong></div></div>
+            <div className="swz-summary-card total"><span className="swz-summary-icon" aria-hidden="true">◎</span><div><span>Estrategias aceptadas</span><strong>{accepted.length}</strong></div></div>
+            <div className="swz-summary-card valued"><span className="swz-summary-icon" aria-hidden="true">✓</span><div><span>Ponderadas</span><strong>{valued.length}</strong></div></div>
+            <div className="swz-summary-card pending"><span className="swz-summary-icon" aria-hidden="true">◦</span><div><span>Pendientes de ponderación</span><strong>{pending.length}</strong></div></div>
             <div className="swz-summary-card progress"><span className="swz-summary-icon" aria-hidden="true">⚖</span><div><span>Avance</span><strong>{progress}%</strong></div><div className="swz-progress"><span style={{ width: `${progress}%` }} /></div></div>
           </div>
           <div className="swz-sources">
@@ -1314,7 +1434,7 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
           </div>
           <div className="swz-counters">
             {groups.map(({ band, items }) => <span className={`swz-counter ${band.tone}`} key={band.tone}><b>{items.length}</b><span>{band.label}</span><small>{priorityBandRanges[band.tone]}</small></span>)}
-            <span className="swz-counter pending"><b>{pending.length}</b><span>Pendiente</span><small>Sin ponderar</small></span>
+            {pending.length > 0 && <span className="swz-counter pending"><b>{pending.length}</b><span>Pendiente</span><small>Sin ponderar</small></span>}
           </div>
           <div className="priority-groups swz-groups">
             {groups.filter((group) => group.items.length > 0).map(({ band, items }) => (
@@ -1327,10 +1447,12 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
                 <div className="priority-group-body">{items.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
               </section>
             ))}
+            {/* Aceptadas y sin ponderar: se muestran con sus cinco selectores para poder valorarlas.
+                El nombre evita confundirlas con lo que todavía no se ha aceptado, que no llega aquí. */}
             {pending.length > 0 && (
-              <section className="priority-group pending" aria-label="Estrategias pendientes de valoración">
+              <section className="priority-group pending" aria-label="Estrategias aceptadas pendientes de ponderación">
                 <header className="priority-group-head">
-                  <h4>Pendiente de valoración</h4>
+                  <h4>Pendiente de ponderación</h4>
                   <span className="priority-group-range">Sin ponderar</span>
                   <span className="priority-group-count">{pending.length}</span>
                 </header>
@@ -1534,7 +1656,6 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
             : <button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : '✨ Analizar con IA →'}</button>}
         </div>
         {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
-        <div className="diag-next"><button className="button secondary" onClick={() => setDiagStage('recomendaciones')}>Saltar a Recomendaciones →</button></div>
       </section>
       {activeFlow === 'analisis' && (
         <section className="diag-stage active">
@@ -1547,9 +1668,6 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           {analysis
             ? <AIAnalysisPanel analysis={analysis} loading={analysisLoading} items={diagnostic.swotAnalysis?.items ?? []} />
             : <div className="diag-card ai-loading"><span className="loader" />Generando análisis...</div>}
-          {/* Los cruces de la IA se leen aqui, debajo de las inferencias. Solo se montan si el analisis
-              ya existe, para que la seccion nunca aparezca sin el analisis que la produjo delante. */}
-          {analysis && <AiStrategicCrosses crosses={crosses} loading={loadingCrosses} error={crossError} onBackToMatrix={() => goToFlowStep('dofa')} />}
           <div className="diag-nav">
             <button className="button secondary" onClick={() => goToFlowStep('dofa')}>← Volver a Matriz DOFA</button>
             <button className="button primary" onClick={() => goToFlowStep('checky')}>Consultar a Checky →</button>
@@ -1734,14 +1852,6 @@ function aiDofaCounts(items: SWOTItem[]) {
   return swotTypes.map((type) => ({ key: type.value, label: type.label, count: items.filter((item) => item.type === type.value).length }))
 }
 
-function aiDofaSymbol(type: SWOTType) { return type === 'STRENGTH' ? '+' : type === 'WEAKNESS' ? '−' : type === 'OPPORTUNITY' ? '↗' : '!' }
-
-/** Contexto compacto: cuenta real de factores por cuadrante, sin dato derivado. */
-function AiDofaKpis({ items }: { items: SWOTItem[] }) {
-  if (!items.length) return null
-  return <div className="ai-kpis">{aiDofaCounts(items).map((entry) => <div className={`ai-kpi ${entry.key.toLowerCase()}`} key={entry.key}><span className="ai-kpi-icon" aria-hidden="true">{aiDofaSymbol(entry.key)}</span><div><strong>{entry.count}</strong><span>{entry.label}</span></div></div>)}</div>
-}
-
 /** Barra proporcional: reparte solo la cantidad real de factores de cada cuadrante. */
 function AiDofaBalance({ items }: { items: SWOTItem[] }) {
   const counts = aiDofaCounts(items)
@@ -1750,24 +1860,14 @@ function AiDofaBalance({ items }: { items: SWOTItem[] }) {
   return <div className="ai-doqa"><div className="ai-doqa-head"><b>Matriz DOFA</b><span>{total} factores</span></div><div className="ai-doqa-bar">{counts.map((entry) => <i className={entry.key.toLowerCase()} key={entry.key} style={{ flexGrow: entry.count }} title={`${entry.label}: ${entry.count}`} />)}</div><ul className="ai-doqa-legend">{counts.map((entry) => <li className={entry.key.toLowerCase()} key={entry.key}><strong>{entry.count}</strong> {entry.label}</li>)}</ul></div>
 }
 
-function AiExecSummary({ text, items }: { text: string; items: SWOTItem[] }) {
-  const paragraphs = aiTextParagraphs(text)
-  return (
-    <article className="ai-exec-summary">
-      <header className="ai-card-head">
-        <span className="ai-exec-icon" aria-hidden="true">✦</span>
-        <div className="ai-card-headings">
-          <h4>Resumen ejecutivo</h4>
-          <p className="ai-card-subtitle">Lectura de alto nivel de la situación estratégica</p>
-        </div>
-        <span className="ai-generated-badge">Generado con IA</span>
-      </header>
-      <div className="ai-card-body">
-        {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-      </div>
-      <AiDofaKpis items={items} />
-    </article>
-  )
+type AIFinding = { finding: string; basis: 'FACT' | 'INFERENCE' }
+
+/** Cada hallazgo trae su origen en `basis`: un hecho se apoya en los datos del diagnóstico y una
+ *  inferencia es la lectura que la IA hace sobre ellos. La tarjeta lo dice con palabras; el color
+ *  solo refuerza. Aquí no se inventa ni se reordena nada: se muestran los hallazgos tal como llegan. */
+const aiBasisCopy: Record<AIFinding['basis'], { label: string; note: string }> = {
+  FACT: { label: 'Hecho', note: 'Apoyado en los datos del análisis.' },
+  INFERENCE: { label: 'Inferencia', note: 'Interpretación de la IA sobre esos datos.' },
 }
 
 function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
@@ -1780,13 +1880,13 @@ function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
           <h4>Análisis estratégico</h4>
           <p className="ai-card-subtitle">Lectura estratégica de la situación actual</p>
         </div>
+        <span className="ai-generated-badge">Generado con IA</span>
       </header>
-      <div className="ai-card-body ai-reading-column">
-        {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-      </div>
+      {paragraphs.length > 0 && <div className="ai-reading">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>}
       <AiDofaBalance items={items} />
     </article>
-  )}
+  )
+}
 
 /** Divide el texto de la inferencia en un resumen breve y su resto, sin alterar el contenido. */
 function splitInference(text: string, limit = 120): { brief: string; rest: string } {
@@ -1797,31 +1897,54 @@ function splitInference(text: string, limit = 120): { brief: string; rest: strin
   return { brief: `${head}…`, rest: clean.slice(head.length).trim() }
 }
 
-function AiInferenceCard({ index, finding, basis }: { index: number; finding: string; basis: 'FACT' | 'INFERENCE' }) {
+function AiFindingCard({ finding, basis }: AIFinding) {
   const [open, setOpen] = useState(false)
   const { brief, rest } = splitInference(finding)
-  const isFact = basis === 'FACT'
+  const expandable = rest.length > 0
   return (
-    <article className={`ai-finding${open ? ' open' : ''}`}>
-      <button type="button" className="ai-finding-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="ai-finding-num">{String(index + 1).padStart(2, '0')}</span>
-        <span className="ai-finding-content">
-          <span className={`ai-finding-tag ${isFact ? 'fact' : 'inference'}`}>{isFact ? 'Hecho' : 'Inferencia'}</span>
-          <p className="ai-finding-summary">{brief}</p>
-        </span>
-        <span className="ai-finding-chevron" aria-hidden="true">▾</span>
-      </button>
-      {rest && <div className="ai-finding-body"><div><p className="ai-finding-detail">{rest}</p></div></div>}
+    <article className={`ai-finding ${basis.toLowerCase()}${open ? ' open' : ''}`}>
+      <div className="ai-finding-head">
+        <span className={`ai-finding-tag ${basis.toLowerCase()}`}>{aiBasisCopy[basis].label}</span>
+        <p className="ai-finding-summary">{brief}</p>
+        {expandable && <button type="button" className="link-toggle ai-finding-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Ocultar' : 'Ver completo'}<span className="ai-finding-chevron" aria-hidden="true">▾</span></button>}
+      </div>
+      {expandable && <div className="ai-finding-body"><div><p className="ai-finding-detail">{rest}</p></div></div>}
     </article>
   )
 }
 
-function AiFindings({ findings, title = 'Inferencias' }: { findings: Array<{ basis: 'FACT' | 'INFERENCE'; finding: string }>; title?: string }) {
-  return <section className="ai-section ai-findings"><h4>{title}</h4>{findings.length === 0 ? <p className="ai-empty">Sin {title.toLowerCase()}.</p> : <div className="ai-findings-list">{findings.map((item, index) => <AiInferenceCard key={`${item.finding}-${index}`} index={index} finding={item.finding} basis={item.basis} />)}</div>}</section>}
+function AiFindingGroup({ basis, findings }: { basis: AIFinding['basis']; findings: AIFinding[] }) {
+  if (findings.length === 0) return null
+  const copy = aiBasisCopy[basis]
+  return (
+    <section className={`ai-group ${basis.toLowerCase()}`} aria-label={copy.label}>
+      <div className="ai-group-head">
+        <h4>{copy.label}</h4>
+        <span className="ai-group-count">{findings.length}</span>
+        <p>{copy.note}</p>
+      </div>
+      <div className="ai-group-list">
+        {findings.map((item, index) => <AiFindingCard key={`${item.finding}-${index}`} finding={item.finding} basis={item.basis} />)}
+      </div>
+    </section>
+  )
+}
+
+/** Aquí solo se leen las inferencias. Los elementos que la IA marca como FACT son la lectura
+ *  cuantitativa de la DOFA y de la ponderación, datos que ya tienen su propia sección: repetidos
+ *  aquí solo devolvían la lista de factores. El payload sigue trayendo ambos y no se toca; lo que
+ *  cambia es qué se pinta. */
+function AiFindings({ findings }: { findings: AIFinding[] }) {
+  const inferences = findings.filter((item) => item.basis === 'INFERENCE')
+  if (inferences.length === 0) return <p className="ai-empty">Sin inferencias en este análisis.</p>
+  return (
+    <div className="ai-findings">
+      <AiFindingGroup basis="INFERENCE" findings={inferences} />
+    </div>
+  )
+}
 
 function AIAnalysisPanel({ analysis, loading, items = [] }: { analysis: AIAnalysis; loading: boolean; items?: SWOTItem[] }) {
-  // `keyFindings` mezcla hechos e inferencias; en esta pantalla solo se leen las inferencias.
-  const inferences = analysis.keyFindings.filter((finding) => finding.basis === 'INFERENCE')
   return (
     <section className="ai-analysis-panel">
       <div className="ai-panel-heading">
@@ -1836,9 +1959,8 @@ function AIAnalysisPanel({ analysis, loading, items = [] }: { analysis: AIAnalys
         <span className="ai-badge">IA</span>
       </div>
       {loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}
-      <AiExecSummary text={analysis.executiveSummary} items={items} />
       <AiDiagnosis text={analysis.diagnosis} items={items} />
-      <AiFindings findings={inferences} />
+      <AiFindings findings={analysis.keyFindings} />
     </section>
   )
 }
@@ -1904,8 +2026,10 @@ function checkyEvidenceRefs(evidenceIds: string[], items: SWOTItem[], crosses: S
     if (item) return { kind: 'factor', id, label: `${swotTypeLabels[item.type]}: ${item.description}`, type: item.type }
     const cross = crosses.find((candidate) => candidate.id === id)
     if (cross) {
-      const short = `#${cross.id.slice(-6).toUpperCase()}`
-      return { kind: 'cross', id, label: `Cruce ${cross.crossType} · ${short}`, crossType: cross.crossType, short }
+      // El id corto queda como dato técnico en el `title` para quien necesite localizarlo, pero lo
+      // que se lee es la combinación: "Debilidad: X + Oportunidad: Y" dice más que "Cruce DO · #A1B2C3".
+      const label = `${swotTypeLabels[cross.factor1.type]}: ${cross.factor1.description} + ${swotTypeLabels[cross.factor2.type]}: ${cross.factor2.description}`
+      return { kind: 'cross', id, label, crossType: cross.crossType, short: `#${cross.id.slice(-6).toUpperCase()}` }
     }
     return { kind: 'unknown', id, label: 'Referencia no disponible' }
   })}
@@ -1935,7 +2059,151 @@ function orderCheckyFactors(factors: CheckyFactorRef[]): CheckyFactorRef[] {
   if (factors.length < 2) return factors
   const internal = factors.find((factor) => factor.type === 'STRENGTH' || factor.type === 'WEAKNESS')
   const external = factors.find((factor) => factor.type === 'OPPORTUNITY' || factor.type === 'THREAT')
-  return internal && external ? [internal, external] : factors.slice(0, 2)}/** Extrae la estrategia solo si el propio detalle la delimita; nunca la inventa. */
+  return internal && external ? [internal, external] : factors.slice(0, 2)}
+
+/**
+ * Checky escribe su prosa con las abreviaturas de la matriz (W4, O3, FO…) porque es como el modelo
+ * nombró los factores, pero a quien no conoce la DOFA no le dicen nada. Aquí se reescribe solo la
+ * capa visible: el texto del modelo se conserva intacto en la base y lo que se cambia es qué se
+ * muestra. Cada código se cambia por el nombre completo del factor cuando se puede resolver, y si
+ * no se puede, se retira en lugar de dejarlo suelto.
+ *
+ * `factorByCode` se construye con el mismo orden que usa la matriz (por tipo y fecha), de modo que
+ * W4 es la cuarta debilidad registrada. Es una convención de lectura, no un dato del contrato: si
+ * una abreviatura no resuelve a un factor real, no se inventa a cuál se refiere.
+ */
+const checkyCodeToken = /\b([FSWOT])(\d{1,3})\b/gi
+
+/** ¿El texto trae abreviaturas de factor? Se prueba con una copia sin estado para no depender del
+ *  `lastIndex` que comparte con el reemplazo global. */
+function checkyHasCode(text: string): boolean {
+  return /\b[FSWOT]\d{1,3}\b/i.test(text)
+}
+
+function buildCheckyFactorCodes(items: SWOTItem[]): Map<string, SWOTItem> {
+  const byCode = new Map<string, SWOTItem>()
+  for (const type of swotTypes) {
+    const bucket = items.filter((item) => item.type === type.value)
+    bucket.forEach((item, index) => {
+      // F y S son la misma cuadrante: la abreviatura cambia, el factor no.
+      for (const letter of type.value === 'STRENGTH' ? ['F', 'S'] : [swotTypeShortLetters[type.value]]) {
+        byCode.set(`${letter}${index + 1}`, item)
+      }
+    })
+  }
+  return byCode
+}
+
+const swotTypeShortLetters: Record<SWOTType, string> = { STRENGTH: 'F', WEAKNESS: 'W', OPPORTUNITY: 'O', THREAT: 'T' }
+
+/** El tipo de cruce ya se muestra como badge en la tarjeta, así que en la prosa sobra. */
+const checkyCrossTypeToken = /\b(DO|FO|FA|DA)\b/g
+/** Marcador para un código que no se pudo resolver, para poder borrar también su separador. */
+const checkyDropped = '\u0001'
+/**
+ * Identificadores internos. El prompt pide de forma explícita "qué factores relaciona y con qué ids",
+ * así que Checky escribe ids reales en su prosa; son trazabilidad, no texto para el usuario. Cubre
+ * cuid2 de Prisma, UUID, refs `ai:<id>:FO:0` y el hash sha256 con el que se cita una estrategia.
+ */
+const checkyInternalId =
+  /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|cm[a-z]{2,}[0-9]{6,}|ai:[A-Za-z0-9]+:[A-Z]{1,3}:\d+|strategyRef\.?strat:?[0-9a-f]*|strat:[0-9a-f]+|[0-9a-f]{40,64})\b/gi
+
+/**
+ * Sustituye abreviaturas por la descripción real del factor y retira identificadores y códigos que no
+ * tienen lectura para el usuario. Un código que no resuelve a un factor del diagnóstico no se
+ * inventa: se marca para poder borrar también el separador que lo unía, de modo que "W7-O9"
+ * desaparezca entero y no deje un guion colgando en medio de la frase.
+ */
+function expandCheckyCodes(text: string, byCode: Map<string, SWOTItem>): string {
+  return text
+    .replace(checkyCodeToken, (_match, letter: string, digits: string) => {
+      const item = byCode.get(`${letter.toUpperCase()}${digits}`)
+      return item ? item.description : checkyDropped
+    })
+    .replace(checkyInternalId, '')
+    .replace(checkyCrossTypeToken, '')
+    .replace(new RegExp(`\\s*[-–—+/]\\s*${checkyDropped}`, 'g'), checkyDropped)
+    .replace(new RegExp(`${checkyDropped}\\s*[-–—+/]\\s*`, 'g'), checkyDropped)
+    .replace(new RegExp(`${checkyDropped}\\s+[yeo]\\s+${checkyDropped}`, 'gi'), checkyDropped)
+    .replace(new RegExp(`${checkyDropped}[\\s,;:.()+]*`, 'g'), '')
+    .replace(new RegExp(checkyDropped, 'g'), '')
+    .replace(/\(\s*\)/g, '')
+    .replace(/\s*\+\s*(?=$|[.,;:)]|\s*$)/g, '')
+    // Una etiqueta que se quedó sin nada detrás: "Factores:" al final de la frase.
+    .replace(/\b(?:factores?|tipos? de cruce|evidencias?|referencias?)\s*:\s*(?=[.,;:]|\s*$)/gi, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/^[\s,;:]+/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
+/**
+ * Checky precede su prosa con referencias: "Factores: W4 (id) + O3 (id)", "Tipo de cruce: DO",
+ * "Evidencia: 2 factores". "Tipo de cruce", "evidencia" y "referencias" son metadatos que no
+ * aportan nada —el tipo va como badge junto a "Debilidad + Oportunidad" y la evidencia se ve en la
+ * lista de la propia tarjeta—, así que se quitan aunque estén en mitad de una frase. "Relevancia:",
+ * "Dirección:" y "Factores:" sí se conservan: son frases y deben leerse.
+ */
+const checkyMetadataLine = /^\s*(?:tipo de cruce|evidencias?|referencias?)\s*:/i
+const checkyInlineMetadata = /(^|[.;:\s])(?:tipo de cruce|evidencias?|referencias?)\s*:[^.;\n]*[.;]?/gi
+/** Una línea que es solo la enumeración de factores; detrás puede venir una frase que sí explica. */
+const checkyFactorsPrefix = /^\s*factores?\s*:[^.]*?\b[FSWOT]\d{1,3}\b[^.]*\.?/i
+
+function stripCheckyTechnicalLines(text: string): string {
+  return text
+    .replace(checkyInlineMetadata, (_match, lead = '') => (lead.trim() ? lead : ' '))
+    .split('\n')
+    .flatMap((line) => {
+      if (checkyMetadataLine.test(line)) return []
+      if (!checkyFactorsPrefix.test(line)) return [line]
+      const rest = line.replace(checkyFactorsPrefix, '').trim()
+      // Si detrás de la enumeración no queda ni una palabra, la línea era solo una lista de
+      // referencias y se va. "W4 + O3" desaparece; "W4 + O3. La documentación no escala." se queda
+      // con la frase, porque los paréntesis que la acompañan ya son texto legible.
+      const substantive = rest.replace(/\b[FSWOT]\d{1,3}\b/gi, '').replace(/[+\-–—/,.:;()\s]/g, '')
+      return substantive.length >= 3 ? [rest] : []
+    })
+    .join('\n')
+}
+
+/** Texto de Checky listo para leer: sin códigos, sin ids internos y sin líneas de solo referencia. */
+function checkyReadable(text: string, byCode: Map<string, SWOTItem>): string {
+  return expandCheckyCodes(stripCheckyTechnicalLines(text), byCode).trim()
+}
+
+/** La etiqueta de un factor ya trae "Debilidad: Falta de documentación". Aquí solo el texto, porque
+ *  el nombre de la cuadrante se muestra aparte como etiqueta y repetirlo sería leerlo dos veces. */
+function checkyFactorText(ref: CheckyFactorRef): string {
+  const separator = ref.label.indexOf(': ')
+  return separator === -1 ? ref.label : ref.label.slice(separator + 2)
+}
+
+/**
+ * Índice de abreviaturas → factor real, en el mismo orden en que la matriz los muestra. Se calcula
+ * una vez por panel y se pasa a las tarjetas: es lectura, no dato, y por eso vive en la capa de UI.
+ */
+function useCheckyFactorCodes(items: SWOTItem[]): Map<string, SWOTItem> {
+  return useMemo(() => buildCheckyFactorCodes(items), [items])
+}
+
+/**
+ * Encabezado del cruce. Si el modelo ya escribió una frase con verbo de acción se respeta; si el
+ * título vino cargado de abreviaturas, se cambia por la estrategia sugerida, que sí describe la
+ * acción, y en último caso por una frase armada con los dos factores reales. Todos los caminos
+ * pasan por el saneador: un título sin abreviaturas tampoco está libre de ids sueltos.
+ */
+function checkyCrossHeadline(finding: CheckyMessage, factors: CheckyFactorRef[], byCode: Map<string, SWOTItem>): string {
+  const { title } = splitCheckyContent(finding.content)
+  if (title && !checkyHasCode(title)) return checkyReadable(title, byCode) || title
+  const strategyTitle = finding.suggestedStrategyTitle
+  if (strategyTitle) return checkyReadable(strategyTitle, byCode) || strategyTitle
+  const [first, second] = factors
+  if (first && second) return `Relacionar ${swotTypeLabels[first.type].toLowerCase()} con ${swotTypeLabels[second.type].toLowerCase()}`
+  return 'Cruce propuesto por Checky'
+}
+/** Extrae la estrategia solo si el propio detalle la delimita; nunca la inventa. */
 
 function CheckyBasisBadge({ basis }: { basis: CheckyFindingBasis }) {
   const copy = checkyBasisCopy[basis]
@@ -1982,35 +2250,46 @@ function CheckyEvidence({ refs }: { refs: CheckyEvidenceRef[] }) {
     </div>
   )}
 
-function CheckyMissingCrossCard({ finding, refs, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
+function CheckyMissingCrossCard({ finding, refs, byCode, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; byCode: Map<string, SWOTItem>; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
   const [open, setOpen] = useState(false)
-  const { title, detail } = splitCheckyContent(finding.content)
+  const { detail } = splitCheckyContent(finding.content)
   const factors = orderCheckyFactors(refs.filter((ref): ref is CheckyFactorRef => ref.kind === 'factor'))
   const crossType = factors.length === 2 ? crossTypeForPair(factors[0].type, factors[1].type) : null
   // La estrategia llega estructurada desde el backend: no se deduce del texto del hallazgo.
-  const strategyTitle = finding.suggestedStrategyTitle
-  const strategyDescription = finding.suggestedStrategyDescription
+  const strategyTitle = finding.suggestedStrategyTitle ? checkyReadable(finding.suggestedStrategyTitle, byCode) : ''
+  const strategyDescription = finding.suggestedStrategyDescription ? checkyReadable(finding.suggestedStrategyDescription, byCode) : ''
   return (
     <article className="checky-card checky-card-cross">
       <header className="checky-card-head">
         <span className="checky-card-icon" aria-hidden="true">💡</span>
         <div>
           <p className="checky-card-kicker">Posible cruce no explorado</p>
-          <h4>{title}</h4>
+          <h4>{checkyCrossHeadline(finding, factors, byCode)}</h4>
         </div>
       </header>
       <div className="checky-cross-pair">
-        <div className="checky-cross-factor"><span className="checky-cross-role">Factor A</span><p>{factors[0]?.label ?? 'Por confirmar'}</p></div>
-        <span className="checky-cross-plus" aria-hidden="true">+</span>
-        <div className="checky-cross-factor"><span className="checky-cross-role">Factor B</span><p>{factors[1]?.label ?? 'Por confirmar'}</p></div>
+        {factors.length === 2
+          ? <>
+              <div className="checky-cross-factor">
+                <span className={`checky-cross-role ${factors[0].type.toLowerCase()}`}>{swotTypeLabels[factors[0].type]}</span>
+                <p>{checkyFactorText(factors[0])}</p>
+              </div>
+              <span className="checky-cross-plus" aria-hidden="true">+</span>
+              <div className="checky-cross-factor">
+                <span className={`checky-cross-role ${factors[1].type.toLowerCase()}`}>{swotTypeLabels[factors[1].type]}</span>
+                <p>{checkyFactorText(factors[1])}</p>
+              </div>
+            </>
+          : <p className="checky-cross-unknown">Checky no propuso una pareja DOFA válida, así que no se puede decir qué factores combina.</p>}
       </div>
-      <div className="checky-cross-meta">
-        <span className="checky-cross-type-label">Tipo</span>
-        {crossType ? <span className={`cross-type-chip large ${crossType.toLowerCase()}`}>{crossType}</span> : <span className="checky-cross-unknown">Checky no propuso una pareja DOFA válida</span>}
-      </div>
-      <p className="checky-cross-question">¿Por qué podría ser relevante?</p>
-      <p className="checky-card-detail">{detail}</p>
-      {strategyTitle && strategyDescription && (<div className="checky-cross-strategy"><p className="checky-cross-question"><span aria-hidden="true">🎯</span> Estrategia sugerida</p><p className="checky-strategy-title">{strategyTitle}</p><p className="checky-card-detail">{strategyDescription}</p></div>)}
+      {crossType && (
+        <p className="checky-cross-meaning">
+          <span className={`cross-type-chip large ${crossType.toLowerCase()}`} title="Código de la combinación en la matriz DOFA">{crossType}</span>
+          <span>{crossTypeCombos[crossType]}</span>
+        </p>
+      )}
+      {detail && <><p className="checky-cross-question">¿Por qué podría ser relevante?</p><p className="checky-card-detail">{checkyReadable(detail, byCode)}</p></>}
+      {strategyTitle && strategyDescription && (<div className="checky-cross-strategy"><p className="checky-cross-question"><span aria-hidden="true">🎯</span> Estrategia sugerida</p><p className="checky-strategy-title">{strategyTitle}</p><p className="checky-card-detail">{checkyReadable(strategyDescription, byCode)}</p></div>)}
       <p className="checky-cross-note">Al aceptar, el cruce se crea en la matriz DOFA con origen IA y esta sugerencia queda aceptada. Si lo rechazas, no se crea nada.</p>
       <div className="checky-card-foot">
         <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
@@ -2022,21 +2301,21 @@ function CheckyMissingCrossCard({ finding, refs, status, busy, onAccept, onRejec
     </article>
   )}
 
-function CheckyFindingCard({ finding, refs, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
+function CheckyFindingCard({ finding, refs, byCode, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; byCode: Map<string, SWOTItem>; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
   const [open, setOpen] = useState(false)
   const { title, detail } = splitCheckyContent(finding.content)
   return (
     <article className="checky-card">
       <header className="checky-card-head">
         <div>
-          <h4>{title}</h4>
+          <h4>{checkyReadable(title, byCode)}</h4>
           <div className="checky-card-badges">
             <span className={`level-pill ${checkyCategoryVisuals[finding.category!].relevance.toLowerCase()}`} title="Relevancia derivada de la categoría del hallazgo">Relevancia {checkyCategoryVisuals[finding.category!].relevance === 'HIGH' ? 'alta' : checkyCategoryVisuals[finding.category!].relevance === 'MEDIUM' ? 'media' : 'baja'}</span>
             <CheckyStatusBadge status={status} />
           </div>
         </div>
       </header>
-      <p className="checky-card-detail">{detail}</p>
+      <p className="checky-card-detail">{checkyReadable(detail, byCode)}</p>
       <div className="checky-card-foot">
         <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
         <CheckyBasisBadge basis={finding.basis ?? 'INFERENCE'} />
@@ -2131,6 +2410,7 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
       setBusy(false)
     }
   }
+  const factorCodes = useCheckyFactorCodes(items)
   const reply = [...messages].reverse().find((message) => message.role === 'CHECKY' && message.category === null) ?? null
   const suggestions = messages.filter((message) => message.role === 'CHECKY' && message.category !== null)
   const counts = Object.fromEntries(checkyCategoryOrder.map((category) => [category, suggestions.filter((message) => message.category === category).length])) as Record<CheckyCategory, number>
@@ -2162,11 +2442,11 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
           <div>
             <strong>Checky necesita más información para concluir</strong>
             <p>La evidencia registrada no alcanza para algunos de los análisis. Esto es lo que convendría validar con la empresa:</p>
-            <ul>{missing.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+            <ul>{missing.map((entry) => <li key={entry}>{checkyReadable(entry, factorCodes)}</li>)}</ul>
           </div>
         </div>
       )}
-      {hasResults && reply && <p className="checky-reply">{reply.content}</p>}
+      {hasResults && reply && <p className="checky-reply">{checkyReadable(reply.content, factorCodes)}</p>}
       {hasResults && <CheckySummary counts={counts} />}
       {status === 'idle' && !hasResults && (
         <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu análisis estratégico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
@@ -2186,8 +2466,8 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
                   const onAccept = () => void decide(finding, 'ACCEPTED')
                   const onReject = () => void decide(finding, 'REJECTED')
                   return finding.category === 'MISSING_CROSSES'
-                    ? <CheckyMissingCrossCard key={finding.id} finding={finding} refs={refs} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
-                    : <CheckyFindingCard key={finding.id} finding={finding} refs={refs} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
+                    ? <CheckyMissingCrossCard key={finding.id} finding={finding} refs={refs} byCode={factorCodes} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
+                    : <CheckyFindingCard key={finding.id} finding={finding} refs={refs} byCode={factorCodes} status={finding.status ?? 'PENDING'} busy={busy} onAccept={onAccept} onReject={onReject} />
                 })}
               </div>
             </section>

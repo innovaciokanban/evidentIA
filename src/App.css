@@ -467,20 +467,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .cross-new-note { margin-left: auto; color: var(--muted-light); font-size: 11px; }
 .cross-new-factors { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .cross-new-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.swot-summary { margin-top: 4px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
-.swot-summary-head .detail-label { margin-bottom: 12px; color: var(--muted); letter-spacing: .8px; }
-.swot-summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
-.swot-summary-card { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg); transition: transform var(--transition), box-shadow var(--transition); }
-.swot-summary-card:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
-.swot-summary-icon { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; font-size: 13px; font-weight: 700; }
-.swot-summary-card.strength .swot-summary-icon { color: var(--green); background: var(--green-light); }
-.swot-summary-card.weakness .swot-summary-icon { color: var(--amber); background: var(--amber-light); }
-.swot-summary-card.opportunity .swot-summary-icon { color: var(--blue); background: var(--blue-light); }
-.swot-summary-card.threat .swot-summary-icon { color: var(--red); background: var(--red-light); }
-.swot-summary-card.crosses .swot-summary-icon { color: var(--purple); background: var(--purple-light); }
-.swot-summary-card div { min-width: 0; }
-.swot-summary-card strong { display: block; color: var(--ink); font: 700 16px 'Space Grotesk', sans-serif; line-height: 1.1; }
-.swot-summary-card span { display: block; color: var(--muted); font-size: 11px; }
 .cross-type-detect { display: flex; align-items: center; gap: 12px; margin: -8px 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
 .cross-type-copy { flex: 1; min-width: 0; }
 .cross-type-copy .detail-label { margin-bottom: 2px; color: var(--blue); }
@@ -662,9 +648,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .ai-analysis-panel article { padding: 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg); }
 .ai-analysis-panel h4 { margin: 0 0 8px; color: var(--ink-secondary); font-size: 12px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
 .ai-analysis-panel article p { margin: 0; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
-.ai-section { margin-bottom: 12px; }
-.ai-section ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
-.ai-section li::marker { color: var(--blue); }
 .ai-empty { color: var(--muted-light) !important; font-style: italic; }
 .ai-recommendation { padding: 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg); margin-bottom: 8px; }
 .ai-recommendation > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -672,91 +655,74 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .ai-recommendation > p { margin: 6px 0; color: var(--ink-secondary); font-size: 12px; line-height: 1.5; }
 .ai-recommendation > small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 
-.ai-analysis-panel .ai-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
-.ai-analysis-panel .ai-kpi { display: flex; align-items: center; gap: 10px; margin: 0; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); }
-.ai-analysis-panel .ai-kpi-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: var(--radius-sm); font-size: 13px; font-weight: 800; }
-.ai-analysis-panel .ai-kpi > div { display: flex; flex-direction: column; gap: 2px; }
-.ai-analysis-panel .ai-kpi strong { margin: 0; color: var(--ink); font-size: 18px; line-height: 1.1; }
-.ai-analysis-panel .ai-kpi > div span { color: var(--muted); font-size: 11px; font-weight: 600; }
-.ai-analysis-panel .ai-kpi.strength .ai-kpi-icon { color: var(--green); background: var(--green-light); border: 1px solid var(--green-border); }
-.ai-analysis-panel .ai-kpi.weakness .ai-kpi-icon { color: var(--amber); background: var(--amber-light); border: 1px solid var(--amber-border); }
-.ai-analysis-panel .ai-kpi.opportunity .ai-kpi-icon { color: var(--blue); background: var(--blue-light); border: 1px solid var(--blue-border); }
-.ai-analysis-panel .ai-kpi.threat .ai-kpi-icon { color: var(--red); background: var(--red-light); border: 1px solid var(--red-border); }
-.ai-analysis-panel .ai-kpi.strategy .ai-kpi-icon { color: var(--purple); background: var(--purple-light); border: 1px solid var(--purple-border); }
-
 /* ============================================
 
-   RESUMEN EJECUTIVO + DIAGNÓSTICO — presentación
+   ANÁLISIS CON IA — tarjeta de lectura
+
+   Es una tarjeta de lectura, no un botón: por eso no se levanta al pasar el ratón.
+   Lo único que se mueve es el expansor, porque es lo único que hace algo.
 
    ============================================ */
-.ai-analysis-panel .ai-exec-summary,
-.ai-analysis-panel .ai-diagnosis { position: relative; display: block; margin: 0 0 14px; padding: 0; overflow: hidden; transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition); }
+.ai-analysis-panel .ai-diagnosis { position: relative; margin: 0 0 24px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); overflow: hidden; }
+.ai-analysis-panel .ai-diagnosis::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--navy); }
 
-.ai-analysis-panel .ai-exec-summary { border-color: var(--blue-border); background: linear-gradient(158deg, var(--blue-light) 0%, var(--surface) 58%); }
-
-.ai-analysis-panel .ai-diagnosis { border-color: var(--border-light); background: var(--surface); }
-
-.ai-analysis-panel .ai-diagnosis::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--navy); transition: background var(--transition); }
-
-.ai-analysis-panel .ai-exec-summary:hover,
-.ai-analysis-panel .ai-diagnosis:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); border-color: var(--blue-border); }
-
-.ai-analysis-panel .ai-diagnosis:hover::before { background: var(--blue); }
-
-.ai-card-head { display: flex; align-items: center; gap: 12px; padding: 15px 18px 13px; }
-
-.ai-analysis-panel .ai-exec-summary .ai-card-head { border-bottom: 1px solid var(--blue-border); }
-
-.ai-analysis-panel .ai-diagnosis .ai-card-head { border-bottom: 1px solid var(--border-light); padding-left: 21px; }
-
+.ai-card-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px 14px 23px; border-bottom: 1px solid var(--border-light); }
 .ai-analysis-panel .ai-exec-icon,
-.ai-analysis-panel .ai-diagnosis-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 10px; font-size: 15px; line-height: 1; transition: transform var(--transition); }
-
-.ai-analysis-panel .ai-exec-icon { color: var(--surface); background: var(--blue); }
-
-.ai-analysis-panel .ai-diagnosis-icon { color: var(--surface); background: var(--navy); }
-
-.ai-analysis-panel .ai-exec-summary:hover .ai-exec-icon,
-.ai-analysis-panel .ai-diagnosis:hover .ai-diagnosis-icon { transform: scale(1.07); }
-
+.ai-analysis-panel .ai-diagnosis-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; color: var(--surface); font-size: 15px; line-height: 1; }
+.ai-analysis-panel .ai-exec-icon { background: var(--blue); }
+.ai-analysis-panel .ai-diagnosis-icon { background: var(--navy); }
 .ai-card-headings { min-width: 0; }
+.ai-analysis-panel .ai-diagnosis .ai-card-headings h4 { margin: 0; color: var(--ink); font: 600 15px/1.3 'Space Grotesk', sans-serif; letter-spacing: 0; text-transform: none; }
+.ai-analysis-panel .ai-card-subtitle { margin: 2px 0 0; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; }
+.ai-generated-badge { flex: none; margin-left: auto; padding: 3px 10px; border: 1px solid var(--blue-border); border-radius: 999px; background: var(--blue-light); color: var(--blue); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
 
-.ai-analysis-panel .ai-exec-summary .ai-card-headings h4 { margin: 0; color: var(--blue); }
+/* La lectura se parte en párrafos separados por un filete. El texto es exactamente el mismo, pero
+   un bloque corrido de treinta líneas no se escanea; los párrafos ya venían así en el dato. */
+.ai-analysis-panel .ai-reading { padding: 16px 20px 4px 23px; }
+.ai-analysis-panel .ai-reading p { margin: 0; color: var(--ink-secondary); font-size: 13.5px; line-height: 1.72; }
+.ai-analysis-panel .ai-reading p + p { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-light); }
 
-.ai-analysis-panel .ai-diagnosis .ai-card-headings h4 { margin: 0; color: var(--navy); }
+/* --- Hallazgos -------------------------------------------------- */
+/* Dos grupos porque no son lo mismo: un hecho se apoya en los datos del análisis y una inferencia
+   es la lectura que la IA hace sobre ellos. El carril de color refuerza, pero el encabezado lo
+   dice con palabras, porque el color solo no es información suficiente. */
+.ai-analysis-panel .ai-findings { display: flex; flex-direction: column; gap: 22px; }
+.ai-analysis-panel .ai-group { display: flex; flex-direction: column; gap: 10px; }
+.ai-analysis-panel .ai-group-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
+.ai-analysis-panel .ai-group-head h4 { margin: 0; color: var(--ink); font: 600 14px/1.3 'Space Grotesk', sans-serif; letter-spacing: 0; text-transform: none; }
+.ai-analysis-panel .ai-group-count { display: grid; place-items: center; min-width: 21px; height: 21px; padding: 0 6px; border-radius: 999px; font: 700 11px/1 'Space Grotesk', sans-serif; font-variant-numeric: tabular-nums; }
+.ai-analysis-panel .ai-group.inference .ai-group-count { color: var(--amber); background: var(--amber-light); }
+.ai-analysis-panel .ai-group-head p { margin: 0 0 0 auto; color: var(--muted); font-size: 11.5px; text-align: right; }
+.ai-analysis-panel .ai-group-list { display: grid; gap: 8px; }
 
-.ai-analysis-panel .ai-card-subtitle { margin: 2px 0 0; color: var(--ink-secondary); font-size: 11.5px; font-weight: 500; line-height: 1.45; letter-spacing: 0; text-transform: none; }
-
-.ai-generated-badge { flex: none; margin-left: auto; padding: 3px 10px; border: 1px solid var(--blue-border); border-radius: 999px; background: var(--surface); color: var(--blue); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
-
-.ai-card-body { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; }
-
-.ai-reading-column { max-width: 74ch; }
-
-.ai-analysis-panel .ai-exec-summary .ai-card-body p { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.75; }
-
-.ai-analysis-panel .ai-diagnosis .ai-card-body { padding-left: 21px; }
-
-.ai-analysis-panel .ai-diagnosis .ai-card-body p { margin: 0; color: var(--ink-secondary); font-size: 13.5px; line-height: 1.75; }
-
-.ai-analysis-panel .ai-findings .ai-findings-list { display: grid; gap: 8px; }
-.ai-analysis-panel .ai-finding-head { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition), background var(--transition); }
-.ai-analysis-panel .ai-finding-head:hover { border-color: var(--blue-border); box-shadow: var(--shadow-xs); }
-.ai-analysis-panel .ai-finding.open .ai-finding-head { border-color: var(--blue-border); background: var(--blue-light); }
-.ai-analysis-panel .ai-finding-num { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: var(--radius-sm); color: var(--blue); background: var(--blue-light); font: 700 12px 'Space Grotesk', sans-serif; }
-.ai-analysis-panel .ai-finding-content { flex: 1; min-width: 0; }
-.ai-analysis-panel .ai-finding-tag { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: .4px; }
-.ai-analysis-panel .ai-finding-tag.fact { color: var(--green); background: var(--green-light); }
+.ai-analysis-panel .ai-finding { position: relative; margin: 0; padding: 12px 14px 12px 17px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); transition: border-color var(--transition), background var(--transition); }
+.ai-analysis-panel .ai-finding::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: var(--radius) 0 0 var(--radius); }
+.ai-analysis-panel .ai-finding.inference::before { background: var(--amber); }
+.ai-analysis-panel .ai-finding.open { border-color: var(--blue-border); background: var(--blue-light); }
+.ai-analysis-panel .ai-finding-head { display: flex; align-items: center; gap: 10px; }
+.ai-analysis-panel .ai-finding-tag { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .3px; }
 .ai-analysis-panel .ai-finding-tag.inference { color: var(--amber); background: var(--amber-light); }
-.ai-analysis-panel .ai-finding-content p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
-.ai-analysis-panel .ai-finding.open .ai-finding-content p { -webkit-line-clamp: none; }
-.ai-analysis-panel .ai-finding-chevron { align-self: center; flex: none; color: var(--muted-light); font-size: 14px; transition: transform var(--transition), color var(--transition); }
-.ai-analysis-panel .ai-finding.open .ai-finding-chevron { transform: rotate(180deg); color: var(--blue); }
+.ai-analysis-panel .ai-finding-summary { flex: 1; min-width: 0; margin: 0; color: var(--ink-secondary); font-size: 13px; line-height: 1.55; }
+.ai-analysis-panel .ai-finding-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease; }
+.ai-analysis-panel .ai-finding.open .ai-finding-body { grid-template-rows: 1fr; }
+.ai-analysis-panel .ai-finding-body > div { overflow: hidden; }
+.ai-analysis-panel .ai-finding-detail { margin: 11px 0 0; padding-top: 11px; border-top: 1px solid var(--blue-border); color: var(--ink-secondary); font-size: 12.5px; line-height: 1.65; white-space: pre-line; }
+
+/* El expansor comparte base con el "Ver cruce" de la sección de cruces: mismo gesto, misma voz. */
+.link-toggle,
+.cross-view-toggle { flex: none; padding: 0; border: none; background: none; color: var(--blue); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; transition: color var(--transition); }
+.link-toggle:hover,
+.cross-view-toggle:hover { color: var(--ink); }
+.link-toggle:focus-visible,
+.cross-view-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 4px; }
+.cross-view-toggle { margin-right: auto; }
+.ai-analysis-panel .ai-finding-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.ai-analysis-panel .ai-finding-chevron { font-size: 11px; transition: transform var(--transition); }
+.ai-analysis-panel .ai-finding.open .ai-finding-chevron { transform: rotate(180deg); }
 
 /* Contexto DOFA: barra proporcional de la matriz real del diagnóstico */
-.ai-analysis-panel .ai-card-body .ai-kpis { margin-bottom: 0; }
 .ai-analysis-panel .ai-doqa { margin: 0; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); }
-.ai-analysis-panel .ai-exec-summary .ai-doqa { border-color: var(--blue-border); }
+.ai-analysis-panel .ai-diagnosis .ai-doqa { margin: 0 20px 20px 23px; }
 .ai-analysis-panel .ai-doqa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
 .ai-analysis-panel .ai-doqa-head b { color: var(--ink-secondary); font: 700 10.5px 'Space Grotesk', sans-serif; letter-spacing: .5px; text-transform: uppercase; }
 .ai-analysis-panel .ai-doqa-head span { color: var(--muted); font-size: 11px; font-weight: 600; }
@@ -774,17 +740,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .ai-analysis-panel .ai-doqa-legend li.opportunity::before { background: var(--blue); }
 .ai-analysis-panel .ai-doqa-legend li.threat::before { background: var(--red); }
 .ai-analysis-panel .ai-doqa-legend strong { color: var(--ink); font: 700 12px 'Space Grotesk', sans-serif; }
-
-/* Inferencias: card colapsable con apertura animada */
-.ai-analysis-panel .ai-finding { transition: box-shadow var(--transition), border-color var(--transition); }
-.ai-analysis-panel .ai-finding-head { transition: border-color var(--transition), box-shadow var(--transition), background var(--transition), transform var(--transition); }
-.ai-analysis-panel .ai-finding-head:hover { transform: translateY(-1px); }
-.ai-analysis-panel .ai-finding-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
-.ai-analysis-panel .ai-finding.open .ai-finding-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.ai-analysis-panel .ai-finding-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease; }
-.ai-analysis-panel .ai-finding.open .ai-finding-body { grid-template-rows: 1fr; }
-.ai-analysis-panel .ai-finding-body > div { overflow: hidden; }
-.ai-analysis-panel .ai-finding-detail { margin: 0; padding: 11px 14px 13px 56px; border: 1px solid var(--blue-border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); background: var(--blue-light); color: var(--ink-secondary); font-size: 13px; line-height: 1.65; white-space: pre-line; }
 
 /* ============================================
    RECOMMENDATIONS
@@ -1050,7 +1005,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 @media (max-width: 1280px) {
   .swot-grid { grid-template-columns: repeat(2, 1fr); }
   .crosses-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .swot-summary-grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1024px) {
   .metric-grid { grid-template-columns: repeat(3, 1fr); }
@@ -1068,12 +1022,14 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
    RESPONSIVE — MOBILE (768px)
    ============================================ */
 @media (max-width: 768px) {
-  .ai-analysis-panel .ai-kpis { grid-template-columns: repeat(2, 1fr); }
-  .ai-analysis-panel .ai-card-head { flex-wrap: wrap; padding: 14px 14px 12px; }
-  .ai-analysis-panel .ai-diagnosis .ai-card-head { padding-left: 16px; }
-  .ai-generated-badge { margin-left: 46px; }
-  .ai-card-body { padding: 14px; }
-  .ai-analysis-panel .ai-diagnosis .ai-card-body { padding-left: 16px; }
+  .ai-analysis-panel .ai-card-head { flex-wrap: wrap; padding: 14px 14px 12px 17px; }
+  .ai-analysis-panel .ai-reading { padding: 14px 14px 2px 17px; }
+  .ai-analysis-panel .ai-diagnosis .ai-doqa { margin: 0 14px 16px 17px; }
+  .ai-generated-badge { margin-left: 48px; }
+  .ai-analysis-panel .ai-group-head p { flex-basis: 100%; margin: 0; text-align: left; }
+  .ai-analysis-panel .ai-finding-head { flex-wrap: wrap; }
+  .ai-analysis-panel .ai-finding-summary { flex-basis: 100%; order: 3; }
+  .ai-analysis-panel .ai-finding-toggle { margin-left: auto; }
 
   .login-page { padding: 24px 16px; }
   .login-card { padding: 36px 28px; }
@@ -1115,7 +1071,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   .swot-quadrant { min-height: 140px; }
   .crosses-list { grid-template-columns: 1fr; }
   .cross-new-factors { grid-template-columns: 1fr; }
-  .swot-summary-grid { grid-template-columns: repeat(2, 1fr); }
   .ai-analysis-panel { padding: 16px; }
   .plans-panel .plan-card-head { flex-direction: column; align-items: stretch; gap: 14px; }
   .plans-panel .plan-actions { align-items: stretch; gap: 10px; }
@@ -1268,7 +1223,6 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   .diag-section-head { flex-wrap: wrap; }
 }
 @media (max-width: 375px) {
-  .swot-summary-grid { grid-template-columns: 1fr; }
   .diag-meta-grid { grid-template-columns: 1fr; }
 }
 
@@ -1371,14 +1325,24 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .checky-evidence-empty { margin: 0; color: var(--muted-light); font-size: 11.5px; font-style: italic; }
 .checky-evidence-hint { margin: 8px 0 0; color: var(--amber); font-size: 11px; line-height: 1.5; }
 
+/* Los dos factores se leen como dos mitades de la misma frase. El nombre de la cuadrante va como
+   etiqueta de color para que "Debilidad" y "Oportunidad" se distingan de un vistazo, y el código
+   FO/DO/FA/DA queda al lado, pequeño: sirve para quien ya conoce la matriz, no para leerla. */
 .checky-cross-pair { display: flex; align-items: stretch; gap: 8px; }
-.checky-cross-factor { flex: 1 1 0; min-width: 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
-.checky-cross-role { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase; }
-.checky-cross-factor p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.5; }
-.checky-cross-plus { flex: none; display: grid; place-items: center; align-self: center; color: var(--purple); font-size: 15px; font-weight: 700; }
-.checky-cross-meta { display: flex; align-items: center; gap: 8px; }
-.checky-cross-type-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase; }
-.checky-cross-unknown { color: var(--amber); font-size: 11.5px; }
+.checky-cross-factor { flex: 1 1 0; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.checky-cross-factor:has(.checky-cross-role.strength) { border-left-color: var(--green); }
+.checky-cross-factor:has(.checky-cross-role.weakness) { border-left-color: var(--red); }
+.checky-cross-factor:has(.checky-cross-role.opportunity) { border-left-color: var(--blue); }
+.checky-cross-factor:has(.checky-cross-role.threat) { border-left-color: var(--amber); }
+.checky-cross-role { display: inline-block; margin-bottom: 4px; padding: 2px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; }
+.checky-cross-role.strength { color: #166534; background: var(--green-light); }
+.checky-cross-role.weakness { color: #991b1b; background: var(--red-light); }
+.checky-cross-role.opportunity { color: var(--blue); background: var(--blue-light); }
+.checky-cross-role.threat { color: #92400e; background: var(--amber-light); }
+.checky-cross-factor p { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.checky-cross-plus { flex: none; display: grid; place-items: center; align-self: center; color: var(--muted-light); font-size: 15px; font-weight: 700; }
+.checky-cross-meaning { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 11.5px; }
+.checky-cross-unknown { margin: 0; color: var(--amber); font-size: 11.5px; }
 .checky-cross-question { margin: 0; color: var(--ink); font-size: 11px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
 .checky-cross-strategy { display: grid; gap: 6px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border-light); border-left: 3px solid var(--blue-border); border-radius: var(--radius-sm); background: var(--surface); }
 .checky-strategy-title { margin: 0; color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.45; }
@@ -1409,4 +1373,75 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 }
 @media (max-width: 480px) {
   .checky-summary { grid-template-columns: 1fr; }
+}
+
+/* ============================================
+   ÍNDICE DE CRUCES
+   Los siete conteos en una sola tira. No son siete cajas iguales: el total manda y la
+   distribución por tipo acompaña separado por filetes, porque son dos preguntas distintas
+   — cuánto hay y de qué tipo— y meterlas en la misma fila las haría competir.
+   ============================================ */
+
+.crosses-kpis { display: flex; flex-wrap: wrap; align-items: stretch; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
+.crosses-kpi-lead { display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 14px 20px; }
+.crosses-kpi-lead strong { color: var(--ink); font: 700 30px/1 'Space Grotesk', sans-serif; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.crosses-kpi-lead span { color: var(--muted); font-size: 11px; font-weight: 600; }
+.crosses-kpi-origin { display: flex; align-items: center; gap: 20px; padding: 14px 20px; border-left: 1px solid var(--border-light); }
+.crosses-kpi-cell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.crosses-kpi-cell b { color: var(--ink); font: 700 16px/1 'Space Grotesk', sans-serif; font-variant-numeric: tabular-nums; }
+
+/* Los cuatro tipos son a la vez filtro y cifra: al pulsarlos cambia la lista. El color
+   semántico solo aparece cuando el filtro está activo, para no teñir cifras que son datos. */
+.crosses-kpi-types { display: flex; flex: 1; align-items: stretch; min-width: 0; border-left: 1px solid var(--border-light); }
+.crosses-kpi-type { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 58px; padding: 12px 6px; border: none; border-left: 1px solid var(--border-light); background: transparent; font-family: inherit; color: var(--muted); cursor: pointer; transition: background var(--transition); }
+.crosses-kpi-type:first-child { border-left: none; }
+.crosses-kpi-type b { color: var(--ink); font: 700 17px/1 'Space Grotesk', sans-serif; font-variant-numeric: tabular-nums; transition: color var(--transition); }
+.crosses-kpi-type span { font-size: 10.5px; font-weight: 700; letter-spacing: .4px; transition: color var(--transition); }
+.crosses-kpi-type:hover { background: var(--bg-hover); }
+.crosses-kpi-type:hover b { color: var(--blue); }
+.crosses-kpi-type.active { background: var(--bg-hover); }
+.crosses-kpi-type.fo.active b, .crosses-kpi-type.fo.active span { color: var(--green); }
+.crosses-kpi-type.do.active b, .crosses-kpi-type.do.active span { color: var(--amber); }
+.crosses-kpi-type.fa.active b, .crosses-kpi-type.fa.active span { color: var(--blue); }
+  .crosses-kpi-type.da.active b, .crosses-kpi-type.da.active span { color: var(--red); }
+
+/* --- Grupos ----------------------------------------------------- */
+/* El origen es lo primero que se lee: por eso es un encabezado con filete y no una etiqueta
+   pegada a las tarjetas. La nota va a la derecha en escritorio y debajo en móvil. */
+.crosses-groups { display: flex; flex-direction: column; gap: 20px; }
+.crosses-group { display: flex; flex-direction: column; gap: 11px; }
+.crosses-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
+.crosses-group-head h4 { margin: 0; color: var(--ink); font: 700 13.5px/1.3 'Space Grotesk', sans-serif; }
+.crosses-group-head p { margin: 0 0 0 auto; color: var(--muted); font-size: 11.5px; text-align: right; }
+
+/* --- Tarjeta ---------------------------------------------------- */
+/* El badge de origen sí distingue: leer "Usuario + IA" en un gris neutro pierde el dato. */
+.cross-card.open { border-color: var(--blue-border); }
+.cross-origin.user { background: var(--bg-hover); color: var(--ink-secondary); }
+.cross-origin.ai { background: var(--purple-light); color: var(--purple); }
+.cross-origin.both { background: var(--blue-light); color: var(--blue); }
+.cross-strategy.empty { color: var(--muted); }
+
+/* "Ver cruce" usa `.link-toggle`, que vive con la tarjeta de análisis: misma acción, mismo peso. */
+
+.cross-detail { display: flex; flex-direction: column; gap: 11px; padding: 14px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg); animation: fadeIn .2s ease; }
+.cross-detail-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.cross-detail-meta div { min-width: 0; }
+.cross-detail-meta dt { color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .3px; }
+.cross-detail-meta dd { margin: 3px 0 0; color: var(--ink-secondary); font-size: 12px; font-weight: 600; }
+.cross-detail-note { margin: 0; color: var(--ink-secondary); font-size: 12.5px; line-height: 1.55; }
+.cross-detail-note b { color: var(--ink); }
+.cross-detail-block h5 { margin: 0 0 5px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .3px; }
+.cross-detail-block ul { margin: 0; padding-left: 18px; color: var(--ink-secondary); font-size: 12.5px; line-height: 1.5; }
+.cross-detail-block li + li { margin-top: 3px; }
+
+@media (max-width: 768px) {
+  .cross-detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .crosses-group-head p { flex-basis: 100%; margin: 0; text-align: left; }
+}
+@media (max-width: 640px) {
+  .crosses-kpis { flex-direction: column; }
+  .crosses-kpi-origin { border-left: none; border-top: 1px solid var(--border-light); }
+  .crosses-kpi-types { border-left: none; border-top: 1px solid var(--border-light); }
+  .crosses-kpi-type { padding: 10px 4px; }
 }
