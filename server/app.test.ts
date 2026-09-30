@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs'
 import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
-import { createApp } from './app.js'
+import { createApp, swotFingerprint } from './app.js'
 import { envSchema } from './env.js'
 import { AIService, AIServiceError, resolveWeightingBand, type CheckyContext } from './ai-service.js'
 import { dashboardScopesFor } from './dashboard-service.js'
@@ -33,7 +33,9 @@ const swotItem = { id: 'cmswotitem0000000000000001', swotId: diagnostic.swotAnal
 const aiResult = {
   executiveSummary: 'La empresa cuenta con capacidades internas sólidas y oportunidades de mejora.',
   diagnosis: 'La información indica una operación con fortalezas aprovechables.',
-  keyFindings: [{ finding: 'Equipo comprometido', basis: 'FACT' as const }],
+  // La inferencia cita el factor del que se apoya. El id es lo que se guarda; lo que se muestra es
+  // "Fortaleza: Equipo comprometido", y eso lo arma la vista contra la matriz.
+  keyFindings: [{ finding: 'Equipo comprometido', basis: 'FACT' as const, evidenceIds: [swotItem.id], interpretation: 'Esta capacidad interna puede sostener la ejecución de las prioridades.' }],
   foStrategies: ['Usar el compromiso del equipo para capturar oportunidades.'],
   doStrategies: ['Mejorar procesos para aprovechar oportunidades.'],
   faStrategies: ['Apoyarse en el equipo para mitigar amenazas.'],
@@ -42,7 +44,10 @@ const aiResult = {
   priorityOpportunities: ['Mejora de la operación.'],
   recommendations: [{ title: 'Priorizar procesos', description: 'Documentar el proceso principal.', priority: 'HIGH' as const, expectedImpact: 'Mayor consistencia operativa.', suggestedAction: 'Definir responsables y fechas.' }],
 }
-const persistedAIAnalysis = { id: 'cmaianalysis000000000000001', diagnosticId: diagnostic.id, ...aiResult, createdAt: new Date('2026-01-05'), updatedAt: new Date('2026-01-05') }
+/** La lectura guardada dice qué matriz leyó. El diagnóstico por defecto no tiene factores, así que
+ *  esta es la huella de una matriz vacía: mientras la matriz no cambie, lo guardado está vigente y
+ *  Checky lo reutiliza. Los tests que siembran una matriz con factores guardan su propia huella. */
+const persistedAIAnalysis = { id: 'cmaianalysis000000000000001', diagnosticId: diagnostic.id, ...aiResult, swotFingerprint: swotFingerprint([]), createdAt: new Date('2026-01-05'), updatedAt: new Date('2026-01-05') }
 const recommendation = {
   id: 'cmrecommendation0000000001', diagnosticId: diagnostic.id, title: aiResult.recommendations[0].title, description: aiResult.recommendations[0].description, priority: aiResult.recommendations[0].priority, expectedImpact: aiResult.recommendations[0].expectedImpact, suggestedAction: aiResult.recommendations[0].suggestedAction, status: 'PENDING' as const,
   createdAt: new Date('2026-01-06'), updatedAt: new Date('2026-01-06'),
@@ -1066,6 +1071,202 @@ describe('AI analysis service and API', () => {
   })
 })
 
+/**
+ * Una inferencia sin evidencia es una opinión, y una lectura estratégica que describe una matriz que
+ * el usuario ya cambió es un análisis que no se puede seguir usando como si fuera el de hoy. Aquí se
+ * cubren las dos cosas: qué evidencia llega a pantalla y cuándo la lectura se considera vigente.
+ */
+describe('evidencia y vigencia de la lectura estratégica', () => {
+  const weakness = { id: 'cmfactorlectura00000000001', type: 'WEAKNESS' as const, description: 'Falta de documentación' }
+  const strength = { id: 'cmfactorlectura00000000002', type: 'STRENGTH' as const, description: 'Equipo comprometido' }
+
+  /**
+   * Siembra una matriz actual y una lectura guardada. `storedItems` es la matriz sobre la que se
+   * escribió esa lectura: si no se indica, la lectura se guardó con la misma matriz que hay ahora y
+   * por tanto está vigente.
+   */
+  const scenario = (options: { items: Array<{ id: string; type: string; description: string }>; storedItems?: Array<{ id: string; type: string; description: string }>; analysis?: Record<string, unknown>; storedFingerprint?: string | null }) => {
+    const db = makeDb('SUPERUSER')
+    const items = options.items.map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') }))
+    ;(db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items } })
+    const stored = {
+      ...persistedAIAnalysis,
+      keyFindings: [{ finding: 'La operación depende de personas concretas.', basis: 'INFERENCE' as const, evidenceIds: [weakness.id] }],
+      ...options.analysis,
+      swotFingerprint: options.storedFingerprint === undefined ? swotFingerprint(options.storedItems ?? items) : options.storedFingerprint,
+    }
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue(stored)
+    ;(db.aIAnalysis.upsert as unknown as { mockImplementation: (value: () => unknown) => unknown }).mockImplementation(() => stored)
+    return { db, items }
+  }
+
+  const login = async (db: ReturnType<typeof makeDb>) => {
+    const agent = request.agent(createApp(db, { analyze: vi.fn(async () => aiResult), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    return agent
+  }
+
+  it('entrega la evidencia de cada inferencia con las palabras del factor, no con su id', async () => {
+    const { db } = scenario({ items: [weakness, strength] })
+    const agent = await login(db)
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    expect(read.status).toBe(200)
+    const finding = read.body.analysis.keyFindings[0]
+    // El id se conserva para poder llevar la lectura hasta el factor, pero lo que la pantalla muestra
+    // es el tipo y la descripción: "Debilidad: Falta de documentación".
+    expect(finding.evidenceIds).toEqual([weakness.id])
+    expect(finding.evidence).toEqual([{ type: 'WEAKNESS', description: 'Falta de documentación' }])
+  })
+
+  it('no entrega evidencia de un factor que no está en la matriz actual', async () => {
+    const { db } = scenario({ items: [strength], analysis: { keyFindings: [{ finding: 'Se apoya en algo que ya no existe.', basis: 'INFERENCE' as const, evidenceIds: [weakness.id] }] } })
+    const agent = await login(db)
+    const finding = (await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)).body.analysis.keyFindings[0]
+    expect(finding.evidenceIds).toEqual([])
+    expect(finding.evidence).toEqual([])
+  })
+
+  it('deja la lectura vigente mientras la matriz DOFA no cambie', async () => {
+    const { db } = scenario({ items: [weakness, strength] })
+    const agent = await login(db)
+    expect((await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)).body.analysis.stale).toBe(false)
+  })
+
+  it('marca la lectura como desactualizada cuando el usuario editó un factor, sin borrarla', async () => {
+    const edited = [{ id: weakness.id, type: weakness.type, description: 'Falta de documentación de procesos' }, strength]
+    const { db } = scenario({ items: edited, storedItems: [weakness, strength] })
+    const agent = await login(db)
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    expect(read.status).toBe(200)
+    expect(read.body.analysis.stale).toBe(true)
+    // No se borra: el aviso ofrece actualizarla, no desaparecerla.
+    expect(read.body.analysis.diagnosis).toBe(persistedAIAnalysis.diagnosis)
+  })
+
+  it('trata como desactualizada una lectura anterior a la huella, porque no se sabe con qué matriz se escribió', async () => {
+    const { db } = scenario({ items: [weakness], storedFingerprint: null })
+    const agent = await login(db)
+    expect((await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)).body.analysis.stale).toBe(true)
+  })
+
+  it('no reutiliza en silencio una lectura desactualizada: Checky la regenera con la matriz actual', async () => {
+    const edited = [{ id: weakness.id, type: weakness.type, description: 'Falta de documentación de procesos' }, strength]
+    const { db, items } = scenario({ items: edited, storedItems: [weakness, strength] })
+    const analyze = vi.fn(async () => aiResult)
+    const agent = request.agent(createApp(db, { analyze, consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const sent = await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: '¿Qué cambió?' })
+    expect(sent.status).toBe(201)
+    expect(analyze).toHaveBeenCalledOnce()
+    // Se regenera sobre lo que hay ahora, con la descripción editada y no con la que se había leído.
+    expect((analyze as unknown as { mock: { calls: [{ swotItems: Array<{ id: string; description: string }> }][] } }).mock.calls[0][0].swotItems).toEqual(items.map((item) => ({ id: item.id, type: item.type, description: item.description })))
+  })
+
+  it('deja pasar una lectura vigente sin volver a gastar la cuota de análisis', async () => {
+    const { db } = scenario({ items: [weakness, strength] })
+    const analyze = vi.fn(async () => aiResult)
+    const agent = request.agent(createApp(db, { analyze, consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    expect((await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: '¿Qué reviso primero?' })).status).toBe(201)
+    expect(analyze).not.toHaveBeenCalled()
+  })
+
+  it('descarta la evidencia que el modelo cita y no existe en la matriz', async () => {
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({ ...aiResult, keyFindings: [{ finding: 'Concluye algo.', basis: 'INFERENCE', evidenceIds: [weakness.id, 'cmfactorinventado00000001'] }] }) })) } }
+    const result = await new AIService(client).analyze({ title: diagnostic.title, description: diagnostic.description, status: diagnostic.status, swotItems: [{ id: weakness.id, type: weakness.type, description: weakness.description }] })
+    expect(result.keyFindings[0].evidenceIds).toEqual([weakness.id])
+  })
+})
+
+/**
+ * El paso de la matriz a Checky. La matriz DOFA se puede llenar y sus cruces generarse sin que exista
+ * ninguna lectura estratégica, así que entrar a Checky no puede depender de que esa fila ya esté: la
+ * ausencia de análisis es un estado normal de la pantalla y no un fallo. Lo que sí tiene que quedar
+ * claro es cuándo hay un problema de verdad, porque un mismo 404 no puede significar las dos cosas.
+ */
+describe('paso de Matriz DOFA a Checky', () => {
+  const factor = { id: 'cmfactorhito0000000000001', type: 'WEAKNESS' as const, description: 'Falta de documentación' }
+
+  /** Diagnóstico con una matriz ya lista, y opcionalmente con la lectura estratégica guardada. */
+  const handoff = (options: { stored?: Record<string, unknown> | null; items?: Array<{ id: string; type: string; description: string }> } = {}) => {
+    const db = makeDb('SUPERUSER')
+    const items = (options.items ?? [factor]).map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') }))
+    ;(db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items } })
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue(options.stored === null ? null : (options.stored ?? { ...persistedAIAnalysis, swotFingerprint: swotFingerprint(items) }))
+    const analyze = vi.fn(async () => aiResult)
+    const consultChecky = vi.fn(async () => checkyConsultResult)
+    return { db, items, analyze, consultChecky }
+  }
+
+  const session = async (db: ReturnType<typeof makeDb>, aiService: AIService) => {
+    const agent = request.agent(createApp(db, aiService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    return agent
+  }
+
+  it('entra a Checky sin que exista análisis, sin error de carga', async () => {
+    const { db, analyze, consultChecky } = handoff({ stored: null })
+    const agent = await session(db, { analyze, consultChecky } as unknown as AIService)
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    // No es un 404: la pantalla necesita saber que el diagnóstico está bien y que lo que falta es la
+    // lectura, para quedarse quieta esperando a que el usuario pulse "Analizar con Checky".
+    expect(read.status).toBe(200)
+    expect(read.body.analysis).toBeNull()
+  })
+
+  it('crea y guarda el análisis al analizar con Checky sobre la DOFA actual', async () => {
+    const { db, items, analyze, consultChecky } = handoff({ stored: null })
+    const agent = await session(db, { analyze, consultChecky } as unknown as AIService)
+    expect((await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Analiza mi diagnóstico' })).status).toBe(201)
+    expect(analyze).toHaveBeenCalledOnce()
+    expect(analyze).toHaveBeenCalledWith(expect.objectContaining({ swotItems: [{ id: factor.id, type: factor.type, description: factor.description }] }))
+    // Lo guardado lleva la huella de la matriz que se acaba de usar, que es lo que hará que la
+    // siguiente consulta lo dé por vigente en vez de regenerarlo otra vez.
+    expect(db.aIAnalysis.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ diagnosticId: diagnostic.id, swotFingerprint: swotFingerprint(items) }) }))
+  })
+
+  it('carga el análisis existente cuando lo hay', async () => {
+    // La matriz incluye el factor que cita la inferencia guardada, así que además de la lectura se
+    // comprueba que su evidencia llega resuelta y no como un id suelto.
+    const { db, analyze, consultChecky } = handoff({ items: [factor, { id: swotItem.id, type: 'STRENGTH', description: 'Equipo comprometido' }] })
+    const agent = await session(db, { analyze, consultChecky } as unknown as AIService)
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    expect(read.status).toBe(200)
+    expect(read.body.analysis.diagnosis).toBe(persistedAIAnalysis.diagnosis)
+    expect(read.body.analysis.stale).toBe(false)
+    expect(read.body.analysis.keyFindings[0].interpretation).toBe('Esta capacidad interna puede sostener la ejecución de las prioridades.')
+    expect(read.body.analysis.keyFindings[0].evidence).toEqual([{ type: 'STRENGTH', description: 'Equipo comprometido' }])
+  })
+
+  it('deja actualizar un análisis desactualizado y lo vuelve a guardar con la matriz vigente', async () => {
+    const edited = [{ ...factor, description: 'Falta de documentación de procesos' }]
+    const { db, items, analyze, consultChecky } = handoff({ items: edited, stored: { ...persistedAIAnalysis, swotFingerprint: swotFingerprint([factor]) } })
+    const agent = await session(db, { analyze, consultChecky } as unknown as AIService)
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    expect(read.body.analysis.stale).toBe(true)
+    expect((await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Actualiza el análisis' })).status).toBe(201)
+    expect(analyze).toHaveBeenCalledOnce()
+    expect(db.aIAnalysis.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: expect.objectContaining({ swotFingerprint: swotFingerprint(items) }) }))
+  })
+
+  it('sigue avisando de los errores de verdad en lugar de callarlos como si no hubiera análisis', async () => {
+    // Un fallo real de servidor no puede disfrazarse de "todavía no hay análisis": si la respuesta
+    // fuera 200 con null, la pantalla dejaría de avisar de un problema que el usuario sí tiene.
+    const { db, analyze, consultChecky } = handoff({ stored: null })
+    ;(db.aIAnalysis.findUnique as unknown as { mockRejectedValue: (value: unknown) => unknown }).mockRejectedValue(new Error('column "swotFingerprint" does not exist'))
+    const agent = await session(db, { analyze, consultChecky } as unknown as AIService)
+    expect((await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)).status).toBe(500)
+
+    // Y el 404 queda para el diagnóstico que no existe o no es de esta empresa, no para la ausencia
+    // de análisis: son dos cosas distintas y la pantalla las trata distinto.
+    const foreignAgent = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, admin.id), { analyze: vi.fn(async () => aiResult), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService))
+    await foreignAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const denied = await foreignAgent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    expect(denied.status).toBe(404)
+    expect(denied.body).toEqual({ error: 'Diagnostic not found' })
+  })
+})
+
 describe('recommendations and action plans API', () => {
   it('imports AI recommendations without calling OpenAI and lists them', async () => {
     const db = makeDb()
@@ -1466,13 +1667,62 @@ describe('Checky strategic assistant', () => {
     expect(read.body.messages).toHaveLength(4)
   })
 
+  it('orchestrates the strategic analysis when the diagnostic has none, and reuses it afterwards', async () => {
+    const db = makeDb('SUPERUSER')
+    const aiService = { analyze: vi.fn(async () => aiResult), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService
+    // El diagnóstico todavía no tiene lectura estratégica guardada.
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValueOnce: (value: unknown) => unknown }).mockResolvedValueOnce(null)
+    const agent = request.agent(createApp(db, aiService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const first = await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Revisa el diagnóstico completo' })
+    expect(first.status).toBe(201)
+    expect(aiService.analyze).toHaveBeenCalledOnce()
+    expect(db.aIAnalysis.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { diagnosticId: diagnostic.id } }))
+    // El contexto que recibe Checky ya lleva la lectura recién generada.
+    const context = (aiService.consultChecky as unknown as { mock: { calls: [{ aiAnalysis: unknown }][] } }).mock.calls[0][0]
+    expect(context.aiAnalysis).not.toBeNull()
+
+    const second = await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Y ahora prioriza' })
+    expect(second.status).toBe(201)
+    // Ya está guardada: no se vuelve a gastar la cuota ni a cambiar una lectura que el usuario leyó.
+    expect(aiService.analyze).toHaveBeenCalledOnce()
+  })
+
+  it('reports a controlled error when the orchestrated analysis cannot be generated', async () => {
+    const db = makeDb('SUPERUSER')
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValueOnce: (value: unknown) => unknown }).mockResolvedValueOnce(null)
+    const unconfigured = { analyze: vi.fn(async () => { throw new AIServiceError('NOT_CONFIGURED') }), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService
+    const unavailable = request.agent(createApp(db, unconfigured))
+    await unavailable.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const response = await unavailable.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Revisa el diagnóstico' })
+    expect(response.status).toBe(503)
+    expect(response.body).toEqual({ error: 'Checky is not configured' })
+    expect(unconfigured.consultChecky).not.toHaveBeenCalled()
+  })
+
+  it('never orchestrates an analysis for a session from another company', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, admin.id)
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValueOnce: (value: unknown) => unknown }).mockResolvedValueOnce(null)
+    const aiService = { analyze: vi.fn(async () => aiResult), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService
+    const agent = request.agent(createApp(db, aiService))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Intrusión' })).status).toBe(404)
+    expect(aiService.analyze).not.toHaveBeenCalled()
+    expect(aiService.consultChecky).not.toHaveBeenCalled()
+  })
+
   it('builds the Checky context from the diagnostic, factors, crosses, analysis and recommendations', async () => {
     const db = makeDb()
     const findDiag = db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }
-    findDiag.mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: [
+    const seededItems = [
       { id: checkyFactorIds.strength, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH', description: 'Equipo comprometido', createdAt: new Date('2026-01-04') },
       { id: checkyFactorIds.opportunity, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY', description: 'Mercado en expansión', createdAt: new Date('2026-01-04') },
-    ] } })
+    ]
+    findDiag.mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: seededItems } })
+    // Esta prueba es sobre el contexto, no sobre la vigencia: la lectura guardada tiene que pasar por
+    // la comprobación de huella igual que en producción, así que se le da la de esta matriz.
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...persistedAIAnalysis, swotFingerprint: swotFingerprint(seededItems) })
     const findCrosses = db.strategicCross.findMany as unknown as { mockResolvedValue: (value: unknown) => unknown }
     // La consolidación de estrategias lee los dos factores y la ponderación incluidos, igual que
     // haría Prisma: el contexto de Checky ya no se arma solo con los ids del cruce.
@@ -2303,6 +2553,57 @@ describe('Checky strategic recommendations', () => {
     findings: [finding({}), finding({ category: 'STRATEGIC_RISKS', title: 'Riesgo', detail: 'Otro motivo con evidencia.', basis: 'INFERENCE' as const, evidenceIds: [c.alsoHigh, f.opportunity2.id] })],
   }
 
+  it('drops a suggested cross that already exists, whichever order the factors arrive in', async () => {
+    const { context } = await contextFor()
+    const cross = (overrides: Record<string, unknown>) => finding({ category: 'MISSING_CROSSES', suggestedStrategy: null, ...overrides })
+    // `c.prio` es el cruce strength + opportunity que el usuario ya registró. La comparación es por tipo
+    // de cruce y por pareja de factores, nunca por el orden: proponerlo al revés es el mismo cruce.
+    const { result } = await consult(context, {
+      reply: 'Hay un cruce que ya existe y otro que sí falta.',
+      insufficientData: false,
+      missingInformation: [],
+      findings: [
+        cross({ title: 'Repite el FO registrado', evidenceIds: [f.strength.id, f.opportunity.id] }),
+        cross({ title: 'Repite el mismo FO al revés', evidenceIds: [f.opportunity.id, f.strength.id] }),
+        cross({ title: 'Repite el DO registrado', evidenceIds: [f.opportunity2.id, f.weakness.id] }),
+        cross({ title: 'Cruce nuevo', evidenceIds: [f.strength.id, f.opportunity2.id] }),
+      ],
+    })
+    expect(result.findings.map((entry) => entry.title)).toEqual(['Cruce nuevo'])
+  })
+
+  it('keeps only the first of two identical crosses proposed in the same answer', async () => {
+    const { context } = await contextFor()
+    const cross = (title: string) => finding({ category: 'MISSING_CROSSES', title, evidenceIds: [f.strength2.id, f.threat2.id], suggestedStrategy: null })
+    const { result } = await consult(context, {
+      reply: 'La misma pareja llega dos veces.',
+      insufficientData: false,
+      missingInformation: [],
+      findings: [cross('Primera vez'), cross('Segunda vez')],
+    })
+    expect(result.findings.map((entry) => entry.title)).toEqual(['Primera vez'])
+  })
+
+  it('drops a suggested cross whose cited factors cannot form a FO, DO, FA or DA', async () => {
+    const { context } = await contextFor()
+    const { result } = await consult(context, {
+      reply: 'Hay parejas que no son cruces.',
+      insufficientData: false,
+      missingInformation: [],
+      findings: [
+        // Dos factores externos: no hay ningún factor interno, así que no hay cruce que crear.
+        finding({ category: 'MISSING_CROSSES', title: 'Amenaza y oportunidad', evidenceIds: [f.threat.id, f.opportunity2.id], suggestedStrategy: null }),
+        // Un solo factor no forma pareja.
+        finding({ category: 'MISSING_CROSSES', title: 'Un factor suelto', evidenceIds: [f.strength.id], suggestedStrategy: null }),
+        // Un id de cruce no es un factor, así que la pareja no se puede resolver.
+        finding({ category: 'MISSING_CROSSES', title: 'Factor y cruce', evidenceIds: [f.strength.id, c.prio], suggestedStrategy: null }),
+        // Un hallazgo de otra categoría no compite con la matriz y se conserva intacto.
+        finding({ category: 'REVIEW_ASPECTS', title: 'Ordenar el ataque', evidenceIds: [f.threat.id, f.opportunity2.id] }),
+      ],
+    })
+    expect(result.findings.map((entry) => entry.title)).toEqual(['Ordenar el ataque'])
+  })
+
   it('anchors a priority recommendation on the stored criteria instead of the number alone', async () => {
     const { context } = await contextFor()
     const { analysis } = await consult(context, {
@@ -2417,8 +2718,10 @@ describe('Checky strategic recommendations', () => {
 
   it('only ever suggests a strategy that derives from the cited factors', async () => {
     const { context } = await contextFor()
-    const derived = await consult(context, { reply: 'r', insufficientData: false, missingInformation: [], findings: [finding({ category: 'MISSING_CROSSES', evidenceIds: [f.threat2.id, f.opportunity.id], suggestedStrategy: { title: 'Anticipar la norma con el mercado', description: 'Usar el equipo en expansión para llegar antes a la nueva exigencia y convertirla en argumento de venta.' } })] })
-    expect(derived.result.findings[0].suggestedStrategy?.title).toBe('Anticipar la norma con el mercado')
+    // La pareja citada tiene que ser un cruce DOFA que no exista todavía, porque la compuerta de
+    // duplicados descarta antes de persistir cualquier propuesta que no se pueda crear.
+    const derived = await consult(context, { reply: 'r', insufficientData: false, missingInformation: [], findings: [finding({ category: 'MISSING_CROSSES', evidenceIds: [f.threat2.id, f.weakness.id], suggestedStrategy: { title: 'Blindar la norma con el mercado', description: 'Usar la capacidad de reacción para anticipar la nueva exigencia y convertirla en argumento de venta.' } })] })
+    expect(derived.result.findings[0].suggestedStrategy?.title).toBe('Blindar la norma con el mercado')
 
     // El contrato sigue exigiendo un suggestedStrategy con contenido real.
     await expect(consult(context, { reply: 'r', insufficientData: false, missingInformation: [], findings: [finding({ suggestedStrategy: { title: 'ok', description: 'corta' } })] })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
@@ -2470,6 +2773,9 @@ describe('Checky strategic recommendations', () => {
     // sin factores el evidenceIds de la respuesta no valida. Esta es la única prueba que atraviesa
     // la ruta con el AIService real, que es donde se construyen workMap y analysis.
     const items = allFactors.map((item) => ({ ...item, createdAt: new Date('2026-01-04') }))
+    // La lectura guardada dice que se escribió con esta misma matriz, así que no hay nada que
+    // regenerar y el AIService real solo responde a la consulta de Checky, que es lo que se prueba.
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...persistedAIAnalysis, swotFingerprint: swotFingerprint(items) })
     const original = db.qualityDiagnostic.findUnique
     db.qualityDiagnostic.findUnique = vi.fn(async (args: unknown) => ({
       ...(await original(args as never)) as Record<string, unknown>,
@@ -2540,17 +2846,21 @@ describe('Checky consolidated strategy context', () => {
    */
   const contextFor = async () => {
     const db = makeDb('SUPERUSER', member.id, null, company.id, [], crosses)
+    const seededItems = allFactors.map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') }))
     ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({
       ...persistedAIAnalysis,
       foStrategies: [aiTexts.thin],
       doStrategies: [aiTexts.distant],
       faStrategies: [aiTexts.pending],
       daStrategies: [],
+      // La huella corresponde a la matriz que se siembra abajo, así que la lectura guardada está
+      // vigente y esta prueba mide la priorización, no la vigencia.
+      swotFingerprint: swotFingerprint(seededItems),
     })
     const findDiag = db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }
     findDiag.mockResolvedValue({
       ...diagnostic, company: { ...diagnostic.company },
-      swotAnalysis: { ...diagnostic.swotAnalysis, items: allFactors.map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') })) },
+      swotAnalysis: { ...diagnostic.swotAnalysis, items: seededItems },
     })
     await seedAcceptedCheckyStrategy(db)
 
@@ -2735,10 +3045,12 @@ describe('Checky consolidated strategy context', () => {
     const unweightedCrosses: SeededCross[] = crosses.map((cross) => ({ ...cross, weighting: null }))
     const db = makeDb('SUPERUSER', member.id, null, company.id, [], unweightedCrosses)
     const findDiag = db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }
+    const unweightedItems = allFactors.map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') }))
     findDiag.mockResolvedValue({
       ...diagnostic, company: { ...diagnostic.company },
-      swotAnalysis: { ...diagnostic.swotAnalysis, items: allFactors.map((item) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04') })) },
+      swotAnalysis: { ...diagnostic.swotAnalysis, items: unweightedItems },
     })
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...persistedAIAnalysis, swotFingerprint: swotFingerprint(unweightedItems) })
     let captured: CheckyContext | null = null
     const agent = request.agent(createApp(db, { consultChecky: vi.fn(async (context: CheckyContext) => { captured = context; return checkyConsultResult }) } as unknown as AIService))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })

@@ -27,7 +27,55 @@ const diagnosticInclude = { company: { select: { id: true, name: true } }, creat
 const diagnosticView = (diagnostic: Prisma.QualityDiagnosticGetPayload<{ include: typeof diagnosticInclude }>) => diagnostic
 const swotItemAccessInclude = { swot: { include: { diagnostic: { select: { companyId: true, company: { select: { id: true } } } } } } } as const
 const swotItemView = (item: Prisma.SWOTItemGetPayload<{ include: typeof swotItemAccessInclude }>) => ({ id: item.id, swotId: item.swotId, type: item.type, description: item.description, createdAt: item.createdAt })
-const aiAnalysisView = (analysis: { id: string; diagnosticId: string; executiveSummary: string; diagnosis: string; keyFindings: unknown; foStrategies: unknown; doStrategies: unknown; faStrategies: unknown; daStrategies: unknown; priorityRisks: unknown; priorityOpportunities: unknown; recommendations: unknown; createdAt: Date; updatedAt: Date }) => ({ id: analysis.id, diagnosticId: analysis.diagnosticId, ...aiAnalysisSchema.parse({ executiveSummary: analysis.executiveSummary, diagnosis: analysis.diagnosis, keyFindings: analysis.keyFindings, foStrategies: analysis.foStrategies, doStrategies: analysis.doStrategies, faStrategies: analysis.faStrategies, daStrategies: analysis.daStrategies, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities, recommendations: analysis.recommendations }), createdAt: analysis.createdAt, updatedAt: analysis.updatedAt })
+type StoredAIAnalysis = { id: string; diagnosticId: string; executiveSummary: string; diagnosis: string; keyFindings: unknown; foStrategies: unknown; doStrategies: unknown; faStrategies: unknown; daStrategies: unknown; priorityRisks: unknown; priorityOpportunities: unknown; recommendations: unknown; swotFingerprint: string | null; createdAt: Date; updatedAt: Date }
+
+/**
+ * Huella de la matriz DOFA que se usó para escribir una lectura estratégica.
+ *
+ * Los timestamps de `SWOTItem` no sirven para esto: no hay `updatedAt` y, aunque lo hubiera, editar un
+ * factor y volverlo a dejar como estaba dejaría el mismo rastro. Lo que se compara es el contenido,
+ * así que cualquier edición, alta o borrado de un factor produce una huella distinta. Va ordenada por
+ * id para que la huella dependa de qué factores hay, no del orden en que se listaron.
+ */
+export const swotFingerprint = (items: Array<{ id: string; type: string; description: string }>): string =>
+  createHash('sha256').update(items.map((item) => `${item.id}\u0000${item.type}\u0000${item.description.trim()}`).sort().join('\u0001')).digest('hex')
+
+/**
+ * Lectura estratégica tal como la consume la app.
+ *
+ * Añade dos cosas sobre la fila guardada. `stale` dice si esta lectura se escribió con una matriz
+ * distinta de la que hay ahora: es la diferencia entre "esto es lo que concluyó la IA" y "esto
+ * describe una matriz que el usuario ya cambió". Y cada inferencia lleva su evidencia ya resuelta
+ * contra la matriz actual, porque un id suelto no le dice nada a quien no conoce la DOFA: lo que se lee
+ * es "Debilidad: Falta de documentación". Los ids que no resuelven no se inventan ni se muestran, se
+ * descartan, igual que hace Checky con sus referencias.
+ */
+const aiAnalysisView = (
+  analysis: StoredAIAnalysis,
+  items: Array<{ id: string; type: string; description: string }>,
+  currentFingerprint: string,
+) => {
+  const itemById = new Map(items.map((item) => [item.id, item]))
+  const parsed = aiAnalysisSchema.parse({ executiveSummary: analysis.executiveSummary, diagnosis: analysis.diagnosis, keyFindings: analysis.keyFindings, foStrategies: analysis.foStrategies, doStrategies: analysis.doStrategies, faStrategies: analysis.faStrategies, daStrategies: analysis.daStrategies, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities, recommendations: analysis.recommendations })
+  return {
+    id: analysis.id,
+    diagnosticId: analysis.diagnosticId,
+    ...parsed,
+    keyFindings: parsed.keyFindings.map((finding) => {
+      // Lo que se cita tiene que existir en la matriz. Un id que ya no resuelve porque el factor se
+      // borró se cae, y con él cae la etiqueta: es preferible no tener evidencia a tener una que
+      // apunte a nada.
+      const cited = [...new Set(finding.evidenceIds)].flatMap((id) => {
+        const item = itemById.get(id)
+        return item ? [{ id: item.id, type: item.type, description: item.description }] : []
+      })
+      return { ...finding, evidenceIds: cited.map((item) => item.id), evidence: cited.map(({ type, description }) => ({ type, description })) }
+    }),
+    stale: analysis.swotFingerprint !== currentFingerprint,
+    createdAt: analysis.createdAt,
+    updatedAt: analysis.updatedAt,
+  }
+}
 const recommendationView = (recommendation: { id: string; diagnosticId: string; title: string; description: string; priority: string; expectedImpact: string; suggestedAction: string; status: string; createdAt: Date; updatedAt: Date }) => recommendation
 const actionItemInclude = { recommendation: { select: { id: true, title: true, priority: true, status: true } }, responsible: { select: { id: true, name: true, email: true } }, ticket: { select: { id: true } } } as const
 const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof actionItemInclude }>) => item
@@ -936,20 +984,49 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ crosses: updated.map(crossView) })
   }))
 
+  /**
+   * Lectura estratégica de un diagnóstico, generada y guardada en AIAnalysis.
+   *
+   * No es un servicio nuevo: es la misma operación que expone POST /diagnostics/:id/ai-analysis,
+   * movida aquí para que la consulta de Checky pueda reutilizarla al orquestar su propio análisis en
+   * lugar de dejarle al usuario un segundo paso que ejecutar. Recibe el diagnóstico ya cargado y ya
+   * autorizado por la ruta que la llama, así que no repite ni la consulta ni la comprobación de
+   * empresa: cada ruta sigue decidiendo qué diagnóstico puede tocar.
+   *
+   * El error del proveedor sube tal cual: cada ruta lo traduce a su propio mensaje, porque "el
+   * análisis no está configurado" y "Checky no está configurado" son el mismo fallo visto desde dos
+   * pantallas.
+   */
+  const generateDiagnosticAnalysis = async (diagnostic: { id: string; title: string; description: string; status: string; swotAnalysis?: { items: Array<{ id: string; type: string; description: string }> } | null }) => {
+    const items = diagnostic.swotAnalysis?.items ?? []
+    // Al modelo solo va lo que le sirve para analizar: el id, para poder citarlo, el tipo y la
+    // descripción. Las columnas de la fila (`swotId`, `createdAt`) no se cuelan en el prompt.
+    const swotItems = items.map((item) => ({ id: item.id, type: item.type, description: item.description }))
+    const result = await aiService.analyze({
+      title: diagnostic.title,
+      description: diagnostic.description,
+      status: diagnostic.status,
+      swotItems,
+    })
+    // La huella se guarda junto a la lectura, no se deduce de fechas: es lo que permite que la
+    // próxima consulta a Checky sepa si lo que ya está guardado describe la matriz de hoy o una
+    // anterior. Sin ella, editar un factor dejaría en pantalla una lectura vieja como si fuera actual.
+    return db.aIAnalysis.upsert({
+      where: { diagnosticId: diagnostic.id },
+      create: { diagnosticId: diagnostic.id, ...result, swotFingerprint: swotFingerprint(items) },
+      update: { ...result, swotFingerprint: swotFingerprint(items) },
+    })
+  }
+
   app.post('/api/diagnostics/:id/ai-analysis', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {
     const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: diagnosticInclude })
     if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
       response.status(404).json({ error: 'Diagnostic not found' })
       return
     }
-    let result
+    let analysis
     try {
-      result = await aiService.analyze({
-        title: diagnostic.title,
-        description: diagnostic.description,
-        status: diagnostic.status,
-        swotItems: diagnostic.swotAnalysis?.items.map((item) => ({ type: item.type, description: item.description })) ?? [],
-      })
+      analysis = await generateDiagnosticAnalysis(diagnostic)
     } catch (error) {
       if (error instanceof AIServiceError) {
         if (error.code === 'NOT_CONFIGURED') {
@@ -965,26 +1042,31 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       }
       throw error
     }
-    const analysis = await db.aIAnalysis.upsert({
-      where: { diagnosticId: diagnostic.id },
-      create: { diagnosticId: diagnostic.id, ...result },
-      update: { ...result },
-    })
-    response.json({ analysis: aiAnalysisView(analysis) })
+    const items = diagnostic.swotAnalysis?.items ?? []
+    response.json({ analysis: aiAnalysisView(analysis, items, swotFingerprint(items)) })
   }))
 
   app.get('/api/diagnostics/:id/ai-analysis', authMiddleware, asyncHandler(async (request, response) => {
-    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    // Los factores entran en la consulta porque la vista tiene que resolver la evidencia de cada
+    // inferencia contra la matriz actual y, con ella, decir si la lectura guardada quedó atrás. Sin
+    // ellos solo se podría devolver el análisis tal cual, y no se podría saber si sigue vigente.
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } }, swotAnalysis: { include: { items: { orderBy: { createdAt: 'asc' } } } } } })
     if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
       response.status(404).json({ error: 'Diagnostic not found' })
       return
     }
     const analysis = await db.aIAnalysis.findUnique({ where: { diagnosticId: diagnostic.id } })
-    if (!analysis) {
-      response.status(404).json({ error: 'AI analysis not found' })
-      return
-    }
-    response.json({ analysis: aiAnalysisView(analysis) })
+    const items = diagnostic.swotAnalysis?.items ?? []
+    // Un diagnóstico al que el usuario acaba de llenar la matriz todavía no tiene lectura estratégica,
+    // y eso no es un error: es el estado normal en el que Checky espera a que le pulsen "Analizar con
+    // Checky". Por eso la respuesta es 200 con `analysis` en null en vez de un 404.
+    //
+    // La diferencia importa porque antes las dos cosas devolvían el mismo 404 y el cliente no tenía
+    // forma de saber cuál había recibido: para no ensuciar la pantalla con un error en el caso
+    // normal tenía que tragarse también el 404 de verdad, que es el de un diagnóstico inexistente o
+    // de otra empresa. Ahora el 404 queda para lo que sí es un problema, y la ausencia de análisis se
+    // dice con lo que es: un null.
+    response.json({ analysis: analysis ? aiAnalysisView(analysis, items, swotFingerprint(items)) : null })
   }))
 
   app.get('/api/diagnostics/:id/recommendations', authMiddleware, asyncHandler(async (request, response) => {
@@ -1086,6 +1168,39 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       return
     }
     const userMessage = await db.checkyMessage.create({ data: { sessionId: session.id, role: 'USER', content: parsed.data.content, evidenceIds: [], missingInformation: [] } })
+    // Checky orquesta su propio análisis: si el diagnóstico no tiene una lectura estratégica que
+    // describa la matriz de hoy, la genera aquí antes de consultar, para que el usuario ejecute un
+    // único análisis y no dos. Es la misma lectura que expone POST /diagnostics/:id/ai-analysis,
+    // escrita en la misma tabla, así que la priorización y las recomendaciones siguen leyéndola desde
+    // donde ya lo hacían.
+    //
+    // "Que describa la matriz de hoy" es la condición, no "que exista". Se compara la huella guardada
+    // con la de los factores actuales: si el usuario editó, agregó o borró un factor después del
+    // análisis, reutilizar el guardado sería mostrarle como vigente una lectura de otra versión de
+    // su diagnóstico, y eso es justo lo que no debe pasar sin avisar. Cuando no hay huella
+    // guardada —los análisis anteriores a esta columna— la comparación tampoco se puede hacer, así que
+    // se regeneran: no se puede dar por bueno un análisis del que se desconoce la matriz que leyó.
+    //
+    // El diagnóstico se carga con la misma empresa que ya autorizó la sesión, de modo que el análisis
+    // nunca puede generarse sobre un diagnóstico ajeno.
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: session.diagnosticId }, include: { ...diagnosticInclude, company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const items = diagnostic.swotAnalysis?.items ?? []
+    const stored = await db.aIAnalysis.findUnique({ where: { diagnosticId: session.diagnosticId }, select: { swotFingerprint: true } })
+    if (!stored || stored.swotFingerprint !== swotFingerprint(items)) {
+      try {
+        await generateDiagnosticAnalysis(diagnostic)
+      } catch (error) {
+        if (error instanceof AIServiceError) {
+          response.status(error.code === 'NOT_CONFIGURED' ? 503 : 502).json({ error: error.code === 'NOT_CONFIGURED' ? 'Checky is not configured' : 'Checky returned an invalid analysis' })
+          return
+        }
+        throw error
+      }
+    }
     const context = await buildCheckyContext(db, session.diagnostic, parsed.data.content)
     let result: CheckyConsultResult
     try {

@@ -45,12 +45,16 @@ export type Diagnostic = {
 }
 
 export type AIRecommendation = { title: string; description: string; priority: Level; expectedImpact: string; suggestedAction: string }
+/** Evidencia de una inferencia ya resuelta contra la matriz: lo que se lee es "Debilidad: X", nunca el
+ *  id interno del factor. `evidenceIds` se conserva solo para poder llevar la lectura al factor. */
+export type AIFindingEvidence = { type: SWOTType; description: string }
+export type AIFinding = { finding: string; basis: 'FACT' | 'INFERENCE'; evidenceIds: string[]; evidence: AIFindingEvidence[]; interpretation?: string }
 export type AIAnalysis = {
   id: string
   diagnosticId: string
   executiveSummary: string
   diagnosis: string
-  keyFindings: Array<{ finding: string; basis: 'FACT' | 'INFERENCE' }>
+  keyFindings: AIFinding[]
   foStrategies: string[]
   doStrategies: string[]
   faStrategies: string[]
@@ -58,6 +62,9 @@ export type AIAnalysis = {
   priorityRisks: string[]
   priorityOpportunities: string[]
   recommendations: AIRecommendation[]
+  /** Verdad si esta lectura se generó con la matriz DOFA que hay ahora. En false se corresponde a una
+   *  versión anterior y hay que regenerarla antes de seguir usándola. */
+  stale: boolean
   createdAt: string
   updatedAt: string
 }

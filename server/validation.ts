@@ -97,9 +97,17 @@ export const swotItemUpdateSchema = swotItemCreateSchema.partial().refine(
   'At least one field is required',
 )
 
+/** Los ids de los factores DOFA de los que se apoya la inferencia, para poder leer su evidencia. Van
+ *  con `default([])` y no son obligatorios a propósito: `keyFindings` es un Json que ya está escrito
+ *  en la base sin este campo, y endurecer el schema haría que esas lecturas viejas dejaran de poder
+ *  leerse al abrir el diagnóstico. Lo que sí se exige es que sean ids de verdad, y eso lo comprueba el
+ *  servicio contra la matriz del diagnóstico, no el schema. */
 export const aiFindingSchema = z.object({
   finding: z.string().trim().min(1).max(2000),
   basis: z.enum(['FACT', 'INFERENCE']),
+  evidenceIds: z.array(z.string().trim().min(1).max(64)).max(8).default([]),
+  /** Campo nuevo para separar la conclusión de la explicación sin romper lecturas ya guardadas. */
+  interpretation: z.string().trim().max(3000).optional(),
 })
 
 export const aiRecommendationSchema = z.object({

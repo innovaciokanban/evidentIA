@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import { env } from './env.js'
-import { aiAnalysisSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, crossAnalysisSchema, crossTypeSchema } from './validation.js'
+import { aiAnalysisSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, crossAnalysisSchema, crossTypeFor, crossTypeSchema } from './validation.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import type { z } from 'zod'
 
@@ -16,7 +16,9 @@ export type DiagnosticForAI = {
   title: string
   description: string
   status: string
-  swotItems: Array<{ type: string; description: string }>
+  /** Cada factor lleva su id porque es lo único que permite que el modelo cite de qué se apoya una
+   *  inferencia. Sin el id en el prompt, `evidenceIds` sería texto libre. */
+  swotItems: Array<{ id: string; type: string; description: string }>
 }
 export type CheckyContext = {
   question: string
@@ -305,7 +307,7 @@ const responseSchema = {
   properties: {
     executiveSummary: { type: 'string' },
     diagnosis: { type: 'string' },
-    keyFindings: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { finding: { type: 'string' }, basis: { type: 'string', enum: ['FACT', 'INFERENCE'] } }, required: ['finding', 'basis'] } },
+    keyFindings: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { finding: { type: 'string' }, basis: { type: 'string', enum: ['FACT', 'INFERENCE'] }, evidenceIds: { type: 'array', items: { type: 'string' } }, interpretation: { type: 'string' } }, required: ['finding', 'basis', 'evidenceIds', 'interpretation'] } },
     foStrategies: { type: 'array', items: { type: 'string' } },
     doStrategies: { type: 'array', items: { type: 'string' } },
     faStrategies: { type: 'array', items: { type: 'string' } },
@@ -431,7 +433,7 @@ const CHECKY_MISSING_CROSS_GATE = [
   '1. Los dos factores existen en swotItems y sus ids son reales.',
   '2. Ambos factores son relevantes para el objetivo del diagnóstico, no meramente útiles.',
   '3. La combinación tiene una relación estratégica razonada: puedes explicarla en una frase sin usar palabras vacías.',
-  '4. El par equivalente NO existe ya. Usa existingPairs del contexto, que ya viene normalizado con el formato idInterno::idExterno. Recuerda que un par DA y su equivalente FA son el mismo cruce visto al revés.',
+  '4. El par equivalente NO existe ya. Usa existingPairs del contexto, que ya viene normalizado con el formato idInterno::idExterno, así que da igual en qué orden cites los dos factores. Lo único que se repite es la misma pareja: cambiar de factor interno o de factor externo sí es otro cruce y se puede proponer.',
   'Para cada cruce sugerido, el detail debe cubrir: por qué puede ser relevante, qué factores relaciona y con qué ids, qué tipo de cruce sería, y una posible dirección estratégica. Proponerlo no es registrarlo: la crea el usuario.',
   'Un cruce que no pasa la compuerta es peor que no decir nada, porque el usuario tiene que descartarlo.',
 ].join('\n\n')
@@ -531,6 +533,21 @@ const CHECKY_RECOMMENDATION_DISCIPLINE = [
   'Si un hueco de datos impide evaluar una dimensión, no lo rellenes: repórtalo en INFO_TO_COMPLEMENT diciendo qué información cambiaría la decisión, o activa insufficientData con missingInformation.',
 ].join('\n\n')
 
+/**
+ * La lectura que Checky responde sí o sí. Sin ella el modelo tiende a devolver un resumen de los
+ * factores, que es justo lo que el usuario ya escribió y lo que no le aporta nada. La regla ata la
+ * respuesta a las dos preguntas que el usuario hace y a la evidencia que hay que citar para sostener
+ * cada una, sin abrir categorías nuevas ni cambiar el contrato.
+ */
+const CHECKY_STRATEGIC_READING = [
+  'LECTURA ESTRATÉGICA. Tu `reply` es la lectura de un consultor sobre este diagnóstico, no un resumen de los factores. Tienes que responder dos preguntas, en este orden y con la evidencia que las sostiene:',
+  '1. ¿QUÉ ESTÁ PASANDO en la organización con lo que hasta ahora se ha registrado? Describe la situación, la coherencia o la incoherencia entre factores y cruces, y el punto en el que la matriz se atasca. Apóyala en los ids que la sostienen.',
+  '2. ¿QUÉ DEBERÍA PREOCUPARNOS Y PRIORIZARSE? Nombra qué exige atención antes que el resto, por qué lo crees y qué se pierde si no se atiende. Prioriza con un motivo, nunca con un adjetivo.',
+  'Prohibido el resumen superficial. "La organización tiene fortalezas, debilidades, oportunidades y amenazas" no es una lectura: describe la estructura de la matriz, que el usuario ya ve. Una lectura útil dice qué significa esa estructura para este diagnóstico en concreto.',
+  'Prohibido inventar para rellenar: no hay cifras de mercado, de clientes, de Competencia ni de sector que no estén en el contexto. Si el peso de la matriz impide sostener una de las dos preguntas, dilo con esas palabras en lugar de rellenarla.',
+  'Esta lectura es la primera capa; el detalle por dimensión va en los hallazgos, con su categoría y su evidencia.',
+].join('\n\n')
+
 const checkySystemRules = [
   CHECKY_ROLE,
   CHECKY_JUDGMENT_RULES,
@@ -538,6 +555,7 @@ const checkySystemRules = [
   'Actúas como ASESOR, no como ejecutor. Todo lo que produzcas es una propuesta trazable: el usuario decide qué acepta, qué descarta y qué ejecuta. Nunca presentes una sugerencia como si ya estuviera aplicada, y nunca la redactes en modo imperativo sobre el sistema.',
   CHECKY_CROSS_TYPES,
   CHECKY_ANTI_ECHO,
+  CHECKY_STRATEGIC_READING,
   CHECKY_ANALYSIS_DIMENSIONS,
   CHECKY_MISSING_CROSS_GATE,
   CHECKY_CONSOLIDATED_STRATEGIES,
@@ -675,6 +693,68 @@ const buildCheckyWork = (context: CheckyContext) => {
 type CheckyWorkMap = ReturnType<typeof buildCheckyWork>
 
 /**
+ * Compuerta de los cruces que Checky propone, aplicada en código y no solo en el prompt.
+ *
+ * El prompt ya exige no repetir un cruce existente, pero una instrucción no es una garantía: el
+ * modelo puede devolver el mismo par o su inverso. Aquí cada MISSING_CROSSES se contrasta con los
+ * cruces ya registrados antes de convertirse en sugerencia, con la misma comparación que usa la
+ * creación de cruces de la aplicación: tipo de cruce y pareja de factores, nunca el orden. El par se
+ * normaliza con el factor interno primero, igual que `workMap.existingPairs`, así que proponer los dos
+ * factores al revés describe la misma combinación y se descarta igual.
+ *
+ * Los cruces que el modelo devuelve en la misma respuesta entran en el mismo conjunto que los que ya
+ * estaban en la matriz, de modo que tampoco puede proponer dos veces la misma combinación.
+ *
+ * Se descarta además la pareja que no resuelve a exactamente dos factores del diagnóstico —uno interno
+ * y otro externo, que es la única forma que produce un cruce válido—: sin ellos la sugerencia no se
+ * podría ni crear ni aceptar, y una tarjeta que el usuario solo puede rechazar le cuesta un turno.
+ *
+ * No toca ninguna otra categoría: un hallazgo que no propone un cruce se conserva tal cual, con su
+ * evidencia y su base, porque no compite con la matriz DOFA.
+ */
+export const withoutRedundantMissingCrosses = (
+  findings: CheckyConsultResult['findings'],
+  swotItems: CheckyContext['swotItems'],
+  existingPairs: readonly string[],
+): CheckyConsultResult['findings'] => {
+  const factorById = new Map(swotItems.map((item) => [item.id, item]))
+  const taken = new Set(existingPairs)
+  return findings.filter((finding) => {
+    if (finding.category !== 'MISSING_CROSSES') return true
+    const cited = finding.evidenceIds.map((id) => factorById.get(id)).filter((item): item is CheckyContext['swotItems'][number] => item !== undefined)
+    if (cited.length !== 2) return false
+    const internal = cited.find((item) => CHECKY_INTERNAL_FACTOR_TYPES.has(item.type))
+    const external = cited.find((item) => !CHECKY_INTERNAL_FACTOR_TYPES.has(item.type))
+    if (!internal || !external || !crossTypeFor(internal.type, external.type)) return false
+    const pairKey = `${internal.id}::${external.id}`
+    if (taken.has(pairKey)) return false
+    taken.add(pairKey)
+    return true
+  })
+}
+
+/**
+ * Deja en las inferencias solo la evidencia que existe en la matriz.
+ *
+ * Pedirle al modelo que cite ids no basta: un id que no corresponde a ningún factor se convertiría en
+ * un enlace a nada cuando la pantalla lolea. Aquí se recorta lo que no resuelve contra los factores
+ * reales del diagnóstico y se deduplica, de modo que lo que llega a la tabla y a la pantalla es
+ * siempre una cita que se puede leer. Si el modelo no cita nada o cita solo inventos, la inferencia se
+ * queda sin evidencia: se conserva su texto, que es lo que el usuario pidió leer, y lo que no se
+ * inventa es la cita.
+ */
+const withRealEvidenceIds = (analysis: AIAnalysisResult, swotItems: DiagnosticForAI['swotItems']): AIAnalysisResult => {
+  const known = new Set(swotItems.map((item) => item.id))
+  return {
+    ...analysis,
+    keyFindings: analysis.keyFindings.map((finding) => ({
+      ...finding,
+      evidenceIds: [...new Set(finding.evidenceIds.filter((id) => known.has(id)))],
+    })),
+  }
+}
+
+/**
  * Andamiaje de análisis por dimensión, calculado con los datos del diagnóstico. No recomienda nada y
  * no inventa: solo deja escrito qué huecos existen y con qué ids reales puede apoyarse Checky. Cada
  * sección alimenta una dimensión concreta, y todas las entradas llevan los ids que el modelo debe
@@ -791,7 +871,10 @@ export class AIService {
     const prompt = [
       'Analiza exclusivamente el diagnóstico DOFA proporcionado a continuación.',
       'No inventes hechos, contexto, cifras ni información externa.',
+      'En `diagnosis` responde dos preguntas, en este orden: qué está pasando en la organización con lo que está registrado, y qué debería preocuparnos y priorizarse. No es un resumen de los factores: es una lectura estratégica que se apoya en ellos y dice qué significa esa matriz para este diagnóstico.',
+      'En `executiveSummary` sintetiza esas dos respuestas en dos o tres frases.',
       'En keyFindings marca cada elemento como FACT si está explícitamente en los datos o INFERENCE si es una inferencia razonable.',
+      'Cada elemento de keyFindings lleva `finding` como conclusión principal, `interpretation` explicando por qué esa relación es relevante y `evidenceIds` con los ids de los elementos de `swotItems` de los que se apoya, copiados literalmente. Una inferencia que no se apoya en ningún factor recibido no es una inferencia, así que en ese caso devuelve el array vacío en lugar de inventar una cita.',
       'Las estrategias y recomendaciones son propuestas, no hechos. Manténlas trazables a los factores recibidos.',
       'Devuelve únicamente JSON válido según el schema solicitado.',
       JSON.stringify(diagnostic),
@@ -807,7 +890,7 @@ export class AIService {
       try { candidate = JSON.parse(response.output_text) } catch { throw new AIServiceError('INVALID_RESPONSE') }
       const parsed = aiAnalysisSchema.safeParse(candidate)
       if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
-      return parsed.data
+      return withRealEvidenceIds(parsed.data, diagnostic.swotItems)
     } catch (error) {
       this.fail(error)
     }
@@ -911,7 +994,7 @@ export class AIService {
         })
         throw new AIServiceError('INVALID_RESPONSE')
       }
-      return parsed.data
+      return { ...parsed.data, findings: withoutRedundantMissingCrosses(parsed.data.findings, context.swotItems, workMap.existingPairs) }
     } catch (error) {
       this.fail(error)
     }

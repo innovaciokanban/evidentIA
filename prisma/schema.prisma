@@ -261,6 +261,12 @@ model AIAnalysis {
   priorityRisks         Json
   priorityOpportunities Json
   recommendations       Json
+  /// Huella de los factores DOFA con los que se generó esta lectura. Es lo que permite distinguir una
+  /// lectura vigente de otra que quedó atrás porque el usuario editó o eliminó factores después: la
+  /// matriz DOFA es la fuente de verdad. Va en null en los análisis anteriores a esta columna, y un
+  /// null no se puede comparar con nada, así que se trata como desactualizado en lugar de dar por
+  /// bueno un análisis del que nadie sabe qué versión de la matriz leyó.
+  swotFingerprint       String?
   diagnostic            QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
