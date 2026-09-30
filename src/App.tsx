@@ -2061,12 +2061,6 @@ const checkyCategoryVisuals: Record<CheckyCategory, CheckyCategoryVisual> = {
   INFO_TO_COMPLEMENT: { label: 'Información a validar', icon: '?', tone: 'info', relevance: 'LOW' },
   NEXT_STEPS: { label: 'Próximos pasos', icon: '→', tone: 'next', relevance: 'MEDIUM' },}
 
-const checkySummaryCards: Array<{ category: CheckyCategory; label: string }> = [
-  { category: 'REVIEW_ASPECTS', label: 'Aspectos a revisar' },
-  { category: 'MISSING_CROSSES', label: 'Cruces potenciales' },
-  { category: 'STRENGTHEN_STRATEGIES', label: 'Estrategias a fortalecer' },
-  { category: 'NEXT_STEPS', label: 'Próximos pasos' },]
-
 const checkyStatusVisuals: Record<CheckySuggestionStatus, { label: string; icon: string }> = {
   PENDING: { label: 'Pendiente', icon: '○' },
   ACCEPTED: { label: 'Aceptada', icon: '✓' },
@@ -2409,21 +2403,6 @@ function CheckyFindingCard({ finding, refs, byCode, status, busy, onAccept, onRe
     </article>
   )}
 
-function CheckySummary({ counts }: { counts: Record<CheckyCategory, number> }) {
-  return (
-    <div className="checky-summary">
-      {checkySummaryCards.map((card) => {
-        const visual = checkyCategoryVisuals[card.category]
-        return (
-          <div className={`checky-summary-card ${visual.tone}`} key={card.category}>
-            <span className="checky-summary-icon" aria-hidden="true">{visual.icon}</span>
-            <div><strong>{counts[card.category]}</strong><span>{card.label}</span></div>
-          </div>
-        )
-      })}
-    </div>
-  )}
-
 function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisError, onCrossCreated, onConsulted }: { diagnostic: Diagnostic; items: SWOTItem[]; analysis: AIAnalysis | null; analysisLoading: boolean; analysisError: string; onCrossCreated: () => Promise<void> | void; onConsulted: () => Promise<void> | void }) {
   const [status, setStatus] = useState<CheckyStatus>('idle')
   const [error, setError] = useState('')
@@ -2521,26 +2500,22 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
     }
   }
   const factorCodes = useCheckyFactorCodes(items)
-  const reply = [...messages].reverse().find((message) => message.role === 'CHECKY' && message.category === null) ?? null
   const suggestions = messages.filter((message) => message.role === 'CHECKY' && message.category !== null)
-  const counts = Object.fromEntries(checkyCategoryOrder.map((category) => [category, suggestions.filter((message) => message.category === category).length])) as Record<CheckyCategory, number>
   const groups = checkyCategoryOrder
     .map((category) => ({ category, visual: checkyCategoryVisuals[category], items: suggestions.filter((message) => message.category === category) }))
     .filter((group) => group.items.length > 0)
     .sort((left, right) => Number(right.category === 'MISSING_CROSSES') - Number(left.category === 'MISSING_CROSSES'))
   const hasResults = suggestions.length > 0
-  const missing = reply?.missingInformation ?? []
   const loading = status === 'loading'
   return (
     <section className="checky-panel" aria-busy={loading}>
       <header className="checky-head">
-        <span className="checky-avatar" aria-hidden="true">✦</span>
+        <img className="checky-avatar" src={checkyImage} alt="Checky" />
         <div className="checky-headings">
           <h3>✨ Checky</h3>
           <p className="checky-role">Asistente estratégico</p>
           <p className="checky-intro">He revisado tus factores, cruces y estrategias para identificar aspectos que podrías considerar antes de avanzar.</p>
         </div>
-        <img className="checky-header-image" src={checkyImage} alt="Checky" />
         <button type="button" className="button primary checky-cta" onClick={() => void consult()} disabled={busy}>
           {loading ? <><span className="button-loader" />Analizando...</> : 'Analizar con Checky'}
         </button>
@@ -2562,17 +2537,6 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
           <AiFindings findings={analysis.keyFindings} />
         </section>
       )}
-      {status === 'insufficientData' && (
-        <div className="checky-insufficient">
-          <span className="checky-insufficient-icon" aria-hidden="true">◔</span>
-          <div>
-            <strong>Checky necesita más información para concluir</strong>
-            <p>La evidencia registrada no alcanza para algunos de los análisis. Esto es lo que convendría validar con la empresa:</p>
-            <ul>{missing.map((entry) => <li key={entry}>{checkyReadable(entry, factorCodes)}</li>)}</ul>
-          </div>
-        </div>
-      )}
-      {hasResults && <CheckySummary counts={counts} />}
       {status === 'idle' && !hasResults && (
         <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu análisis estratégico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
       )}

@@ -1237,7 +1237,7 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 
  .checky-panel { margin-top: 20px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); animation: fadeIn .25s ease; }
 .checky-head { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
-.checky-avatar { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: linear-gradient(135deg, var(--blue), var(--purple)); color: #fff; font-size: 19px; box-shadow: var(--shadow-sm); }
+.checky-avatar { flex: none; display: block; width: 56px; height: 56px; object-fit: contain; object-position: center; }
 .checky-headings { flex: 1 1 auto; min-width: 0; }
 .checky-headings h3 { margin: 0; color: var(--ink); font: 700 17px 'Space Grotesk', sans-serif; }
 .checky-role { margin: 2px 0 0; color: var(--purple); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
