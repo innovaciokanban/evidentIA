@@ -693,7 +693,9 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .ai-analysis-panel .ai-group-count { display: grid; place-items: center; min-width: 21px; height: 21px; padding: 0 6px; border-radius: 999px; font: 700 11px/1 'Space Grotesk', sans-serif; font-variant-numeric: tabular-nums; }
 .ai-analysis-panel .ai-group.inference .ai-group-count { color: var(--amber); background: var(--amber-light); }
 .ai-analysis-panel .ai-group-head p { margin: 0 0 0 auto; color: var(--muted); font-size: 11.5px; text-align: right; }
-.ai-analysis-panel .ai-group-list { display: grid; gap: 8px; }
+ .ai-analysis-panel .ai-group-list { display: grid; gap: 8px; }
+ .checky-inline-identity { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+ .checky-inline-identity img { width: auto; height: 42px; object-fit: contain; }
 
 .ai-analysis-panel .ai-finding { position: relative; margin: 0; padding: 12px 14px 12px 17px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); transition: border-color var(--transition), background var(--transition); }
 .ai-analysis-panel .ai-finding::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: var(--radius) 0 0 var(--radius); }
@@ -1191,7 +1193,7 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .diag-section-head h3 { margin: 0; font: 700 17px/1.2 'Space Grotesk', sans-serif; color: var(--ink); }
 .diag-section-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .diag-section-head .diagnostic-status, .diag-section-head .muted { margin-left: auto; align-self: flex-start; }
-.diag-step-chip { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 13px; font-weight: 700; }
+ .diag-step-chip { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 13px; font-weight: 700; }
 .diag-section-text { margin: 0; color: var(--ink-secondary); font-size: 14px; line-height: 1.7; }
 
 .ai-panel-heading-main { display: flex; align-items: center; gap: 12px; }
@@ -1230,14 +1232,15 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
    CHECKY · ASISTENTE ESTRATÉGICO
    ============================================ */
 
-.checky-panel { margin-top: 20px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); animation: fadeIn .25s ease; }
+ .checky-panel { margin-top: 20px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); animation: fadeIn .25s ease; }
 .checky-head { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
 .checky-avatar { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: linear-gradient(135deg, var(--blue), var(--purple)); color: #fff; font-size: 19px; box-shadow: var(--shadow-sm); }
 .checky-headings { flex: 1 1 auto; min-width: 0; }
 .checky-headings h3 { margin: 0; color: var(--ink); font: 700 17px 'Space Grotesk', sans-serif; }
 .checky-role { margin: 2px 0 0; color: var(--purple); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
 .checky-intro { margin: 8px 0 0; max-width: 62ch; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
-.checky-cta { flex: none; }
+ .checky-header-image { flex: none; align-self: flex-end; width: auto; height: 160px; max-width: 180px; margin: -20px 0 -22px auto; object-fit: contain; object-position: bottom center; }
+ .checky-cta { flex: none; }
 .checky-loading { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 16px; padding: 22px 16px; border: 1px dashed var(--blue-border); border-radius: var(--radius); background: var(--blue-light); color: var(--ink-secondary); font-size: 13px; }
 .checky-error { margin-top: 16px; }
 .checky-idle { margin: 16px 0 0; padding: 16px 18px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg); color: var(--muted); font-size: 12.5px; line-height: 1.6; }
@@ -1307,7 +1310,9 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .checky-status.accepted { color: #166534; border: 1px solid var(--green-border); background: var(--green-light); }
 .checky-status.rejected { color: #475569; border: 1px solid var(--border); background: var(--bg-hover); }
 
-.checky-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 2px; }
+ .checky-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 2px; }
+ .checky-accepted-confirm { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+ .checky-accepted-confirm img { width: auto; height: 42px; object-fit: contain; }
 .checky-decided { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin: auto 0 0; padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
 .checky-decided.accepted { color: #166534; border: 1px solid var(--green-border); background: var(--green-light); }
 .checky-decided.rejected { color: #475569; border: 1px solid var(--border); background: var(--bg-hover); }
@@ -1344,7 +1349,9 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .checky-cross-meaning { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 11.5px; }
 .checky-cross-unknown { margin: 0; color: var(--amber); font-size: 11.5px; }
 .checky-cross-question { margin: 0; color: var(--ink); font-size: 11px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
-.checky-cross-strategy { display: grid; gap: 6px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border-light); border-left: 3px solid var(--blue-border); border-radius: var(--radius-sm); background: var(--surface); }
+ .checky-cross-strategy { display: grid; gap: 6px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--border-light); border-left: 3px solid var(--blue-border); border-radius: var(--radius-sm); background: var(--surface); }
+ .checky-strategy-identity { display: flex; align-items: center; gap: 8px; }
+ .checky-strategy-identity img { width: auto; height: 34px; object-fit: contain; }
 .checky-strategy-title { margin: 0; color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.45; }
 .checky-cross-note { margin: 0; padding: 8px 11px; border-radius: var(--radius-sm); background: var(--bg); color: var(--muted); font-size: 11.5px; line-height: 1.55; }
 
@@ -1357,13 +1364,16 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   15% { box-shadow: 0 0 0 4px rgba(37, 99, 235, .28); }
   55% { box-shadow: 0 0 0 4px rgba(37, 99, 235, .18); }
 }
-.checky-evidence-flash { border-radius: var(--radius); animation: checkyFlash 1.6s ease; }
+ .checky-evidence-flash { border-radius: var(--radius); animation: checkyFlash 1.6s ease; }
+ .checky-floating-avatar { position: fixed; right: 24px; bottom: 20px; z-index: 10; width: auto; height: 72px; pointer-events: none; object-fit: contain; filter: drop-shadow(0 3px 5px rgba(15, 23, 42, .16)); }
 
 @media (max-width: 1024px) {
   .checky-summary { grid-template-columns: repeat(2, 1fr); }
   .checky-group-body { grid-template-columns: 1fr; }
 }
-@media (max-width: 768px) {
+ @media (max-width: 768px) {
+  .checky-header-image { align-self: flex-end; height: 108px; max-width: 125px; margin: -8px 0 -10px auto; }
+  .checky-floating-avatar { right: 14px; bottom: 16px; height: 54px; }
   .checky-panel { padding: 16px 14px; }
   .checky-head { flex-direction: column; }
   .checky-cta { width: 100%; }

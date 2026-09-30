@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -9,6 +9,7 @@ import { askConfirm, ConfirmHost } from './components/ui/useConfirm'
 import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart'
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import logo from './assets/logokanban.png'
+import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
 
 type View = 'dashboard' | 'tickets' | 'companies' | 'diagnostics' | 'swot' | 'recommendations' | 'action-plans' | 'users'
@@ -116,8 +117,8 @@ const weightingBands: Array<{ min: number; label: string; tone: string }> = [
 
 const swotTypeLabels = Object.fromEntries(swotTypes.map((item) => [item.value, item.label])) as Record<SWOTType, string>
 
-/** Las tres etapas intermedias se muestran sobre la vista de la matriz DOFA, que es la que las abre. */
-type StrategicScreen = 'analisis' | 'checky' | 'ponderacion'
+/** Las etapas intermedias se muestran sobre la vista de la matriz DOFA, que es la que las abre. */
+type StrategicScreen = 'checky' | 'ponderacion'
 
 /** Etapas del análisis estratégico, en el único orden en el que se recorren. */
 type FlowStep = 'diagnostico' | 'dofa' | StrategicScreen
@@ -126,6 +127,9 @@ type FlowStep = 'diagnostico' | 'dofa' | StrategicScreen
  * Unico recorrido del análisis. El indicador del detalle y los chips numerados de cada bloque salen de
  * aqui, de modo que ninguna pantalla puede anunciar una etapa que el indicador no tiene ni repetirla.
  *
+ * El análisis estratégico con IA no aparece como etapa propia: Checky lo orquesta dentro de su propia
+ * pantalla, que es donde se lee, y así el usuario ejecuta un análisis y no dos.
+ *
  * Las secciones de recomendaciones y planes de acción quedan deliberadamente fuera: no son una etapa
  * del análisis estratégico, asi que no aparecen en el indicador. Se siguen alcanzando desde el
  * contenido del propio análisis y desde las rutas que ya existen.
@@ -133,7 +137,6 @@ type FlowStep = 'diagnostico' | 'dofa' | StrategicScreen
 const diagFlow: Array<{ key: FlowStep; label: string }> = [
   { key: 'diagnostico', label: 'Análisis estratégico' },
   { key: 'dofa', label: 'Matriz DOFA' },
-  { key: 'analisis', label: 'Análisis IA' },
   { key: 'checky', label: 'Checky' },
   { key: 'ponderacion', label: 'Ponderación' },
 ]
@@ -988,7 +991,7 @@ function DiagnosticDetailBase({ diagnostic, crosses, setCrosses, loadingCrosses,
   const externalCrossOptions = items.filter((item) => item.type === 'OPPORTUNITY' || item.type === 'THREAT')
   // El reparto por origen no vive aquí: la sección de cruces de abajo agrupa los dos grupos sobre esta
   // misma lista de StrategicCross, así que no hay dos fuentes ni dos lugares donde contarlos.
-  return <section className="diag-card diag-section"><div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('dofa')}</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del análisis estratégico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)} disabled={loadingCrosses}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los que creaste combinando factores en la matriz y los que propuso la IA. Cada cruce aparece una sola vez, con su origen.</p></div><div className="crosses-head-actions"><span className="cross-count">{crosses.length} cruces</span><button type="button" className="button primary small-button" onClick={() => void generateCrosses()} disabled={generatingCrosses}>{generatingCrosses ? <><span className="button-loader" />Generando...</> : 'Generar con IA'}</button><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}<CrossesIndex crosses={crosses} filter={crossFilter} onFilter={setCrossFilter} loading={loadingCrosses} error={crossError} generateError={generateCrossError} generating={generatingCrosses} openCrossId={openCrossId} onToggleOpen={setOpenCrossId} onEdit={openEditCross} onDelete={removeCross} /></section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}</section>}
+  return <section className="diag-card diag-section"><div className="diag-section-head"><span className="diag-step-chip">{flowStepNumber('dofa')}</span><div><h3>Matriz DOFA</h3><p>Fortalezas, debilidades, oportunidades y amenazas del análisis estratégico.</p></div></div><div className="swot-kpis"><span className="swot-kpi"><b>{items.length}</b>Factores</span><span className="swot-kpi"><b>{crosses.length}</b>Cruces</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'STRENGTH').length}</b>Fortalezas</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'WEAKNESS').length}</b>Debilidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'OPPORTUNITY').length}</b>Oportunidades</span><span className="swot-kpi"><b>{items.filter((item) => item.type === 'THREAT').length}</b>Amenazas</span></div>{itemError && <div className="form-error">{itemError}</div>}{dragCross && <div className={`cross-drag-hint${pendingCrossType ? ' go' : ''}${dropDeniedId ? ' no' : ''}`}>{dropHintText}</div>}<div ref={dragFlyoutRef} className={`swot-drag-flyout${dragCross ? ' visible' : ''}`} style={crossDragFlyoutStyle}>{dragCross ? (pendingCrossType ? `Crear cruce ${pendingCrossType}` : 'Suelta sobre un factor compatible') : ''}</div><div className={`swot-grid${dragCross ? ' drag-active' : ''}`}>{swotTypes.map((type) => <section className={`swot-quadrant ${type.value.toLowerCase()}`} key={type.value}><div className="swot-quadrant-heading"><div><span className="swot-symbol">{type.value === 'STRENGTH' ? '+' : type.value === 'WEAKNESS' ? '−' : type.value === 'OPPORTUNITY' ? '↗' : '!'}</span><h3>{type.short}</h3><span className="swot-count">{items.filter((item) => item.type === type.value).length}</span></div></div><div className="swot-items">{items.filter((item) => item.type === type.value).map((item) => <div className={`swot-item${dragCross?.itemId === item.id ? ' dragging' : ''}${dragCross && dragCross.itemId !== item.id && isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-valid' : ''}${dragCross && dragCross.itemId !== item.id && !isCompatibleCrossPair(dragCross.type, item.type) ? ' swot-dim' : ''}${dropTargetId === item.id ? ' drop-target' : ''}${dropDeniedId === item.id ? ' drop-denied' : ''}`} key={item.id} data-swot-item-id={item.id} onPointerDown={(event) => crossPointerDown(item, event)} onPointerMove={crossPointerMove} onPointerUp={crossPointerUp} onPointerCancel={crossPointerCancel}><span className="swot-grip" aria-hidden="true">⋮⋮</span><p>{item.description}</p><div className="swot-actions"><button className="swot-edit" onClick={() => startItemEdit(item)}>Editar</button><button className="swot-edit delete-link" onClick={() => void removeItem(item)} disabled={loadingCrosses}>Eliminar</button></div></div>)}</div>{items.filter((item) => item.type === type.value).length === 0 && <p className="swot-empty">Sin factores todavía</p>}<button className="swot-add" onClick={() => startItemCreate(type.value)}>+ Agregar {type.label.toLowerCase()}</button></section>)}</div><section className="diag-card diag-section crosses-section"><div className="diag-section-head"><span className="diag-step-chip crosses-chip">⌁</span><div><h3>CRUCES ESTRATÉGICOS</h3><p>Los que creaste combinando factores en la matriz y los que propuso la IA. Cada cruce aparece una sola vez, con su origen.</p></div><div className="crosses-head-actions"><button type="button" className="button primary small-button" onClick={() => void generateCrosses()} disabled={generatingCrosses}>{generatingCrosses ? <><span className="button-loader" />Generando...</> : 'Generar con IA'}</button><button className="button secondary small-button" onClick={() => startPendingCross(null, null)}>+ Crear cruce</button></div></div>{pendingCross && <div className="cross-new-form" ref={pendingCrossRef}><form onSubmit={createCross}><div className="cross-new-head"><span className="cross-new-badge">NUEVO CRUCE</span>{pendingFormType && <span className={`cross-type-chip ${pendingFormType.toLowerCase()}`}>{pendingFormType}</span>}<span className="cross-new-note">Se crea al instante con origen Usuario</span></div><div className="cross-new-factors">{pendingCross.factor1 ? <label>Factor 1<input type="text" value={`${swotTypeLabels[pendingCross.factor1.type]}: ${pendingCross.factor1.description}`} readOnly /></label> : <label>Factor 1 (interno)<select value={pendingCrossF1Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor1: item } : current) }}>{internalCrossOptions.length === 0 && <option value="">Sin factores internos</option>}{internalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}{pendingCross.factor2 ? <label>Factor 2<input type="text" value={`${swotTypeLabels[pendingCross.factor2.type]}: ${pendingCross.factor2.description}`} readOnly /></label> : <label>Factor 2 (externo)<select value={pendingCrossF2Id} onChange={(event) => { const item = items.find((candidate) => candidate.id === event.target.value) ?? null; setPendingCross((current) => current ? { ...current, factor2: item } : current) }}>{externalCrossOptions.length === 0 && <option value="">Sin factores externos</option>}{externalCrossOptions.map((item) => <option key={item.id} value={item.id}>{swotTypeLabels[item.type]}: {item.description}</option>)}</select></label>}</div><label>Estrategia<textarea value={pendingCross.strategy} onChange={(event) => setPendingCross((current) => current ? { ...current, strategy: event.target.value } : current)} placeholder="Estrategia propuesta (opcional)..." rows={2} /></label>{crossFormError && <div className="form-error" role="alert">{crossFormError}</div>}<div className="cross-new-actions"><button type="button" className="button secondary small-button" onClick={cancelPendingCross}>Cancelar</button><button className="button primary" disabled={savingCross}>{savingCross ? 'Creando...' : 'Crear cruce'}</button></div></form></div>}<CrossesIndex crosses={crosses} filter={crossFilter} onFilter={setCrossFilter} loading={loadingCrosses} error={crossError} generateError={generateCrossError} generating={generatingCrosses} openCrossId={openCrossId} onToggleOpen={setOpenCrossId} onEdit={openEditCross} onDelete={removeCross} /></section>{crossModal && <CrossModal cross={crossModal.cross} draft={crossDraft} setDraft={setCrossDraft} saving={savingCross} error={crossFormError} onSubmit={saveCross} onClose={closeCrossModal} />}{showItemForm && <SWOTItemForm draft={itemDraft} setDraft={setItemDraft} isEdit={Boolean(editingItem)} saving={savingItem} onSubmit={saveItem} onClose={() => { setEditingItem(null); setShowItemForm(false); setItemDraft(emptySWOTDraft) }} />}</section>}
 
 function CrossModal({ cross, draft, setDraft, saving, error, onSubmit, onClose }: { cross: StrategicCross; draft: { strategy: string }; setDraft: React.Dispatch<React.SetStateAction<{ strategy: string }>>; saving: boolean; error: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const crossType = cross.crossType
@@ -1555,14 +1558,27 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
   }
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(true)
-  const [processing, setProcessing] = useState(false)
   const [analysisError, setAnalysisError] = useState('')
   const loadAnalysis = useCallback(async () => {
     setAnalysisLoading(true)
-    try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`); setAnalysis(result.analysis) } catch (error) { if (!(error instanceof ApiError && error.status === 404)) setAnalysisError('No se pudo cargar el análisis guardado.') } finally { setAnalysisLoading(false) }
+    setAnalysis(null)
+    // El error se borra antes de pedir, no después: así un fallo anterior no sobrevive al cambio de
+    // diagnóstico ni impide que un reintento lo limpie y lo muestre limpio.
+    setAnalysisError('')
+    try {
+      // `analysis: null` es la respuesta normal de un diagnóstico que aún no tiene lectura estratégica,
+      // y no se pinta nada raro: la pantalla de Checky queda lista para que el usuario pulse
+      // "Analizar con Checky". El 404 se reservó para el diagnóstico que no existe o no es de esta
+      // empresa, que sí es un problema, así que lo que llega al catch es siempre algo que contar.
+      const result = await api<{ analysis: AIAnalysis | null }>(`/diagnostics/${diagnostic.id}/ai-analysis`)
+      setAnalysis(result.analysis)
+    } catch (error) {
+      setAnalysisError(error instanceof ApiError && error.status === 404 ? 'No se pudo encontrar este diagnóstico.' : 'No se pudo cargar el análisis guardado.')
+    } finally {
+      setAnalysisLoading(false)
+    }
   }, [diagnostic.id])
   useEffect(() => { const timer = window.setTimeout(() => { void loadAnalysis() }, 0); return () => window.clearTimeout(timer) }, [loadAnalysis])
-  async function runAnalysis() { if (processing) return; setProcessing(true); setAnalysisError(''); try { const result = await api<{ analysis: AIAnalysis }>(`/diagnostics/${diagnostic.id}/ai-analysis`, { method: 'POST' }); setAnalysis(result.analysis); goToFlowStep('analisis') } catch (error) { setAnalysisError(error instanceof ApiError && error.status === 503 ? 'El análisis IA no está configurado todavía. Añade OPENAI_API_KEY en el backend.' : error instanceof ApiError ? error.message : 'No se pudo generar el análisis IA.') } finally { setProcessing(false) } }
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [importing, setImporting] = useState(false)
   const [recError, setRecError] = useState('')
@@ -1593,17 +1609,17 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
   const isFlowDone = (key: FlowStep, index: number) => {
     if (key === 'diagnostico') return diagnostic.status !== 'DRAFT'
     if (key === 'dofa') return swotItemCount > 0
-    if (key === 'analisis') return Boolean(analysis)
     return index < activeIndex
   }
   // El indicador deja volver a cualquier etapa ya alcanzada y avanzar solo a la siguiente, que es
   // justo lo que ofrecen los botones del final de cada pantalla: saltarse mas de una sigue sin ser
   // posible. Desde una seccion ajena al recorrido se habilita el tramo inicial, porque el analisis
   // guardado es lo que marca hasta donde se puede llegar.
-  const furthestIndex = activeIndex >= 0 ? activeIndex : analysis ? 2 : 1
+  const furthestIndex = activeIndex >= 0 ? activeIndex : analysis ? 3 : 2
   const isFlowReachable = (index: number) => index <= furthestIndex + 1
   return (
     <div className="diag-page">
+      {(activeFlow === 'checky' || activeFlow === 'ponderacion') && <img className="checky-floating-avatar" src={checkyImage} alt="" aria-hidden="true" />}
       <header className="diag-hero">
         <p className="diag-breadcrumb"><span>ANÁLISIS ESTRATÉGICO</span><span className="diag-breadcrumb-sep">·</span><strong>{diagnostic.company.name}</strong></p>
         <div className="diag-hero-row">
@@ -1648,55 +1664,24 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
       <section className={`diag-stage${activeFlow === 'dofa' ? ' active' : ''}`}>
         <DiagnosticDetailBase diagnostic={diagnostic} crosses={crosses} setCrosses={setCrosses} loadingCrosses={loadingCrosses} crossError={crossError} setCrossError={setCrossError} loadCrosses={loadCrosses} />
         <div className="diag-next">
-          {analysisError && <span className="form-error">{analysisError}</span>}
-          {/* Con análisis guardado el avance es consultarlo, no volverlo a pedir: regenerarlo gasta la
-              cuota de la IA y además cambia una lectura que la persona ya pudo leer. */}
-          {analysis
-            ? <button className="button primary" onClick={() => goToFlowStep('analisis')}>Ver análisis con IA →</button>
-            : <button className="button primary" onClick={() => void runAnalysis()} disabled={processing}>{processing ? <><span className="button-loader" />Procesando...</> : '✨ Analizar con IA →'}</button>}
+          {/* No hay una etapa de análisis entre la matriz y Checky: Checky genera la lectura estratégica
+              la primera vez que se le consulta, así que el botón solo abre su pantalla. */}
+          <button className="button primary" onClick={() => goToFlowStep('checky')}>Ver análisis →</button>
         </div>
-        {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
       </section>
-      {activeFlow === 'analisis' && (
-        <section className="diag-stage active">
-          <div className="diag-card diag-section">
-            <div className="diag-section-head">
-              <span className="diag-step-chip">✦</span>
-              <div><h3>Análisis estratégico con IA</h3><p>Lectura estratégica generada a partir de tu matriz DOFA y tus cruces.</p></div>
-            </div>
-          </div>
-          {analysis
-            ? <AIAnalysisPanel analysis={analysis} loading={analysisLoading} items={diagnostic.swotAnalysis?.items ?? []} />
-            : <div className="diag-card ai-loading"><span className="loader" />Generando análisis...</div>}
-          <div className="diag-nav">
-            <button className="button secondary" onClick={() => goToFlowStep('dofa')}>← Volver a Matriz DOFA</button>
-            <button className="button primary" onClick={() => goToFlowStep('checky')}>Consultar a Checky →</button>
-          </div>
-        </section>
-      )}
       {activeFlow === 'checky' && (
         <section className="diag-stage active">
-          <div className="diag-card diag-section">
-            <div className="diag-section-head">
-              <span className="diag-step-chip">✦</span>
-              <div><h3>Consultar a Checky</h3><p>Profundiza este análisis estratégico.</p></div>
-            </div>
-          </div>
-          <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} onCrossCreated={refreshCrosses} />
+          
+          <CheckyPanel diagnostic={diagnostic} items={diagnostic.swotAnalysis?.items ?? []} analysis={analysis} analysisLoading={analysisLoading} analysisError={analysisError} onCrossCreated={refreshCrosses} onConsulted={loadAnalysis} />
           <div className="diag-nav">
-            <button className="button secondary" onClick={() => goToFlowStep('analisis')}>← Volver al análisis IA</button>
+            <button className="button secondary" onClick={() => goToFlowStep('dofa')}>← Volver a Matriz DOFA</button>
             <button className="button primary" onClick={() => goToFlowStep('ponderacion')}>Ponderar estrategias →</button>
           </div>
         </section>
       )}
       {activeFlow === 'ponderacion' && (
         <section className="diag-stage active">
-          <div className="diag-card diag-section">
-            <div className="diag-section-head">
-              <span className="diag-step-chip">⚖</span>
-              <div><h3>Ponderación de estrategias</h3><p>Una sola lista con las estrategias de la IA, de los cruces y de Checky de este análisis estratégico.</p></div>
-            </div>
-          </div>
+          
           <StrategyWeightingScreen diagnostic={diagnostic} canValue={canValue} />
           <div className="diag-nav">
             <button className="button secondary" onClick={() => goToFlowStep('checky')}>← Volver a Checky</button>
@@ -1845,9 +1830,6 @@ function ActionItemEditForm({ draft, setDraft, users, saving, onSubmit, onClose 
 
 function ActionFromRecommendationForm({ recommendation, plans, users, planId, onPlanIdChange, draft, onDraftChange, planDraft, onPlanDraftChange, error, saving, creatingPlan, onSubmit, onPlanCreate, onClose }: { recommendation: Recommendation; plans: ActionPlan[]; users: User[]; planId: string; onPlanIdChange: (value: string) => void; draft: ItemDraft; onDraftChange: React.Dispatch<React.SetStateAction<ItemDraft>>; planDraft: PlanDraft; onPlanDraftChange: React.Dispatch<React.SetStateAction<PlanDraft>>; error: string; saving: boolean; creatingPlan: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onPlanCreate: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">⚑</div><div className="company-modal-title"><p className="eyebrow">RECOMENDACIÓN</p><h2>Crear acción</h2><p className="company-modal-subtitle">Convierte esta recomendación en una acción del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Recomendación relacionada<input type="text" value={recommendation.title} readOnly /></label>{plans.length === 0 ? <div className="modal-plan-empty"><p>No tienes planes de acción para este análisis estratégico.</p><form className="factor-form plan-form" onSubmit={onPlanCreate}><div className="factor-form-heading"><h3>Nuevo plan</h3></div><label>Título<input value={planDraft.title} onChange={(event) => onPlanDraftChange({ ...planDraft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={planDraft.description} onChange={(event) => onPlanDraftChange({ ...planDraft, description: event.target.value })} rows={2} minLength={3} required /></label><button className="button primary" disabled={creatingPlan}>{creatingPlan ? 'Creando plan...' : '+ Crear plan'}</button></form></div> : <label>Plan de acción<select value={planId} onChange={(event) => onPlanIdChange(event.target.value)} required><option value="">Selecciona un plan</option>{plans.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}<label>Título<input value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} placeholder="¿Qué se hará?" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} rows={2} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => onDraftChange({ ...draft, priority: event.target.value as Level })}>{levels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Responsable<select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => onDraftChange({ ...draft, dueDate: event.target.value })} /></label>{error && <div className="form-error">{error}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving || creatingPlan || !planId}>{saving ? 'Creando...' : 'Crear acción'}</button></div></form></div> }
 
-function aiTextParagraphs(text: string): string[] {
-  return text.split(/\n+/).map((part) => part.trim()).filter(Boolean)}
-
 function aiDofaCounts(items: SWOTItem[]) {
   return swotTypes.map((type) => ({ key: type.value, label: type.label, count: items.filter((item) => item.type === type.value).length }))
 }
@@ -1860,8 +1842,6 @@ function AiDofaBalance({ items }: { items: SWOTItem[] }) {
   return <div className="ai-doqa"><div className="ai-doqa-head"><b>Matriz DOFA</b><span>{total} factores</span></div><div className="ai-doqa-bar">{counts.map((entry) => <i className={entry.key.toLowerCase()} key={entry.key} style={{ flexGrow: entry.count }} title={`${entry.label}: ${entry.count}`} />)}</div><ul className="ai-doqa-legend">{counts.map((entry) => <li className={entry.key.toLowerCase()} key={entry.key}><strong>{entry.count}</strong> {entry.label}</li>)}</ul></div>
 }
 
-type AIFinding = { finding: string; basis: 'FACT' | 'INFERENCE' }
-
 /** Cada hallazgo trae su origen en `basis`: un hecho se apoya en los datos del diagnóstico y una
  *  inferencia es la lectura que la IA hace sobre ellos. La tarjeta lo dice con palabras; el color
  *  solo refuerza. Aquí no se inventa ni se reordena nada: se muestran los hallazgos tal como llegan. */
@@ -1870,8 +1850,8 @@ const aiBasisCopy: Record<AIFinding['basis'], { label: string; note: string }> =
   INFERENCE: { label: 'Inferencia', note: 'Interpretación de la IA sobre esos datos.' },
 }
 
-function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
-  const paragraphs = aiTextParagraphs(text)
+function AiDiagnosis({ summary, text: _text, items }: { summary: string; text: string; items: SWOTItem[] }) {
+  const readableSummary = checkyReadable(summary.trim(), buildCheckyFactorCodes(items))
   return (
     <article className="ai-diagnosis">
       <header className="ai-card-head">
@@ -1880,9 +1860,11 @@ function AiDiagnosis({ text, items }: { text: string; items: SWOTItem[] }) {
           <h4>Análisis estratégico</h4>
           <p className="ai-card-subtitle">Lectura estratégica de la situación actual</p>
         </div>
-        <span className="ai-generated-badge">Generado con IA</span>
+        <span className="ai-generated-badge">Checky</span>
       </header>
-      {paragraphs.length > 0 && <div className="ai-reading">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>}
+      {readableSummary && <div className="ai-reading">
+        <p><strong>Resumen ejecutivo:</strong> {readableSummary}</p>
+      </div>}
       <AiDofaBalance items={items} />
     </article>
   )
@@ -1897,34 +1879,84 @@ function splitInference(text: string, limit = 120): { brief: string; rest: strin
   return { brief: `${head}…`, rest: clean.slice(head.length).trim() }
 }
 
-function AiFindingCard({ finding, basis }: AIFinding) {
+/** De dónde sale la inferencia, con las palabras del factor y no con su id.
+ *
+ *  Reutiliza el bloque de evidencia que ya usa Checky en lugar de inventar otro: mismo aspecto, misma
+ *  forma de navegar al factor y mismo texto de ayuda cuando el factor ya no está. Lo único que cambia
+ *  es la etiqueta, "Derivada de:", porque aquí no son hallazgos de Checky sino conclusiones del
+ *  análisis. `evidence` llega ya resuelta desde el servidor contra la matriz vigente, así que no hay
+ *  forma de que aquí aparezca un id suelto. */
+function AiFindingEvidence({ finding }: { finding: AIFinding }) {
+  const [hint, setHint] = useState('')
+  // `evidence` y `evidenceIds` llegan alineados: el servidor solo deja los ids que resuelve en la
+  // matriz actual, y la etiqueta sale de ahí. El id se conserva únicamente para poder llevar la
+  // lectura hasta el factor en la DOFA; nunca se muestra.
+  const refs = useMemo<CheckyFactorRef[]>(() => finding.evidence.reduce<CheckyFactorRef[]>((list, evidence, index) => {
+    const id = finding.evidenceIds[index]
+    if (id) list.push({ kind: 'factor', id, label: `${swotTypeLabels[evidence.type]}: ${evidence.description}`, type: evidence.type })
+    return list
+  }, []), [finding])
+  if (refs.length === 0) return (
+    <div className="checky-evidence">
+      <span className="checky-evidence-label">Derivada de:</span>
+      <p className="checky-evidence-empty">No se encontró evidencia trazable en la matriz actual.</p>
+    </div>
+  )
+  return (
+    <div className="checky-evidence">
+      <span className="checky-evidence-label">Derivada de:</span>
+      <ul>
+        {refs.map((ref) => (
+          <li key={ref.id}>
+            <button type="button" className={`checky-evidence-chip ${ref.kind}`} onClick={() => setHint(navigateToCheckyEvidence(ref).hint)}>
+              <span className="checky-evidence-icon" aria-hidden="true">◻</span>
+              <span className="checky-evidence-text">{ref.label}</span>
+              <span className="checky-evidence-go" aria-hidden="true">→</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {hint && <p className="checky-evidence-hint">{hint}</p>}
+    </div>
+  )
+}
+
+function AiFindingCard({ entry }: { entry: AIFinding }) {
   const [open, setOpen] = useState(false)
-  const { brief, rest } = splitInference(finding)
+  const basis = entry.basis
+  const { brief, rest } = splitInference(entry.finding)
+  const interpretation = entry.interpretation?.trim() ?? ''
   const expandable = rest.length > 0
   return (
     <article className={`ai-finding ${basis.toLowerCase()}${open ? ' open' : ''}`}>
+      <p className="detail-label">Conclusión principal</p>
       <div className="ai-finding-head">
         <span className={`ai-finding-tag ${basis.toLowerCase()}`}>{aiBasisCopy[basis].label}</span>
         <p className="ai-finding-summary">{brief}</p>
         {expandable && <button type="button" className="link-toggle ai-finding-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Ocultar' : 'Ver completo'}<span className="ai-finding-chevron" aria-hidden="true">▾</span></button>}
+      </div>
+      <AiFindingEvidence finding={entry} />
+      <div className="ai-finding-interpretation">
+        <p className="detail-label">Interpretación:</p>
+        <p className="ai-finding-detail">{interpretation || 'No disponible en esta lectura; actualiza el análisis con Checky para regenerarla.'}</p>
       </div>
       {expandable && <div className="ai-finding-body"><div><p className="ai-finding-detail">{rest}</p></div></div>}
     </article>
   )
 }
 
-function AiFindingGroup({ basis, findings }: { basis: AIFinding['basis']; findings: AIFinding[] }) {
+function AiFindingGroup({ basis, findings, heading }: { basis: AIFinding['basis']; findings: AIFinding[]; heading?: string }) {
   if (findings.length === 0) return null
   const copy = aiBasisCopy[basis]
   return (
     <section className={`ai-group ${basis.toLowerCase()}`} aria-label={copy.label}>
       <div className="ai-group-head">
-        <h4>{copy.label}</h4>
+        <h4>{heading ?? copy.label}</h4>
         <span className="ai-group-count">{findings.length}</span>
         <p>{copy.note}</p>
       </div>
       <div className="ai-group-list">
-        {findings.map((item, index) => <AiFindingCard key={`${item.finding}-${index}`} finding={item.finding} basis={item.basis} />)}
+        {findings.map((item, index) => <AiFindingCard key={`${item.finding}-${index}`} entry={item} />)}
       </div>
     </section>
   )
@@ -1939,29 +1971,12 @@ function AiFindings({ findings }: { findings: AIFinding[] }) {
   if (inferences.length === 0) return <p className="ai-empty">Sin inferencias en este análisis.</p>
   return (
     <div className="ai-findings">
-      <AiFindingGroup basis="INFERENCE" findings={inferences} />
-    </div>
-  )
-}
-
-function AIAnalysisPanel({ analysis, loading, items = [] }: { analysis: AIAnalysis; loading: boolean; items?: SWOTItem[] }) {
-  return (
-    <section className="ai-analysis-panel">
-      <div className="ai-panel-heading">
-        <div className="ai-panel-heading-main">
-          <span className="ai-exec-icon" aria-hidden="true">✦</span>
-          <div>
-            <p className="detail-label">ESTRATEGIA</p>
-            <h3>Análisis con IA</h3>
-            <p className="ai-panel-subtitle">Lectura estratégica generada con IA a partir de la DOFA.</p>
-          </div>
-        </div>
-        <span className="ai-badge">IA</span>
+      <div className="checky-inline-identity">
+        <img src={checkyImage} alt="" aria-hidden="true" />
+        <span>Inferencias identificadas por Checky</span>
       </div>
-      {loading && <div className="ai-loading"><span className="loader" />Actualizando análisis...</div>}
-      <AiDiagnosis text={analysis.diagnosis} items={items} />
-      <AiFindings findings={analysis.keyFindings} />
-    </section>
+      <AiFindingGroup basis="INFERENCE" findings={inferences} heading="Inferencias estratégicas" />
+    </div>
   )
 }
 
@@ -2219,8 +2234,10 @@ function CheckyStatusBadge({ status }: { status: CheckySuggestionStatus }) {
   const visual = checkyStatusVisuals[status]
   return <span className={`checky-status ${status.toLowerCase()}`}><span aria-hidden="true">{visual.icon}</span>{visual.label}</span>}
 
-function CheckyDecisionActions({ status, busy, onAccept, onReject }: { status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
-  if (status === 'ACCEPTED') return <p className="checky-decided accepted"><span aria-hidden="true">✓</span> Sugerencia aceptada</p>
+function CheckyDecisionActions({ status, busy, onAccept, onReject, acceptedMessage }: { status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void; acceptedMessage?: string }) {
+  if (status === 'ACCEPTED') return acceptedMessage
+    ? <div className="checky-accepted-confirm"><img src={checkyImage} alt="" aria-hidden="true" /><p className="checky-decided accepted"><span aria-hidden="true">✓</span> {acceptedMessage}</p></div>
+    : <p className="checky-decided accepted"><span aria-hidden="true">✓</span> Sugerencia aceptada</p>
   if (status === 'REJECTED') return <p className="checky-decided rejected"><span aria-hidden="true">✕</span> Sugerencia descartada</p>
   return (
     <div className="checky-actions">
@@ -2252,6 +2269,16 @@ function CheckyEvidence({ refs }: { refs: CheckyEvidenceRef[] }) {
 
 function CheckyMissingCrossCard({ finding, refs, byCode, status, busy, onAccept, onReject }: { finding: CheckyMessage; refs: CheckyEvidenceRef[]; byCode: Map<string, SWOTItem>; status: CheckySuggestionStatus; busy: boolean; onAccept: () => void; onReject: () => void }) {
   const [open, setOpen] = useState(false)
+  const [acceptedFlash, setAcceptedFlash] = useState(false)
+  useEffect(() => {
+    if (status !== 'ACCEPTED') {
+      setAcceptedFlash(false)
+      return
+    }
+    setAcceptedFlash(true)
+    const timer = window.setTimeout(() => setAcceptedFlash(false), 2600)
+    return () => window.clearTimeout(timer)
+  }, [status])
   const { detail } = splitCheckyContent(finding.content)
   const factors = orderCheckyFactors(refs.filter((ref): ref is CheckyFactorRef => ref.kind === 'factor'))
   const crossType = factors.length === 2 ? crossTypeForPair(factors[0].type, factors[1].type) : null
@@ -2289,7 +2316,7 @@ function CheckyMissingCrossCard({ finding, refs, byCode, status, busy, onAccept,
         </p>
       )}
       {detail && <><p className="checky-cross-question">¿Por qué podría ser relevante?</p><p className="checky-card-detail">{checkyReadable(detail, byCode)}</p></>}
-      {strategyTitle && strategyDescription && (<div className="checky-cross-strategy"><p className="checky-cross-question"><span aria-hidden="true">🎯</span> Estrategia sugerida</p><p className="checky-strategy-title">{strategyTitle}</p><p className="checky-card-detail">{checkyReadable(strategyDescription, byCode)}</p></div>)}
+      {strategyTitle && strategyDescription && (<div className="checky-cross-strategy"><div className="checky-strategy-identity"><img src={checkyImage} alt="" aria-hidden="true" /><p className="checky-cross-question"><span aria-hidden="true">🎯</span> Estrategia sugerida por Checky</p></div><p className="checky-strategy-title">{strategyTitle}</p><p className="checky-card-detail">{checkyReadable(strategyDescription, byCode)}</p></div>)}
       <p className="checky-cross-note">Al aceptar, el cruce se crea en la matriz DOFA con origen IA y esta sugerencia queda aceptada. Si lo rechazas, no se crea nada.</p>
       <div className="checky-card-foot">
         <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
@@ -2297,7 +2324,7 @@ function CheckyMissingCrossCard({ finding, refs, byCode, status, busy, onAccept,
         <CheckyStatusBadge status={status} />
       </div>
       {open && <CheckyEvidence refs={refs} />}
-      <CheckyDecisionActions status={status} busy={busy} onAccept={onAccept} onReject={onReject} />
+      <CheckyDecisionActions status={status} busy={busy} onAccept={onAccept} onReject={onReject} acceptedMessage={acceptedFlash ? 'Checky confirmó la estrategia. Continúa a Ponderación.' : undefined} />
     </article>
   )}
 
@@ -2340,7 +2367,7 @@ function CheckySummary({ counts }: { counts: Record<CheckyCategory, number> }) {
     </div>
   )}
 
-function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagnostic; items: SWOTItem[]; onCrossCreated: () => Promise<void> | void }) {
+function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisError, onCrossCreated, onConsulted }: { diagnostic: Diagnostic; items: SWOTItem[]; analysis: AIAnalysis | null; analysisLoading: boolean; analysisError: string; onCrossCreated: () => Promise<void> | void; onConsulted: () => Promise<void> | void }) {
   const [status, setStatus] = useState<CheckyStatus>('idle')
   const [error, setError] = useState('')
   const [session, setSession] = useState<CheckySession | null>(null)
@@ -2348,6 +2375,11 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
   const [crosses, setCrosses] = useState<StrategicCross[]>([])
   const [busy, setBusy] = useState(false)
   useEffect(() => {
+    setStatus('idle')
+    setError('')
+    setSession(null)
+    setMessages([])
+    setCrosses([])
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
@@ -2381,6 +2413,10 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
       const result = await api<{ reply: CheckyMessage; messages: CheckyMessage[] }>(`/checky/sessions/${created.session.id}/messages`, { method: 'POST', body: JSON.stringify({ content: checkyDefaultQuestion }) })
       setMessages(result.messages)
       setStatus(result.reply.insufficientData ? 'insufficientData' : 'success')
+      // Checky genera la lectura estratégica del diagnóstico si no había ninguna, o si la que había
+      // describe una versión anterior de la matriz DOFA, así que la pantalla de arriba tiene que
+      // releerla en cuanto termina la consulta.
+      await onConsulted()
     } catch (requestError) {
       setError(checkyErrorMessage(requestError))
       setStatus('error')
@@ -2417,6 +2453,7 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
   const groups = checkyCategoryOrder
     .map((category) => ({ category, visual: checkyCategoryVisuals[category], items: suggestions.filter((message) => message.category === category) }))
     .filter((group) => group.items.length > 0)
+    .sort((left, right) => Number(right.category === 'MISSING_CROSSES') - Number(left.category === 'MISSING_CROSSES'))
   const hasResults = suggestions.length > 0
   const missing = reply?.missingInformation ?? []
   const loading = status === 'loading'
@@ -2429,6 +2466,7 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
           <p className="checky-role">Asistente estratégico</p>
           <p className="checky-intro">He revisado tus factores, cruces y estrategias para identificar aspectos que podrías considerar antes de avanzar.</p>
         </div>
+        <img className="checky-header-image" src={checkyImage} alt="Checky" />
         <button type="button" className="button primary checky-cta" onClick={() => void consult()} disabled={busy}>
           {loading ? <><span className="button-loader" />Analizando...</> : 'Analizar con Checky'}
         </button>
@@ -2436,6 +2474,20 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
       {loading && <div className="checky-loading"><span className="loader" />Checky está revisando tu análisis estratégico...</div>}
       {status === 'error' && <div className="form-error checky-error" role="alert">{error}</div>}
       {error && status !== 'error' && <div className="form-error checky-error" role="alert">{error}</div>}
+      {!analysis && analysisLoading && <div className="diag-card ai-loading"><span className="loader" />Buscando análisis guardado...</div>}
+      {analysisError && <div className="form-error" role="alert">{analysisError}</div>}
+      {analysis?.stale && (
+        <div className="form-error page-alert alert-retry" role="alert">
+          <span>Esta lectura estratégica corresponde a una versión anterior de la matriz DOFA.</span>
+          <button type="button" className="button secondary" onClick={() => void consult()}>Actualizar análisis con Checky →</button>
+        </div>
+      )}
+      {analysis && (
+        <section className="ai-analysis-panel">
+          <AiDiagnosis summary={analysis.executiveSummary} text={analysis.diagnosis} items={items} />
+          <AiFindings findings={analysis.keyFindings} />
+        </section>
+      )}
       {status === 'insufficientData' && (
         <div className="checky-insufficient">
           <span className="checky-insufficient-icon" aria-hidden="true">◔</span>
@@ -2446,7 +2498,6 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
           </div>
         </div>
       )}
-      {hasResults && reply && <p className="checky-reply">{checkyReadable(reply.content, factorCodes)}</p>}
       {hasResults && <CheckySummary counts={counts} />}
       {status === 'idle' && !hasResults && (
         <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu análisis estratégico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
@@ -2457,7 +2508,7 @@ function CheckyPanel({ diagnostic, items, onCrossCreated }: { diagnostic: Diagno
             <section className={`checky-group ${group.visual.tone}`} key={group.category}>
               <header className="checky-group-head">
                 <span className="checky-group-icon" aria-hidden="true">{group.visual.icon}</span>
-                <h4>{group.visual.label}</h4>
+                <h4>{group.category === 'MISSING_CROSSES' ? 'Cruces y estrategias de Checky' : group.visual.label}</h4>
                 <span className="checky-group-count">{group.items.length}</span>
               </header>
               <div className="checky-group-body">
