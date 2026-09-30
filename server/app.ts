@@ -367,11 +367,9 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
 
   const sources = acceptedOnly
     ? (() => {
-        const acceptedCheckyCrossPairs = new Set(acceptedSuggestions
-          .filter((suggestion) => suggestion.category === 'MISSING_CROSSES')
-          .map((suggestion) => JSON.stringify([...suggestion.evidenceIds].sort())))
-        const acceptedCrosses = crossSources.filter((cross) => acceptedCheckyCrossPairs.has(JSON.stringify([cross.factor1.id, cross.factor2.id].sort())))
-        return { crosses: acceptedCrosses, aiStrategies: [], checkySuggestions }
+        // Ponderación muestra la aceptación explícita de Checky, no el cruce DOFA que pudo crear
+        // una sugerencia MISSING_CROSSES. La consolidación normal conserva el cruce por separado.
+        return { crosses: [], aiStrategies: [], checkySuggestions, includeMissingCrossStrategies: true }
       })()
     : { crosses: crossSources, aiStrategies, checkySuggestions }
   const strategies = collectStrategies({ ...sources, weightings: indexStrategyWeightings(storedWeightings) })
@@ -928,7 +926,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const { source, sourceRef, ...criteria } = parsed.data
 
-    const strategies = await loadDiagnosticStrategies(db, diagnostic.id)
+    // Una estrategia CHECKY aceptada puede compartir texto con un cruce DOFA creado desde
+    // MISSING_CROSSES. Para validar el origen que el cliente pondera hay que usar la proyección de
+    // aceptaciones Checky; las estrategias IA y los cruces conservan la consolidación normal.
+    const strategies = await loadDiagnosticStrategies(db, diagnostic.id, source === 'CHECKY')
     const matches = strategies.filter((strategy) => strategySourceRef(strategy.description) === sourceRef)
     if (matches.length === 0) {
       response.status(404).json({ error: 'Strategy not found' })

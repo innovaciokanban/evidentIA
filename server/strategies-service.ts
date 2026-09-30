@@ -95,6 +95,11 @@ export type StrategySources = {
   aiStrategies: AiStrategySource[]
   checkySuggestions: CheckyStrategySource[]
   /**
+   * Ponderacion necesita conservar como CHECKY las sugerencias MISSING_CROSSES aceptadas. La
+   * consolidacion normal no lo activa porque el cruce DOFA relacionado conserva precedencia alli.
+   */
+  includeMissingCrossStrategies?: boolean
+  /**
    * Ponderaciones de AI_ANALYSIS y CHECKY ya filtradas por diagnóstico, indexadas por sourceRef.
    * Es opcional para que la consolidación siga siendo usable sin leer la tabla: sin él, esas
    * estrategias salen con weighting null, que es lo correcto para un diagnóstico todavía sin valorar.
@@ -197,8 +202,9 @@ export const collectStrategies = (sources: StrategySources): StrategyForPrioriti
 
   for (const suggestion of sources.checkySuggestions) {
     // Una sugerencia MISSING_CROSSES aceptada ya se materializó como StrategicCross con ese mismo
-    // texto, así que entra por la fuente de cruces. Incluirla aquí duplicaría la misma estrategia.
-    if (suggestion.category === 'MISSING_CROSSES') continue
+    // texto, así que entra por la fuente de cruces en la consolidación normal. Ponderación activa
+    // includeMissingCrossStrategies para conservar la aceptación explícita de Checky como CHECKY.
+    if (suggestion.category === 'MISSING_CROSSES' && !sources.includeMissingCrossStrategies) continue
     const description = suggestion.description?.trim() ?? ''
     if (!description) continue
     const factors = suggestion.factors.slice(0, 2)

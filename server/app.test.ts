@@ -3224,9 +3224,36 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     expect(res.body.strategies.map((strategy: { description: string }) => strategy.description)).toEqual(acceptedDescriptions)
   })
 
+  it('conserva como CHECKY una aceptación MISSING_CROSSES aunque ya exista el cruce relacionado', async () => {
+    const relatedCross: SeededCross = { id: 'cmprioridadchecky000001', crossType: 'FO', origin: 'AI', factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity, strategy: checkyDescription, weighting: null }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [relatedCross])
+    await seedAcceptedCheckyStrategy(db, { category: 'MISSING_CROSSES' })
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toHaveLength(1)
+    expect(res.body.strategies[0]).toMatchObject({ source: 'CHECKY', description: checkyDescription, crossId: null, weighting: null })
+  })
+
+  it('no incluye una aceptación MISSING_CROSSES que sigue pendiente en Ponderación', async () => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [])
+    await seedAcceptedCheckyStrategy(db, { category: 'MISSING_CROSSES', status: 'PENDING' })
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toEqual([])
+  })
+
   it('evita duplicar una estrategia que ya existe como cruce aceptado', async () => {
     const duplicateText = 'Cubrir los procesos lentos antes de la auditoría.'
-    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [unweightedCross])
+    const relatedCross: SeededCross = { id: 'cmprioridadchecky000002', crossType: 'FO', origin: 'AI', factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity, strategy: duplicateText, weighting: null }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [relatedCross])
     await seedAcceptedCheckyStrategy(db, { category: 'MISSING_CROSSES', suggestedStrategyTitle: 'Cubrir los procesos', suggestedStrategyDescription: duplicateText })
     const agent = request.agent(createApp(db, readOnlyAI()))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
@@ -3426,6 +3453,31 @@ describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.weighting).toMatchObject({ source: 'CHECKY', sourceRef: strategySourceRef(checkyText), ...criteria, weightedScore: expectedScore })
+  })
+
+  it('crea la ponderación CHECKY para MISSING_CROSSES aceptada aunque exista el cruce relacionado', async () => {
+    const relatedCross: SeededCross = { id: 'cmweightcheckycross001', crossType: 'FO', origin: 'AI', factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity, strategy: checkyText, weighting: null }
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [relatedCross])
+    await seedAcceptedCheckyStrategy(db, { category: 'MISSING_CROSSES' })
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    const res = await put(agent, { source: 'CHECKY', sourceRef: strategySourceRef(checkyText), ...criteria })
+
+    expect(res.status).toBe(200)
+    expect(res.body.weighting).toMatchObject({ source: 'CHECKY', sourceRef: strategySourceRef(checkyText), weightedScore: expectedScore })
+    expect(db.strategyWeighting.upsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('no permite ponderar una estrategia CHECKY que no fue aceptada', async () => {
+    const db = makeDb()
+    await seedAcceptedCheckyStrategy(db, { status: 'PENDING' })
+    const agent = await login(db)
+
+    const res = await put(agent, { source: 'CHECKY', sourceRef: strategySourceRef(checkyText), ...criteria })
+
+    expect(res.status).toBe(404)
+    expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
   })
 
   it('calcula el weightedScore en el servidor con los pesos de la metodología', async () => {

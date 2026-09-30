@@ -239,6 +239,17 @@ describe('strategies consolidation service', () => {
     expect(strategies[0].source).toBe('STRATEGIC_CROSS')
   })
 
+  it('keeps an accepted MISSING_CROSSES suggestion as CHECKY in the weighting projection', () => {
+    const materialised = 'Anticipar la norma de seguridad con el mercado en expansión.'
+    const strategies = collectStrategies(sources({
+      checkySuggestions: [checkySuggestion({ category: 'MISSING_CROSSES', description: materialised })],
+      includeMissingCrossStrategies: true,
+    }))
+
+    expect(strategies).toHaveLength(1)
+    expect(strategies[0]).toMatchObject({ source: 'CHECKY', crossId: null, description: materialised })
+  })
+
   it('ignores a Checky suggestion that was accepted without a structured strategy', () => {
     const strategies = collectStrategies(sources({
       checkySuggestions: [checkySuggestion({ description: null }), checkySuggestion({ messageId: 'cmcheckymessage00000002', description: '   ' })],
