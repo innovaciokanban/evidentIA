@@ -173,6 +173,15 @@ export const actionItemUpdateSchema = z.object({
   'At least one field is required',
 )
 
+export const strategyTasksCreateSchema = z.object({
+  strategyId: z.string().trim().min(1).max(200),
+  tasks: z.array(z.object({
+    title: z.string().trim().min(3).max(120),
+    responsibleId: z.string().cuid(),
+    dueDate: z.coerce.date(),
+  })).min(1).max(50),
+})
+
 export const crossTypeSchema = z.enum(['FO', 'DO', 'FA', 'DA'])
 export const crossOriginSchema = z.enum(['USER', 'AI', 'BOTH'])
 

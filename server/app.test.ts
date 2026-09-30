@@ -3207,6 +3207,23 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     expect(res.body.strategies.filter((strategy: { source: string }) => strategy.source === 'CHECKY')).toEqual([])
   })
 
+  it('devuelve exactamente las estrategias aceptadas cuando Ponderación solicita acceptedOnly', async () => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [])
+    const acceptedDescriptions = ['Estrategia aceptada 1.', 'Estrategia aceptada 2.', 'Estrategia aceptada 3.']
+    const pendingDescriptions = ['Estrategia pendiente 1.', 'Estrategia pendiente 2.', 'Estrategia pendiente 3.', 'Estrategia pendiente 4.']
+    for (const [index, description] of [...acceptedDescriptions, ...pendingDescriptions].entries()) {
+      await seedAcceptedCheckyStrategy(db, { status: index < acceptedDescriptions.length ? 'ACCEPTED' : 'PENDING', suggestedStrategyDescription: description })
+    }
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toHaveLength(acceptedDescriptions.length)
+    expect(res.body.strategies.map((strategy: { description: string }) => strategy.description)).toEqual(acceptedDescriptions)
+  })
+
   it('evita duplicar una estrategia que ya existe como cruce aceptado', async () => {
     const duplicateText = 'Cubrir los procesos lentos antes de la auditoría.'
     const db = makeDb('SUPERUSER', member.id, null, company.id, [], [unweightedCross])
@@ -3302,6 +3319,56 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     expect(res.status).toBe(200)
     expect(res.body.strategies.length).toBeGreaterThan(0)
     for (const [name, spy] of writes) expect(spy, `${name} no debe llamarse al priorizar`).not.toHaveBeenCalled()
+  })
+
+  it('crea tareas y tickets para una estrategia ponderada y evita duplicarlos', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    const storedPlans: Array<Record<string, unknown>> = []
+    const planDelegate = db.actionPlan as unknown as { findMany: { mockImplementation: (implementation: (input?: any) => Promise<unknown[]>) => unknown }; findUnique: { mockImplementation: (implementation: (input: any) => Promise<unknown>) => unknown }; create: { mockImplementation: (implementation: (input: any) => Promise<unknown>) => unknown } }
+    planDelegate.findMany.mockImplementation(async ({ where } = {}) => where?.strategySource ? storedPlans : storedPlans)
+    planDelegate.findUnique.mockImplementation(async ({ where }) => {
+      if (where.id) return storedPlans.find((plan) => plan.id === where.id) ?? null
+      return storedPlans.find((plan) => plan.diagnosticId === where.diagnosticId_strategySource_strategySourceRef?.diagnosticId && plan.strategySource === where.diagnosticId_strategySource_strategySourceRef?.strategySource && plan.strategySourceRef === where.diagnosticId_strategySource_strategySourceRef?.strategySourceRef) ?? null
+    })
+    planDelegate.create.mockImplementation(async ({ data }) => {
+      const created = { ...actionPlan, ...data, createdBy: member, items: [] }
+      storedPlans.push(created)
+      return created
+    })
+    const itemDelegate = db.actionItem as unknown as { create: { mockImplementation: (implementation: (input: { data: Record<string, unknown> }) => Promise<unknown>) => unknown } }
+    itemDelegate.create.mockImplementation(async ({ data }) => {
+      const created = { ...actionItem, ...data, id: `cmactionitemstrategy${storedPlans[0]?.items instanceof Array ? storedPlans[0].items.length + 1 : 1}`, responsible: member, ticket: null }
+      ;(storedPlans[0]?.items as Array<unknown> | undefined)?.push(created)
+      return created
+    })
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+    const strategies = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const strategyId = strategies.body.strategies[0].id
+    const tasks = [1, 2, 3].map((number) => ({ title: `Control de cumplimiento ${number}`, responsibleId: member.id, dueDate: `2026-04-0${number}` }))
+
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks })
+    expect(created.status).toBe(201)
+    expect(created.body.createdCount).toBe(3)
+    expect(created.body.actionPlan.strategyTitle).toBe('Estandarizar la apertura de cuentas')
+    expect((db.ticket.create as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(3)
+    expect((db.ticket.create as unknown as { mock: { calls: Array<[{ data: { status: string } }]> } }).mock.calls.every(([call]) => call.data.status === 'OPEN')).toBe(true)
+
+    const duplicate = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks: [tasks[0]] })
+    expect(duplicate.status).toBe(200)
+    expect(duplicate.body.createdCount).toBe(0)
+    expect(duplicate.body.skippedTasks).toEqual([tasks[0].title])
+    expect((db.ticket.create as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(3)
+
+    const missingResponsible = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks: [{ title: 'Sin responsable', responsibleId: '', dueDate: '2026-05-01' }] })
+    expect(missingResponsible.status).toBe(400)
+    const missingDueDate = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks: [{ title: 'Sin fecha', responsibleId: member.id, dueDate: '' }] })
+    expect(missingDueDate.status).toBe(400)
+    const foreignAssignee = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks: [{ title: 'Responsable externo', responsibleId: otherCompanyUser.id, dueDate: '2026-05-01' }] })
+    expect(foreignAssignee.status).toBe(403)
   })
 })
 

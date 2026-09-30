@@ -20,6 +20,22 @@ export const AI_STRATEGY_QUADRANTS = ['FO', 'DO', 'FA', 'DA'] as const
 
 export type StrategyFactor = { id: string; type: string; description: string }
 
+export type StrategyTaskPlan = {
+  id: string
+  strategySource: string | null
+  strategySourceRef: string | null
+  strategyTitle: string | null
+  strategyDescription: string | null
+  items: Array<{
+    id: string
+    title: string
+    responsibleId: string | null
+    responsible: { id: string; name: string } | null
+    dueDate: Date | null
+    ticket: { id: string; status: string } | null
+  }>
+}
+
 /** Criterios tal como los guarda la base, con la fila que los respalda para el cruce. */
 
 /**
@@ -48,6 +64,7 @@ export type StrategyForPrioritization = {
   weighting: StrategyWeightingView | null
   weightedScore: number | null
   weightingBand: CheckyWeightingBand | null
+  actionPlan?: StrategyTaskPlan | null
 }
 
 /** Crucetype con su ponderación incluida, tal como lo devuelve la consulta que arma el contexto. */

@@ -13,14 +13,13 @@ import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
 import { indexStrategyWeightings, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
 const DUMMY_PASSWORD_HASH = '$2b$12$UjBgyzK627Qyclju5Vdtne3rVrXxGDHxvGqnZahRh5D9geupYld9y'
 
 const userInclude = { createdBy: { select: { id: true, name: true, email: true, companyId: true } }, assignedTo: { select: { id: true, name: true, email: true, companyId: true } } } as const
-const ticketView = (ticket: Prisma.TicketGetPayload<{ include: typeof userInclude }>) => ticket
 const companyInclude = { users: { where: { role: Role.COMPANY_ADMIN }, select: { id: true, name: true, email: true, role: true, companyId: true }, take: 1 } } as const
 const companyView = (company: Prisma.CompanyGetPayload<{ include: typeof companyInclude }>) => ({ id: company.id, name: company.name, identification: company.identification, industry: company.industry, description: company.description, admin: company.users[0] ?? null, createdAt: company.createdAt, updatedAt: company.updatedAt })
 const diagnosticInclude = { company: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true, email: true } }, swotAnalysis: { include: { items: { orderBy: { createdAt: 'asc' } } } } } as const
@@ -81,6 +80,16 @@ const actionItemInclude = { recommendation: { select: { id: true, title: true, p
 const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof actionItemInclude }>) => item
 const actionPlanInclude = { createdBy: { select: { id: true, name: true, email: true } }, items: { include: actionItemInclude, orderBy: { createdAt: 'asc' as const } } } as const
 const actionPlanView = (plan: Prisma.ActionPlanGetPayload<{ include: typeof actionPlanInclude }>) => plan
+const ticketInclude = {
+  ...userInclude,
+  actionItem: {
+    select: {
+      id: true,
+      actionPlan: { select: { id: true, title: true, strategySource: true, strategySourceRef: true, strategyTitle: true, strategyDescription: true } },
+    },
+  },
+} as const
+const ticketView = (ticket: Prisma.TicketGetPayload<{ include: typeof ticketInclude }>) => ticket
 const crossInclude = { factor1: true, factor2: true } as const
 const crossFactorView = (item: { id: string; swotId: string; type: string; description: string; createdAt: Date }) => ({ id: item.id, swotId: item.swotId, type: item.type, description: item.description, createdAt: item.createdAt })
 const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof crossInclude }>) => ({
@@ -272,9 +281,11 @@ const ticketDataFromActionItem = (item: { title: string; description: string; st
  * la revalidación de PUT /diagnostics/:id/strategies/weighting, que necesita exactamente la misma
  * consolidación para comprobar que un sourceRef recibido de verdad pertenece a este diagnóstico. Si
  * las dos rutas tuvieran su propia consulta, el ancla que valida una podría no ser la que ve la otra.
+ * acceptedOnly se usa exclusivamente por Ponderación para recibir la lista de estrategias aceptadas
+ * en Checky; el contexto de Checky conserva la consolidación completa.
  */
-const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string): Promise<StrategyForPrioritization[]> => {
-  const [analysis, crosses, acceptedSuggestions, storedWeightings] = await Promise.all([
+const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, acceptedOnly = false): Promise<StrategyForPrioritization[]> => {
+  const [analysis, crosses, acceptedSuggestions, storedWeightings, strategyTaskPlans] = await Promise.all([
     db.aIAnalysis.findUnique({ where: { diagnosticId }, select: { id: true, foStrategies: true, doStrategies: true, faStrategies: true, daStrategies: true } }),
     db.strategicCross.findMany({ where: { diagnosticId }, include: { ...crossInclude, weighting: true }, orderBy: { updatedAt: 'desc' } }),
     // El filtro por diagnosticId en la sesión es lo que mantiene el aislamiento: una sugerencia de
@@ -285,6 +296,27 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string):
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
     db.strategyWeighting.findMany({ where: { diagnosticId } }),
+    db.actionPlan.findMany({
+      where: { diagnosticId, strategySource: { not: null }, strategySourceRef: { not: null } },
+      select: {
+        id: true,
+        strategySource: true,
+        strategySourceRef: true,
+        strategyTitle: true,
+        strategyDescription: true,
+        items: {
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            title: true,
+            responsibleId: true,
+            responsible: { select: { id: true, name: true } },
+            dueDate: true,
+            ticket: { select: { id: true, status: true } },
+          },
+        },
+      },
+    }),
   ])
 
   const aiStrategies: AiStrategySource[] = []
@@ -333,7 +365,27 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string):
       : null,
   }))
 
-  return collectStrategies({ crosses: crossSources, aiStrategies, checkySuggestions, weightings: indexStrategyWeightings(storedWeightings) })
+  const sources = acceptedOnly
+    ? (() => {
+        const acceptedCheckyCrossPairs = new Set(acceptedSuggestions
+          .filter((suggestion) => suggestion.category === 'MISSING_CROSSES')
+          .map((suggestion) => JSON.stringify([...suggestion.evidenceIds].sort())))
+        const acceptedCrosses = crossSources.filter((cross) => acceptedCheckyCrossPairs.has(JSON.stringify([cross.factor1.id, cross.factor2.id].sort())))
+        return { crosses: acceptedCrosses, aiStrategies: [], checkySuggestions }
+      })()
+    : { crosses: crossSources, aiStrategies, checkySuggestions }
+  const strategies = collectStrategies({ ...sources, weightings: indexStrategyWeightings(storedWeightings) })
+  return strategies.map((strategy) => ({
+    ...strategy,
+    actionPlan: strategyTaskPlans.find((plan) => plan.strategySource === strategy.source && plan.strategySourceRef === strategySourceRef(strategy.description)) ?? null,
+  }))
+}
+
+const strategyBandToActionPriority: Record<string, Priority> = {
+  INMEDIATA: Priority.HIGH,
+  CORTO_PLAZO: Priority.HIGH,
+  MEDIANO_PLAZO: Priority.MEDIUM,
+  LARGO_PLAZO: Priority.LOW,
 }
 
 
@@ -836,11 +888,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   /**
-   * Estrategias consolidadas para la priorización: una sola lista con lo que propuso el análisis con
-   * IA, lo que el usuario escribió en un cruce y lo que Checky dejó aceptado. Es de solo lectura y
-   * no calcula nada: el ponderado sale de la fila guardada, StrategicCrossWeighting para los cruces y
-   * StrategyWeighting para las de IA y Checky, y la banda de resolveWeightingBand, la misma que ve
-   * el resto de la aplicación.
+   * Estrategias consolidadas para la priorización. Ponderación envía acceptedOnly=true para recibir
+   * únicamente las estrategias aceptadas en Checky; la lectura por defecto conserva las tres fuentes.
    */
   app.get('/api/diagnostics/:id/strategies', authMiddleware, asyncHandler(async (request, response) => {
     const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
@@ -848,7 +897,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Diagnostic not found' })
       return
     }
-    const strategies = await loadDiagnosticStrategies(db, diagnostic.id)
+    const strategies = await loadDiagnosticStrategies(db, diagnostic.id, request.query.acceptedOnly === 'true')
     response.json({
       strategies,
       weightingLevels: WEIGHTING_LEVEL_SCORE,
@@ -1385,6 +1434,112 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     response.status(204).send()
   }))
 
+  app.post('/api/diagnostics/:id/strategy-tasks', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = strategyTasksCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategy task data', details: parsed.error.issues })
+      return
+    }
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const strategies = await loadDiagnosticStrategies(db, diagnostic.id, true)
+    const strategy = strategies.find((candidate) => candidate.id === parsed.data.strategyId)
+    if (!strategy) {
+      response.status(404).json({ error: 'Weighted strategy not found' })
+      return
+    }
+    if (!strategy.weighting || !strategy.weightingBand) {
+      response.status(400).json({ error: 'The strategy must be weighted and classified before creating tasks' })
+      return
+    }
+    const strategyPriority = strategyBandToActionPriority[strategy.weightingBand]
+    const responsibleIds = [...new Set(parsed.data.tasks.map((task) => task.responsibleId))]
+    const responsibleUsers = await Promise.all(responsibleIds.map((id) => db.user.findUnique({ where: { id }, select: { id: true, companyId: true } })))
+    for (const responsible of responsibleUsers) {
+      if (!responsible) {
+        response.status(400).json({ error: 'Responsible user not found' })
+        return
+      }
+      if (request.user?.role !== Role.SUPERUSER && responsible.companyId !== request.user?.companyId) {
+        response.status(403).json({ error: 'You can only assign responsibilities to users of your own company' })
+        return
+      }
+    }
+
+    const sourceRef = strategySourceRef(strategy.description)
+    const planKey = { diagnosticId: diagnostic.id, strategySource: strategy.source, strategySourceRef: sourceRef }
+    try {
+      const result = await db.$transaction(async (tx) => {
+        let plan = await tx.actionPlan.findUnique({ where: { diagnosticId_strategySource_strategySourceRef: planKey }, include: actionPlanInclude })
+        let createdPlan = false
+        if (!plan) {
+          plan = await tx.actionPlan.create({
+            data: {
+              diagnosticId: diagnostic.id,
+              title: `Tareas para ${strategy.title}`,
+              description: strategy.description,
+              status: 'ACTIVE',
+              createdById: request.user!.id,
+              strategySource: strategy.source,
+              strategySourceRef: sourceRef,
+              strategyTitle: strategy.title,
+              strategyDescription: strategy.description,
+            },
+            include: actionPlanInclude,
+          })
+          createdPlan = true
+        }
+        const existingTaskTitles = new Set(plan.items.map((item) => item.title.trim().replace(/\s+/g, ' ').toLowerCase()))
+        const skippedTasks: string[] = []
+        for (const task of parsed.data.tasks) {
+          const taskKey = task.title.trim().replace(/\s+/g, ' ').toLowerCase()
+          if (existingTaskTitles.has(taskKey)) {
+            skippedTasks.push(task.title)
+            continue
+          }
+          const created = await tx.actionItem.create({
+            data: {
+              actionPlanId: plan.id,
+              title: task.title,
+              description: task.title,
+              priority: strategyPriority,
+              status: 'PENDING',
+              responsibleId: task.responsibleId,
+              dueDate: task.dueDate,
+            },
+            include: actionItemInclude,
+          })
+          await tx.ticket.create({
+            data: ticketDataFromActionItem({
+              title: created.title,
+              description: created.description,
+              status: created.status,
+              priority: created.priority,
+              responsibleId: created.responsibleId,
+              dueDate: created.dueDate,
+              actionItemId: created.id,
+              createdById: request.user!.id,
+            }),
+            include: ticketInclude,
+          })
+          existingTaskTitles.add(taskKey)
+        }
+        const refreshedPlan = await tx.actionPlan.findUnique({ where: { id: plan.id }, include: actionPlanInclude })
+        return { plan: refreshedPlan ?? plan, createdPlan, createdCount: parsed.data.tasks.length - skippedTasks.length, skippedTasks }
+      })
+      response.status(result.createdPlan ? 201 : 200).json({ actionPlan: actionPlanView(result.plan), createdCount: result.createdCount, skippedTasks: result.skippedTasks })
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        response.status(409).json({ error: 'Tasks for this strategy are already being created' })
+        return
+      }
+      throw error
+    }
+  }))
+
   app.post('/api/action-plans/:id/items', authMiddleware, asyncHandler(async (request, response) => {
     const parsed = actionItemCreateSchema.safeParse(request.body)
     if (!parsed.success) {
@@ -1416,8 +1571,8 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     const { item, ticket } = await db.$transaction(async (tx) => {
       const created = await tx.actionItem.create({ data: { actionPlanId: actionPlan.id, ...parsed.data }, include: actionItemInclude })
-      const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: userInclude })
-      const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: userInclude })
+      const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
+      const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
       return { item: created, ticket: linkedTicket }
     })
     response.status(201).json({ item: actionItemView(item), ticket: ticketView(ticket) })
@@ -1499,7 +1654,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     const { status, priority, search } = parsed.data
     const where: Prisma.TicketWhereInput = { ...scopeForUser(request), ...(status ? { status } : {}), ...(priority ? { priority } : {}) }
     if (search) where.AND = [{ OR: [{ title: { contains: search, mode: 'insensitive' } }, { description: { contains: search, mode: 'insensitive' } }] }]
-    const tickets = await db.ticket.findMany({ where, include: userInclude, orderBy: { updatedAt: 'desc' } })
+    const tickets = await db.ticket.findMany({ where, include: ticketInclude, orderBy: { updatedAt: 'desc' } })
     response.json({ tickets: tickets.map(ticketView) })
   }))
 
@@ -1526,12 +1681,12 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const ticket = await db.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: userInclude })
+    const ticket = await db.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: ticketInclude })
     response.status(201).json({ ticket: ticketView(ticket) })
   }))
 
   app.get('/api/tickets/:id', authMiddleware, asyncHandler(async (request, response) => {
-    const ticket = await db.ticket.findUnique({ where: { id: String(request.params.id) }, include: userInclude })
+    const ticket = await db.ticket.findUnique({ where: { id: String(request.params.id) }, include: ticketInclude })
     if (!ticket || !canAccessTicket(request, ticket)) {
       response.status(404).json({ error: 'Ticket not found' })
       return
@@ -1545,7 +1700,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(400).json({ error: 'Invalid ticket data', details: parsed.error.issues })
       return
     }
-    const existing = await db.ticket.findUnique({ where: { id: String(request.params.id) }, include: userInclude })
+    const existing = await db.ticket.findUnique({ where: { id: String(request.params.id) }, include: ticketInclude })
     if (!existing || !canAccessTicket(request, existing)) {
       response.status(404).json({ error: 'Ticket not found' })
       return
@@ -1565,7 +1720,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const ticket = await db.ticket.update({ where: { id: existing.id }, data: parsed.data, include: userInclude })
+    const ticket = await db.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
     response.json({ ticket: ticketView(ticket) })
   }))
 

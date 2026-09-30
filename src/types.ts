@@ -133,6 +133,22 @@ export type DiagnosticStrategy = {
   weighting: StrategyWeighting | null
   weightedScore: number | null
   weightingBand: StrategyBand | null
+  taskPlan: StrategyTaskPlan | null
+}
+export type StrategyTaskPlan = {
+  id: string
+  strategySource: string | null
+  strategySourceRef: string | null
+  strategyTitle: string | null
+  strategyDescription: string | null
+  items: Array<{
+    id: string
+    title: string
+    responsibleId: string | null
+    responsible: Pick<User, 'id' | 'name'> | null
+    dueDate: string | null
+    ticket: { id: string; status: TicketStatus } | null
+  }>
 }
 export type StrategyWeightingResponse = { source: WeightableStrategySource; sourceRef: string } & StrategyWeighting
 
@@ -214,6 +230,10 @@ export type ActionPlan = {
   title: string
   description: string
   status: ActionPlanStatus
+  strategySource: string | null
+  strategySourceRef: string | null
+  strategyTitle: string | null
+  strategyDescription: string | null
   createdBy: User
   createdAt: string
   updatedAt: string
@@ -232,6 +252,10 @@ export type Ticket = {
   updatedAt: string
   createdBy: User
   assignedTo: User | null
+  actionItem?: {
+    id: string
+    actionPlan: Pick<ActionPlan, 'id' | 'title' | 'strategySource' | 'strategySourceRef' | 'strategyTitle' | 'strategyDescription'>
+  } | null
 }
 
 export type DashboardSummary = {

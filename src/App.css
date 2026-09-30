@@ -342,6 +342,9 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .drawer-heading small { color: var(--muted-light); font-size: 12px; }
 .drawer-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-light); }
 .ticket-modal { width: min(640px, 100%); }
+.strategy-task-list { display: grid; gap: 14px; margin: 16px 0; }
+.strategy-task-row { padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-hover); }
+.strategy-task-row .text-button { margin-top: 8px; }
 
 /* ============================================
     DETAIL SECTIONS

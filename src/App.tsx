@@ -31,6 +31,7 @@ type SWOTDraft = { type: SWOTType; description: string }
 type PlanDraft = { title: string; description: string; status: ActionPlanStatus }
 
 type ItemDraft = { title: string; description: string; priority: Level; status: ActionItemStatus; recommendationId: string; responsibleId: string; dueDate: string }
+type StrategyTaskDraft = { title: string; responsibleId: string; dueDate: string }
 
 type UserFormRole = 'COMPANY_ADMIN' | 'COMPANY_USER'
 
@@ -59,6 +60,7 @@ const emptySWOTDraft: SWOTDraft = { type: 'STRENGTH', description: '' }
 const emptyPlanDraft: PlanDraft = { title: '', description: '', status: 'DRAFT' }
 
 const emptyItemDraft: ItemDraft = { title: '', description: '', priority: 'MEDIUM', status: 'PENDING', recommendationId: '', responsibleId: '', dueDate: '' }
+const emptyStrategyTaskDraft: StrategyTaskDraft = { title: '', responsibleId: '', dueDate: '' }
 
 const emptyUserDraft: UserDraft = { name: '', email: '', password: '', role: 'COMPANY_USER', companyId: '' }
 
@@ -1180,7 +1182,7 @@ function useDiagnosticStrategies(diagnosticId: string) {
     setLoading(true)
     setLoadError('')
     try {
-      const result = await api<{ strategies: DiagnosticStrategy[]; weightingLevels: Record<WeightingLevel, number> }>(`/diagnostics/${diagnosticId}/strategies`)
+      const result = await api<{ strategies: DiagnosticStrategy[]; weightingLevels: Record<WeightingLevel, number> }>(`/diagnostics/${diagnosticId}/strategies?acceptedOnly=true`)
       setStrategies(result.strategies)
       setLevelScores(result.weightingLevels)
     } catch (error) {
@@ -1204,7 +1206,7 @@ function valuationErrorMessage(error: unknown): string {
   return 'No se pudo guardar la valoración.'
 }
 
-function StrategyValuationCard({ strategy, draft, levelScores, state, error, canValue, onChange, onSave }: { strategy: DiagnosticStrategy; draft: CrossWeightingCriteria; levelScores: Record<WeightingLevel, number> | null; state: 'idle' | 'saving' | 'saved' | 'error'; error: string; canValue: boolean; onChange: (criteria: CrossWeightingCriteria) => void; onSave: () => void }) {
+function StrategyValuationCard({ strategy, draft, levelScores, state, error, canValue, onChange, onSave, onCreateTasks }: { strategy: DiagnosticStrategy; draft: CrossWeightingCriteria; levelScores: Record<WeightingLevel, number> | null; state: 'idle' | 'saving' | 'saved' | 'error'; error: string; canValue: boolean; onChange: (criteria: CrossWeightingCriteria) => void; onSave: () => void; onCreateTasks: (strategy: DiagnosticStrategy) => void }) {
   const [open, setOpen] = useState(false)
   const source = strategySourceVisuals[strategy.source]
   const band = bandMeta(strategy.weightingBand)
@@ -1227,7 +1229,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
         {strategy.origin && <span className="cross-origin"><span aria-hidden="true">{crossOriginIcons[strategy.origin]}</span> {crossOriginLabels[strategy.origin]}</span>}
         {band
           ? <span className={`weighting-band ${band.tone}`}>{band.label}</span>
-          : <span className="weighting-band neutral">Pendiente de ponderación</span>}
+          : <span className="weighting-band neutral">Sin valoración</span>}
         <span className={`swz-score${strategy.weighting ? '' : ' pending'}`}>
           <span className="swz-score-value">{strategy.weighting ? strategy.weighting.weightedScore.toFixed(2) : '—'}</span>
           <span className="weighting-score-max">/5</span>
@@ -1294,6 +1296,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
             {state === 'saving' ? <><span className="button-loader" />Guardando...</> : 'Guardar valoración'}
           </button>
         )}
+        {strategy.weighting && canValue && <button type="button" className="button secondary small-button" onClick={() => onCreateTasks(strategy)}>{strategy.taskPlan?.items.length ? `Gestionar tareas (${strategy.taskPlan.items.length})` : 'Crear tareas'}</button>}
         <button type="button" className="priority-toggle" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((current) => !current)}>
           {open ? 'Ocultar detalle' : 'Ver detalle'}
           <span className="priority-chevron" aria-hidden="true">▾</span>
@@ -1340,31 +1343,56 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
   )
 }
 
+function StrategyTasksModal({ strategy, drafts, users, error, saving, onDraftsChange, onAdd, onRemove, onSubmit, onClose }: { strategy: DiagnosticStrategy; drafts: StrategyTaskDraft[]; users: User[]; error: string; saving: boolean; onDraftsChange: React.Dispatch<React.SetStateAction<StrategyTaskDraft[]>>; onAdd: () => void; onRemove: (index: number) => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
+  return (
+    <div className="drawer-backdrop centered-backdrop">
+      <form className="drawer centered-modal company-modal" onSubmit={onSubmit}>
+        <div className="company-modal-header">
+          <div className="company-modal-icon">✓</div>
+          <div className="company-modal-title"><p className="eyebrow">EJECUCIÓN</p><h2>Crear tareas para cumplir la estrategia</h2><p className="company-modal-subtitle">Define las actividades que convertirán esta estrategia en cumplimiento.</p></div>
+          <button type="button" className="icon-button" onClick={onClose}>×</button>
+        </div>
+        <div className="detail-section">
+          <p className="detail-label">ESTRATEGIA SELECCIONADA</p>
+          <strong>{strategy.title}</strong>
+          <p className="detail-description">{strategy.description}</p>
+        </div>
+        {strategy.taskPlan && strategy.taskPlan.items.length > 0 && <div className="detail-section"><p className="detail-label">TAREAS YA CREADAS</p>{strategy.taskPlan.items.map((item) => <p className="cross-pair" key={item.id}><strong>{item.title}</strong> · {item.responsible?.name ?? 'Sin responsable'} · {item.dueDate ? new Date(item.dueDate).toLocaleDateString('es-CO') : 'Sin fecha'}</p>)}</div>}
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <div className="strategy-task-list">
+          {drafts.map((task, index) => <div className="strategy-task-row" key={index}>
+            <label>Descripción de la tarea<input value={task.title} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Ej. Implementar el procedimiento aprobado" minLength={3} required /></label>
+            <div className="form-grid">
+              <label>Responsable<select value={task.responsibleId} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleId: event.target.value } : item))} required><option value="">Selecciona un responsable</option>{users.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label>
+              <label>Fecha de entrega<input type="date" value={task.dueDate} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, dueDate: event.target.value } : item))} required /></label>
+            </div>
+            <button type="button" className="text-button" onClick={() => onRemove(index)}>Eliminar tarea</button>
+          </div>)}
+        </div>
+        <button type="button" className="button secondary small-button" onClick={onAdd}>+ Agregar tarea</button>
+        <div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button type="submit" className="button primary" disabled={saving || drafts.length === 0}>{saving ? <><span className="button-loader" />Creando...</> : 'Crear tareas'}</button></div>
+      </form>
+    </div>
+  )
+}
+
 function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnostic; canValue: boolean }) {
   const { strategies, setStrategies, levelScores, loading, loadError, reload } = useDiagnosticStrategies(diagnostic.id)
   const [drafts, setDrafts] = useState<Record<string, CrossWeightingCriteria>>({})
   const [states, setStates] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [users, setUsers] = useState<User[]>([])
+  const [taskStrategy, setTaskStrategy] = useState<DiagnosticStrategy | null>(null)
+  const [taskDrafts, setTaskDrafts] = useState<StrategyTaskDraft[]>([{ ...emptyStrategyTaskDraft }])
+  const [taskError, setTaskError] = useState('')
+  const [taskNotice, setTaskNotice] = useState('')
+  const [savingTasks, setSavingTasks] = useState(false)
   // Los selectores siempre muestran lo que devolvió el servidor; lo local solo existe mientras se edita.
   useEffect(() => { setDrafts(Object.fromEntries(strategies.map((strategy) => [strategy.id, strategy.weighting ? criteriaOfStrategy(strategy.weighting) : neutralWeightingCriteria]))) }, [strategies])
-  /**
-   * Aceptación real de cada origen, sin inventar ningún estado nuevo:
-   *  - CHECKY: `CheckyMessage.status` es PENDING | ACCEPTED | REJECTED. El endpoint solo trae las
-   *    ACCEPTED (`server/app.ts`), así que una sugerencia pendiente o rechazada nunca llega aquí.
-   *  - STRATEGIC_CROSS: `StrategicCross` no tiene columna `status`. El cruce existe porque alguien
-   *    lo creó, y cuando nace de Checky el cruce y su `status: 'ACCEPTED'` se escriben juntos en la
-   *    misma transacción, de modo que no hay cruces pendientes.
-   *  - AI_ANALYSIS: `AIAnalysis` no tiene columna `status` y es uno por diagnóstico (upsert), así que
-   *    el análisis guardado es el vigente, no uno descartado.
-   * Por eso lo que llega ya está aceptado, y la aceptación no se deduce de `weighting`,
-   * `weightedScore` ni `weightingBand`. Aquí se dibujan las aceptadas enteras: las que ya tienen
-   * ponderación, con su score y su banda del backend, y las que aún no, para que el usuario pueda
-   * valuedorlas. Lo que no aparece en esta pantalla es lo no aceptado, y el endpoint ya lo excluye.
-   */
+  useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
   const accepted = strategies
   const valued = useMemo(() => accepted.filter((strategy) => strategy.weighting), [accepted])
-  // Aceptada y todavía sin ponderar: se muestran con sus cinco selectores, no se esconden.
-  const pending = useMemo(() => accepted.filter((strategy) => !strategy.weighting), [accepted])
+  const unweighted = useMemo(() => accepted.filter((strategy) => !strategy.weighting), [accepted])
   // Cada valorada va al grupo de la banda que le dio el backend, sin recalcularla aquí.
   const groups = useMemo(() => weightingBands.map((band) => ({
     band,
@@ -1388,6 +1416,38 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
       setStates((current) => ({ ...current, [strategy.id]: 'error' }))
     }
   }
+  function openTaskModal(strategy: DiagnosticStrategy) {
+    if (!strategy.weighting) return
+    setTaskStrategy(strategy)
+    setTaskDrafts([{ ...emptyStrategyTaskDraft }])
+    setTaskError('')
+    setTaskNotice('')
+  }
+  function addTaskDraft() { setTaskDrafts((current) => [...current, { ...emptyStrategyTaskDraft }]) }
+  function removeTaskDraft(index: number) { setTaskDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index)) }
+  async function createStrategyTasks(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!taskStrategy || savingTasks) return
+    if (taskDrafts.some((task) => !task.title.trim() || !task.responsibleId || !task.dueDate)) {
+      setTaskError('Cada tarea necesita descripción, responsable y fecha de entrega.')
+      return
+    }
+    setSavingTasks(true)
+    setTaskError('')
+    try {
+      const result = await api<{ createdCount: number; skippedTasks: string[] }>(`/diagnostics/${diagnostic.id}/strategy-tasks`, { method: 'POST', body: JSON.stringify({ strategyId: taskStrategy.id, tasks: taskDrafts }) })
+      const created = result.createdCount > 0 ? `Se crearon ${result.createdCount} ${result.createdCount === 1 ? 'tarea' : 'tareas'} y sus tickets.` : 'No se crearon tareas nuevas.'
+      const skipped = result.skippedTasks.length > 0 ? ` ${result.skippedTasks.length} ya existían y no se duplicaron.` : ''
+      setTaskNotice(`${created}${skipped}`)
+      setTaskStrategy(null)
+      setTaskDrafts([{ ...emptyStrategyTaskDraft }])
+      await reload()
+    } catch (requestError) {
+      setTaskError(requestError instanceof ApiError ? requestError.message : 'No se pudieron crear las tareas.')
+    } finally {
+      setSavingTasks(false)
+    }
+  }
   function cardProps(strategy: DiagnosticStrategy) {
     return {
       strategy,
@@ -1398,21 +1458,21 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
       canValue,
       onChange: (criteria: CrossWeightingCriteria) => { setDrafts((current) => ({ ...current, [strategy.id]: criteria })); setStates((current) => ({ ...current, [strategy.id]: 'idle' })) },
       onSave: () => void saveValuation(strategy, drafts[strategy.id] ?? neutralWeightingCriteria),
+      onCreateTasks: openTaskModal,
     }
   }
-  // El denominador es el total de aceptadas, así que "pendientes de ponderación" nunca se cuela en
-  // el total ni en el avance: son justo lo que falta por valorar de lo ya aceptado.
   const progress = accepted.length > 0 ? Math.round((valued.length / accepted.length) * 100) : 0
   return (
     <section className="diag-card diag-section swz-section">
       <div className="diag-section-head">
         <span className="diag-step-chip weighting-chip" aria-hidden="true">⚖</span>
-        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora con cinco criterios las estrategias aceptadas del análisis con IA, de los cruces y de Checky.</p></div>
+        <div><h3>PONDERACIÓN DE ESTRATEGIAS</h3><p>Valora con cinco criterios las estrategias que aceptaste explícitamente en Checky.</p></div>
         <div className="crosses-head-actions">
           <button type="button" className="button secondary small-button" onClick={() => void reload()} disabled={loading}>↻ Actualizar</button>
-          <span className="cross-count">{valued.length}/{accepted.length} pobre{valued.length === 1 ? '' : 's'}</span>
+          <span className="cross-count">{valued.length}/{accepted.length} ponderadas</span>
         </div>
       </div>
+      {taskNotice && <div className="form-success page-alert" role="status">{taskNotice}</div>}
       <div className="weighting-scale">
         <span className="detail-label">ESCALA</span>
         <div className="weighting-scale-levels">{weightingLevels.map((level) => <span className="weighting-scale-level" key={level.value}><b>{levelScores?.[level.value] ?? level.short}</b>{level.label}</span>)}</div>
@@ -1420,13 +1480,12 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
       </div>
       {loadError && <div className="form-error" role="alert">{loadError}</div>}
       {loading ? <div className="inline-loading"><span className="loader" />Cargando estrategias...</div> : accepted.length === 0 ? (
-        <EmptyState icon="◎" title="No hay estrategias aceptadas para ponderar" text="Acepta sugerencias de Checky, crea cruces o genera el análisis con IA: las estrategias aceptadas aparecerán aquí para ponderarlas." />
+        <EmptyState icon="◎" title="No hay estrategias aceptadas para ponderar" text="Acepta una sugerencia en Checky para habilitarla aquí." />
       ) : (
         <>
           <div className="swz-summary">
             <div className="swz-summary-card total"><span className="swz-summary-icon" aria-hidden="true">◎</span><div><span>Estrategias aceptadas</span><strong>{accepted.length}</strong></div></div>
             <div className="swz-summary-card valued"><span className="swz-summary-icon" aria-hidden="true">✓</span><div><span>Ponderadas</span><strong>{valued.length}</strong></div></div>
-            <div className="swz-summary-card pending"><span className="swz-summary-icon" aria-hidden="true">◦</span><div><span>Pendientes de ponderación</span><strong>{pending.length}</strong></div></div>
             <div className="swz-summary-card progress"><span className="swz-summary-icon" aria-hidden="true">⚖</span><div><span>Avance</span><strong>{progress}%</strong></div><div className="swz-progress"><span style={{ width: `${progress}%` }} /></div></div>
           </div>
           <div className="swz-sources">
@@ -1437,7 +1496,6 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
           </div>
           <div className="swz-counters">
             {groups.map(({ band, items }) => <span className={`swz-counter ${band.tone}`} key={band.tone}><b>{items.length}</b><span>{band.label}</span><small>{priorityBandRanges[band.tone]}</small></span>)}
-            {pending.length > 0 && <span className="swz-counter pending"><b>{pending.length}</b><span>Pendiente</span><small>Sin ponderar</small></span>}
           </div>
           <div className="priority-groups swz-groups">
             {groups.filter((group) => group.items.length > 0).map(({ band, items }) => (
@@ -1450,21 +1508,20 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
                 <div className="priority-group-body">{items.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
               </section>
             ))}
-            {/* Aceptadas y sin ponderar: se muestran con sus cinco selectores para poder valorarlas.
-                El nombre evita confundirlas con lo que todavía no se ha aceptado, que no llega aquí. */}
-            {pending.length > 0 && (
-              <section className="priority-group pending" aria-label="Estrategias aceptadas pendientes de ponderación">
+            {unweighted.length > 0 && (
+              <section className="priority-group neutral" aria-label="Estrategias aceptadas sin valoración">
                 <header className="priority-group-head">
-                  <h4>Pendiente de ponderación</h4>
-                  <span className="priority-group-range">Sin ponderar</span>
-                  <span className="priority-group-count">{pending.length}</span>
+                  <h4>Estrategias aceptadas</h4>
+                  <span className="priority-group-range">Sin valoración</span>
+                  <span className="priority-group-count">{unweighted.length}</span>
                 </header>
-                <div className="priority-group-body">{pending.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
+                <div className="priority-group-body">{unweighted.map((strategy) => <StrategyValuationCard key={strategy.id} {...cardProps(strategy)} />)}</div>
               </section>
             )}
           </div>
         </>
       )}
+      {taskStrategy && <StrategyTasksModal strategy={taskStrategy} drafts={taskDrafts} users={users} error={taskError} saving={savingTasks} onDraftsChange={setTaskDrafts} onAdd={addTaskDraft} onRemove={removeTaskDraft} onSubmit={createStrategyTasks} onClose={() => { setTaskStrategy(null); setTaskError('') }} />}
     </section>
   )
 }
@@ -1515,7 +1572,7 @@ function Tickets({ user }: { user: User }) {
 
 function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
 
-function TicketDetail({ ticket, user, onEdit, onDelete, onClose }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void }) { return <div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div><div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div></aside></div> }
+function TicketDetail({ ticket, user, onEdit, onDelete, onClose }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void }) { return <div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div>{ticket.actionItem?.actionPlan.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}<div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div></aside></div> }
 
 function PageError({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p>{onRetry && <button className="button primary" onClick={onRetry}>Reintentar</button>}</div></div> }
 
@@ -2374,12 +2431,16 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
   const [messages, setMessages] = useState<CheckyMessage[]>([])
   const [crosses, setCrosses] = useState<StrategicCross[]>([])
   const [busy, setBusy] = useState(false)
+  const [checkyHydrated, setCheckyHydrated] = useState(false)
+  const autoConsultForDiagnostic = useRef<string | null>(null)
   useEffect(() => {
     setStatus('idle')
     setError('')
     setSession(null)
     setMessages([])
     setCrosses([])
+    setBusy(false)
+    setCheckyHydrated(false)
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
@@ -2398,12 +2459,16 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
             setStatus(restoredReply?.insufficientData ? 'insufficientData' : 'success')
           }
         } catch { /* la sección arranca en idle sin bloquear el diagnóstico */ }
+        finally {
+          setCheckyHydrated(true)
+        }
       })()
     }, 0)
     return () => window.clearTimeout(timer)
   }, [diagnostic.id])
-  async function consult() {
+  async function consult(options: { automatic?: boolean } = {}) {
     if (busy) return
+    if (!options.automatic) autoConsultForDiagnostic.current = diagnostic.id
     setBusy(true)
     setError('')
     setStatus('loading')
@@ -2424,6 +2489,15 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
       setBusy(false)
     }
   }
+  const consultRef = useRef(consult)
+  consultRef.current = consult
+  useEffect(() => {
+    if (!checkyHydrated || analysisLoading || analysisError || busy) return
+    if (analysis && !analysis.stale) return
+    if (autoConsultForDiagnostic.current === diagnostic.id) return
+    autoConsultForDiagnostic.current = diagnostic.id
+    void consultRef.current({ automatic: true })
+  }, [analysis, analysisError, analysisLoading, busy, checkyHydrated, diagnostic.id])
   async function decide(message: CheckyMessage, next: CheckySuggestionStatus) {
     if (!session || busy) return
     setBusy(true)

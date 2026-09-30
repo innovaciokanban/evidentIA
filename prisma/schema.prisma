@@ -297,6 +297,10 @@ model ActionPlan {
   description    String
   status         ActionPlanStatus  @default(DRAFT)
   createdById    String
+  strategySource String?
+  strategySourceRef String?
+  strategyTitle String?
+  strategyDescription String?
   diagnostic     QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
   createdBy      User              @relation("CreatedActionPlans", fields: [createdById], references: [id], onDelete: Restrict)
   items          ActionItem[]
@@ -306,6 +310,7 @@ model ActionPlan {
   @@index([diagnosticId])
   @@index([createdById])
   @@index([status])
+  @@unique([diagnosticId, strategySource, strategySourceRef])
 }
 
 model ActionItem {
