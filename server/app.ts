@@ -15,7 +15,7 @@ import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiS
 import { indexStrategyWeightings, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -318,6 +318,23 @@ const visibleCheckyMessages = <T extends { id: string; role: string; category: s
 const canAccessTicket = (request: Request, ticket: { createdBy: { companyId: string | null } | null; assignedTo: { companyId: string | null } | null }) => request.user?.role === Role.SUPERUSER || ticket.createdBy?.companyId === request.user?.companyId || ticket.assignedTo?.companyId === request.user?.companyId
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
 const canAccessCompany = (request: Request, company: { id: string }) => request.user?.role === Role.SUPERUSER || company.id === request.user?.companyId
+
+const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true } } } as const
+const processView = (process: Prisma.ProcessGetPayload<{ include: typeof processInclude }>) => ({
+  id: process.id,
+  companyId: process.companyId,
+  name: process.name,
+  code: process.code,
+  type: process.type,
+  objective: process.objective,
+  description: process.description,
+  status: process.status,
+  responsible: process.responsible,
+  createdAt: process.createdAt,
+  updatedAt: process.updatedAt,
+})
+/** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
+const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
   [ActionItemStatus.PENDING]: TicketStatus.OPEN,
@@ -804,6 +821,152 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     await db.qualityDiagnostic.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  /**
+   * El responsable tiene que ser un usuario de la misma empresa que el proceso: el id viene del
+   * cliente, así que se resuelve contra la base y se compara con la empresa que ya se decidió en el
+   * servidor. Un id de otra empresa nunca se guarda.
+   */
+  const resolveResponsible = async (responsibleId: string | null | undefined, companyId: string): Promise<{ ok: true; responsibleId: string | null } | { ok: false; status: number; error: string }> => {
+    if (!responsibleId) return { ok: true, responsibleId: null }
+    const responsible = await db.user.findUnique({ where: { id: responsibleId }, select: { id: true, companyId: true } })
+    if (!responsible) return { ok: false, status: 400, error: 'Responsible user not found' }
+    if (responsible.companyId !== companyId) return { ok: false, status: 403, error: 'You can only assign a responsible from your own company' }
+    return { ok: true, responsibleId }
+  }
+
+  /** El nombre identifica el proceso dentro de la empresa, y solo dentro de ella. */
+  const duplicateProcessName = async (companyId: string, name: string, exceptId?: string) => db.process.findFirst({
+    where: { companyId, name, ...(exceptId ? { NOT: { id: exceptId } } : {}) },
+    select: { id: true },
+  })
+
+  app.get('/api/processes', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = processQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid filters', details: parsed.error.issues })
+      return
+    }
+    let where: Prisma.ProcessWhereInput = scopeForProcess(request)
+    if (parsed.data.companyId) {
+      const company = await db.company.findUnique({ where: { id: parsed.data.companyId }, select: { id: true } })
+      if (!company || !canAccessCompany(request, company)) {
+        response.status(404).json({ error: 'Company not found' })
+        return
+      }
+      where = { companyId: company.id }
+    }
+    const processes = await db.process.findMany({ where, include: processInclude, orderBy: [{ type: 'asc' }, { name: 'asc' }] })
+    response.json({ processes: processes.map(processView) })
+  }))
+
+  app.post('/api/processes', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = processCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid process data', details: parsed.error.issues })
+      return
+    }
+    // La empresa nunca sale del cuerpo de la petición para un rol de empresa: sale de la sesión.
+    let companyId: string
+    if (request.user?.role === Role.SUPERUSER) {
+      if (!parsed.data.companyId) {
+        response.status(400).json({ error: 'A company is required' })
+        return
+      }
+      const company = await db.company.findUnique({ where: { id: parsed.data.companyId }, select: { id: true } })
+      if (!company) {
+        response.status(400).json({ error: 'Company not found' })
+        return
+      }
+      companyId = company.id
+    } else {
+      if (parsed.data.companyId && parsed.data.companyId !== request.user?.companyId) {
+        response.status(403).json({ error: 'You can only create processes for your own company' })
+        return
+      }
+      if (!request.user?.companyId) {
+        response.status(400).json({ error: 'A company is required for company roles' })
+        return
+      }
+      companyId = request.user.companyId
+    }
+    const responsible = await resolveResponsible(parsed.data.responsibleId, companyId)
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    if (await duplicateProcessName(companyId, parsed.data.name)) {
+      response.status(409).json({ error: 'A process with that name already exists in this company' })
+      return
+    }
+    const process = await db.process.create({
+      data: {
+        companyId,
+        name: parsed.data.name,
+        type: parsed.data.type,
+        objective: parsed.data.objective,
+        description: parsed.data.description || null,
+        code: parsed.data.code || null,
+        status: parsed.data.status ?? 'ACTIVE',
+        responsibleId: responsible.responsibleId,
+      },
+      include: processInclude,
+    })
+    response.status(201).json({ process: processView(process) })
+  }))
+
+  app.get('/api/processes/:id', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await db.process.findUnique({ where: { id: String(request.params.id) }, include: processInclude })
+    if (!process || !canAccessCompany(request, process.company)) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    response.json({ process: processView(process) })
+  }))
+
+  app.patch('/api/processes/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = processUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid process data', details: parsed.error.issues })
+      return
+    }
+    const existing = await db.process.findUnique({ where: { id: String(request.params.id) }, include: processInclude })
+    if (!existing || !canAccessCompany(request, existing.company)) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    if (parsed.data.name !== undefined && await duplicateProcessName(existing.companyId, parsed.data.name, existing.id)) {
+      response.status(409).json({ error: 'A process with that name already exists in this company' })
+      return
+    }
+    if (parsed.data.responsibleId) {
+      const responsible = await resolveResponsible(parsed.data.responsibleId, existing.companyId)
+      if (!responsible.ok) {
+        response.status(responsible.status).json({ error: responsible.error })
+        return
+      }
+    }
+    const data: { name?: string; type?: 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'; objective?: string; description?: string | null; code?: string | null; status?: 'ACTIVE' | 'INACTIVE'; responsibleId?: string | null } = {}
+    if (parsed.data.name !== undefined) data.name = parsed.data.name
+    if (parsed.data.type !== undefined) data.type = parsed.data.type
+    if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
+    if (parsed.data.description !== undefined) data.description = parsed.data.description || null
+    if (parsed.data.code !== undefined) data.code = parsed.data.code || null
+    if (parsed.data.status !== undefined) data.status = parsed.data.status
+    if (parsed.data.responsibleId !== undefined) data.responsibleId = parsed.data.responsibleId
+    const process = await db.process.update({ where: { id: existing.id }, data, include: processInclude })
+    response.json({ process: processView(process) })
+  }))
+
+  app.delete('/api/processes/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const existing = await db.process.findUnique({ where: { id: String(request.params.id) }, include: processInclude })
+    if (!existing || !canAccessCompany(request, existing.company)) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    await db.process.delete({ where: { id: existing.id } })
     response.status(204).send()
   }))
 

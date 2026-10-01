@@ -8,11 +8,13 @@ import { LoadingState } from './components/ui/LoadingState'
 import { askConfirm, ConfirmHost } from './components/ui/useConfirm'
 import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart'
 import { RecommendationChart } from './components/charts/RecommendationChart'
+import { ProcessesPage } from './components/processes/ProcessesPage'
+import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
 
-type View = 'dashboard' | 'tickets' | 'companies' | 'diagnostics' | 'swot' | 'recommendations' | 'action-plans' | 'users'
+type View = 'dashboard' | 'tickets' | 'companies' | 'diagnostics' | 'processes' | 'swot' | 'recommendations' | 'action-plans' | 'users'
 
 type DiagStage = 'diagnostico' | 'dofa' | 'recomendaciones' | 'planes'
 
@@ -260,6 +262,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     dashboard: 'Resumen',
     companies: 'Empresas',
     diagnostics: 'Análisis estratégico',
+    processes: 'Gestión por Procesos',
     swot: 'Matriz DOFA',
     recommendations: 'Recomendaciones',
     'action-plans': 'Planes de acción',
@@ -305,6 +308,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <span className="nav-icon">{item.icon}</span> {item.label}
             </button>
           ))}
+          <button className={`nav-item ${view === 'processes' ? 'active' : ''}`} onClick={() => navigateToView('processes')}>
+            <span className="nav-icon"><WorkflowIcon /></span> Gestión por Procesos
+          </button>
           <p className="nav-heading">OPERACIÓN</p>
           <button className={`nav-item ${view === 'tickets' ? 'active' : ''}`} onClick={() => navigateToView('tickets')}>
             <span className="nav-icon">▤</span> Tickets
@@ -339,6 +345,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         {view === 'dashboard' && <Dashboard user={user} onNavigate={navigateToView} />}
         {view === 'tickets' && <Tickets user={user} />}
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
+        {view === 'processes' && <ProcessesPage user={user} />}
         {(view === 'companies' || view === 'swot' || view === 'recommendations' || view === 'action-plans') && (
           <Companies user={user} intent={companiesIntent} onConsumeIntent={consumeCompaniesIntent} diagnosticActive={diagnosticActive} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />
         )}

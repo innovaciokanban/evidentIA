@@ -76,6 +76,44 @@ export const swotTypeSchema = z.enum(['STRENGTH', 'WEAKNESS', 'OPPORTUNITY', 'TH
 export const priorityLevelSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
 export const impactSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
 
+export const processTypeSchema = z.enum(['STRATEGIC', 'MISSIONAL', 'SUPPORT'])
+export const processStatusSchema = z.enum(['ACTIVE', 'INACTIVE'])
+
+/**
+ * Alta de un proceso. El nombre y el objetivo no admiten solo espacios: el `trim` va antes del
+ * `min`, de modo que "   " no sirve para pasar la validación. `companyId` es opcional porque solo
+ * lo envía el súper usuario, que no tiene empresa propia; para los roles de empresa el servidor
+ * toma la de la sesión y nunca la lee del cuerpo.
+ */
+export const processCreateSchema = z.object({
+  name: z.string().trim().min(3).max(120),
+  type: processTypeSchema,
+  objective: z.string().trim().min(3).max(2000),
+  description: z.string().trim().max(5000).optional(),
+  code: z.string().trim().max(40).optional(),
+  status: processStatusSchema.optional(),
+  responsibleId: z.string().cuid().nullable().optional(),
+  companyId: z.string().cuid().optional(),
+})
+
+/** La edición no mueve el proceso de empresa: cambiar de compañía no está soportado. */
+export const processUpdateSchema = z.object({
+  name: z.string().trim().min(3).max(120).optional(),
+  type: processTypeSchema.optional(),
+  objective: z.string().trim().min(3).max(2000).optional(),
+  description: z.string().trim().max(5000).optional(),
+  code: z.string().trim().max(40).optional(),
+  status: processStatusSchema.optional(),
+  responsibleId: z.string().cuid().nullable().optional(),
+}).refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one field is required',
+)
+
+export const processQuerySchema = z.object({
+  companyId: z.string().cuid().optional(),
+})
+
 export const diagnosticCreateSchema = z.object({
   title: z.string().trim().min(3).max(120),
   description: z.string().trim().min(3).max(5000),

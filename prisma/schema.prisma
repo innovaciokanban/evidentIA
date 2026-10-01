@@ -127,6 +127,17 @@ enum StrategySource {
   CHECKY
 }
 
+enum ProcessType {
+  STRATEGIC
+  MISSIONAL
+  SUPPORT
+}
+
+enum ProcessStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -145,6 +156,7 @@ model User {
   createdCheckySessions CheckySession[]  @relation("CreatedCheckySessions")
   createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
   createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
+  responsibleProcesses Process[] @relation("ResponsibleProcesses")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -193,6 +205,7 @@ model Company {
   description    String
   users          User[]
   diagnostics    QualityDiagnostic[]
+  processes      Process[]
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -443,4 +456,25 @@ model CheckyMessage {
 
   @@index([sessionId])
   @@index([status])
+}
+
+model Process {
+  id            String        @id @default(cuid())
+  companyId     String
+  name          String
+  code          String?
+  type          ProcessType
+  objective     String
+  description   String?
+  responsibleId String?
+  status        ProcessStatus @default(ACTIVE)
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@index([type])
+  @@index([responsibleId])
 }
