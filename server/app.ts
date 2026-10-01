@@ -8,11 +8,13 @@ import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossTyp
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
-import { AIService, AIServiceError, resolveWeightingBand, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
+import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
 import { indexStrategyWeightings, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
+import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
+import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -56,11 +58,12 @@ const aiAnalysisView = (
 ) => {
   const itemById = new Map(items.map((item) => [item.id, item]))
   const parsed = aiAnalysisSchema.parse({ executiveSummary: analysis.executiveSummary, diagnosis: analysis.diagnosis, keyFindings: analysis.keyFindings, foStrategies: analysis.foStrategies, doStrategies: analysis.doStrategies, faStrategies: analysis.faStrategies, daStrategies: analysis.daStrategies, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities, recommendations: analysis.recommendations })
+  const sanitized = sanitizeAIAnalysisResult(parsed, items)
   return {
     id: analysis.id,
     diagnosticId: analysis.diagnosticId,
-    ...parsed,
-    keyFindings: parsed.keyFindings.map((finding) => {
+    ...sanitized,
+    keyFindings: sanitized.keyFindings.map((finding) => {
       // Lo que se cita tiene que existir en la matriz. Un id que ya no resuelve porque el factor se
       // borró se cae, y con él cae la etiqueta: es preferible no tener evidencia a tener una que
       // apunte a nada.
@@ -76,6 +79,13 @@ const aiAnalysisView = (
   }
 }
 const recommendationView = (recommendation: { id: string; diagnosticId: string; title: string; description: string; priority: string; expectedImpact: string; suggestedAction: string; status: string; createdAt: Date; updatedAt: Date }) => recommendation
+const sanitizedRecommendationView = (recommendation: Parameters<typeof recommendationView>[0], items: readonly SwotTextItem[]) => ({
+  ...recommendationView(recommendation),
+  title: sanitizeTextWithSwotItems(recommendation.title, items),
+  description: sanitizeTextWithSwotItems(recommendation.description, items),
+  expectedImpact: sanitizeTextWithSwotItems(recommendation.expectedImpact, items),
+  suggestedAction: sanitizeTextWithSwotItems(recommendation.suggestedAction, items),
+})
 const actionItemInclude = { recommendation: { select: { id: true, title: true, priority: true, status: true } }, responsible: { select: { id: true, name: true, email: true } }, ticket: { select: { id: true } } } as const
 const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof actionItemInclude }>) => item
 const actionPlanInclude = { createdBy: { select: { id: true, name: true, email: true } }, items: { include: actionItemInclude, orderBy: { createdAt: 'asc' as const } } } as const
@@ -99,8 +109,12 @@ const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof cros
   origin: cross.origin,
   factor1: crossFactorView(cross.factor1),
   factor2: crossFactorView(cross.factor2),
-  strategy: cross.strategy,
-  aiAnalysis: cross.aiAnalysis && crossAnalysisSchema.safeParse(cross.aiAnalysis).success ? crossAnalysisSchema.parse(cross.aiAnalysis) : null,
+  strategy: cross.strategy === null ? null : sanitizeTextWithSwotItems(cross.strategy, [cross.factor1, cross.factor2]),
+  aiAnalysis: (() => {
+    const parsed = cross.aiAnalysis ? crossAnalysisSchema.safeParse(cross.aiAnalysis) : null
+    if (!parsed?.success) return null
+    return sanitizeCrossAnalysis(parsed.data, [cross.factor1, cross.factor2])
+  })(),
   priority: cross.priority,
   createdById: cross.createdById,
   createdAt: cross.createdAt,
@@ -164,20 +178,20 @@ const checkySessionView = (session: { id: string; diagnosticId: string; title: s
   updatedAt: session.updatedAt,
 })
 
-const checkyMessageView = (message: { id: string; sessionId: string; role: string; content: string; category: string | null; basis: string | null; evidenceIds: string[]; insufficientData: boolean; missingInformation: string[]; status: string | null; decisionNote: string | null; suggestedStrategyTitle: string | null; suggestedStrategyDescription: string | null; createdAt: Date }) => ({
+const checkyMessageView = (message: { id: string; sessionId: string; role: string; content: string; category: string | null; basis: string | null; evidenceIds: string[]; insufficientData: boolean; missingInformation: string[]; status: string | null; decisionNote: string | null; suggestedStrategyTitle: string | null; suggestedStrategyDescription: string | null; createdAt: Date }, swotItems: readonly SwotTextItem[] = []) => ({
   id: message.id,
   sessionId: message.sessionId,
   role: message.role,
-  content: message.content,
+  content: message.role === 'CHECKY' ? sanitizeTextWithSwotItems(message.content, swotItems) : message.content,
   category: message.category,
   basis: message.basis,
   evidenceIds: message.evidenceIds ?? [],
   insufficientData: message.insufficientData,
-  missingInformation: message.missingInformation ?? [],
+  missingInformation: (message.missingInformation ?? []).map((text) => sanitizeTextWithSwotItems(text, swotItems)),
   status: message.status,
   decisionNote: message.decisionNote,
-  suggestedStrategyTitle: message.suggestedStrategyTitle,
-  suggestedStrategyDescription: message.suggestedStrategyDescription,
+  suggestedStrategyTitle: message.suggestedStrategyTitle == null ? null : sanitizeTextWithSwotItems(message.suggestedStrategyTitle, swotItems),
+  suggestedStrategyDescription: message.suggestedStrategyDescription == null ? null : sanitizeTextWithSwotItems(message.suggestedStrategyDescription, swotItems),
   createdAt: message.createdAt,
 })
 
@@ -243,6 +257,63 @@ const buildCheckyContext = async (db: PrismaClient, diagnostic: { id: string; ti
 }
 
 const scopeForUser = (request: Request): Prisma.TicketWhereInput => request.user?.role === Role.SUPERUSER ? {} : { OR: [{ createdBy: { companyId: request.user?.companyId ?? 'none' } }, { assignedTo: { companyId: request.user?.companyId ?? 'none' } }] }
+
+/**
+ * La evidencia de la pareja queda escrita siempre con los dos ids de factor resueltos, además de
+ * cualquier id citado (el de un cruce, por ejemplo). La tarjeta de Checky pinta la pareja a partir de
+ * los factores reales, así que con solo el id del cruce la pantalla no podría mostrar qué DOFA combina.
+ * Sirve tanto para la fila recién escrita como para registros antiguos al leerlos.
+ */
+const withPairedCheckyEvidence = <T extends { evidenceIds: readonly string[] }>(message: T, crosses: readonly CheckyCrossRef[], factors: readonly { id: string; type: string; description?: string | null }[]): T => {
+  const expanded = message.evidenceIds.flatMap((id) => {
+    const cross = crosses.find((candidate) => candidate.id === id)
+    if (!cross) return []
+    const first = factors.find((factor) => factor.id === cross.factor1Id)
+    const second = factors.find((factor) => factor.id === cross.factor2Id)
+    return first && second ? [first.id, second.id] : []
+  })
+  const evidenceIds = [...message.evidenceIds]
+  for (const id of expanded) {
+    if (!evidenceIds.includes(id)) evidenceIds.push(id)
+  }
+  return evidenceIds.length === message.evidenceIds.length ? message : { ...message, evidenceIds } as T
+}
+
+/**
+ * Gate de persistencia de las sugerencias de Checky: antes de escribir nada se comprueba que cada
+ * sugerencia que pretende ser estrategia tenga detrás una pareja DOFA válida entre dos factores
+ * reales de este diagnóstico, y se descarta la que no lo tenga. Una pareja que ya existe como
+ * StrategicCross no se descarta: se conserva y se escribe relacionada con ese cruce, que es la
+ * fuente de verdad, para que la aceptación lo reutilice en vez de crear otro.
+ *
+ * Los factores se cargan acotados a este diagnóstico con el mismo where que usa la aceptación, así
+ * que un id de otra empresa no puede construir una pareja. Los cruces ya vienen del contexto de la
+ * misma sesión. Además, la evidencia persistida se deja siempre con los dos ids de factor resueltos.
+ */
+const usableCheckyFindings = async (db: PrismaClient, diagnosticId: string, findings: CheckyConsultResult['findings'], crosses: readonly CheckyCrossRef[]): Promise<CheckyConsultResult['findings']> => {
+  const ids = [...new Set([...findings.flatMap((finding) => finding.evidenceIds), ...crosses.flatMap((cross) => [cross.factor1Id, cross.factor2Id])])]
+  const factors = ids.length > 0
+    ? await db.sWOTItem.findMany({ where: { id: { in: ids }, swot: { diagnosticId } }, select: { id: true, type: true, description: true } })
+    : []
+  const usable = filterCheckySuggestions(findings, factors, crosses)
+  return usable.map((finding) => {
+    const pair: CheckyCrossPair | null = resolveCheckyCrossPair(finding, factors, crosses)
+    return pair ? { ...finding, evidenceIds: checkyEvidenceWithPair(finding.evidenceIds, pair) } : finding
+  })
+}
+
+/**
+ * Lectura de la sesión compartida por la consulta y el GET: vuelve a aplicar la regla de la pareja
+ * DOFA, así que una sugerencia de estrategia sin pareja válida no se muestra aunque esté guardada,
+ * y la evidencia se desdobla en los dos factores de la pareja para que la tarjeta pueda pintarla.
+ * El resto de mensajes (el de usuario y la respuesta de Checky) no compite con la matriz, así que se
+ * conservan siempre.
+ */
+const visibleCheckyMessages = <T extends { id: string; role: string; category: string | null; evidenceIds: readonly string[] }>(messages: readonly T[], factors: readonly { id: string; type: string; description: string }[], crosses: readonly CheckyCrossRef[]): T[] => {
+  const withEvidence = messages.map((message) => withPairedCheckyEvidence(message, crosses, factors))
+  const visibleSuggestionIds = new Set(filterCheckySuggestions(withEvidence.filter((message) => message.role === 'CHECKY' && message.category), factors, crosses).map((message) => message.id))
+  return withEvidence.filter((message) => !(message.role === 'CHECKY' && message.category) || visibleSuggestionIds.has(message.id))
+}
 
 const canAccessTicket = (request: Request, ticket: { createdBy: { companyId: string | null } | null; assignedTo: { companyId: string | null } | null }) => request.user?.role === Role.SUPERUSER || ticket.createdBy?.companyId === request.user?.companyId || ticket.assignedTo?.companyId === request.user?.companyId
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
@@ -328,20 +399,35 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
   }
 
   // Los factores citados por la sugerencia solo se leen si hay sugerencias que resolver, y siempre
-  // acotados a este diagnóstico.
-  const citedFactorIds = new Set(acceptedSuggestions.flatMap((suggestion) => suggestion.evidenceIds))
+  // acotados a este diagnóstico. Si la pareja viene de un cruce citado, se traen además los factores
+  // de ese cruce: son los que hay que validar para saber si la sugerencia sí tiene pareja DOFA.
+  const crossRefs: CheckyCrossRef[] = crosses.map((cross) => ({ id: cross.id, factor1Id: cross.factor1Id, factor2Id: cross.factor2Id }))
+  const citedCrossIds = new Set(acceptedSuggestions.flatMap((suggestion) => suggestion.evidenceIds).filter((id) => crossRefs.some((cross) => cross.id === id)))
+  const citedFactorIds = new Set([
+    ...acceptedSuggestions.flatMap((suggestion) => suggestion.evidenceIds),
+    ...crossRefs.filter((cross) => citedCrossIds.has(cross.id)).flatMap((cross) => [cross.factor1Id, cross.factor2Id]),
+  ])
   const citedItems = citedFactorIds.size > 0
     ? await db.sWOTItem.findMany({ where: { id: { in: [...citedFactorIds] }, swot: { diagnosticId } }, select: { id: true, type: true, description: true } })
     : []
   const factorById = new Map<string, StrategyFactor>(citedItems.map((item) => [item.id, { id: item.id, type: item.type, description: item.description }]))
 
-  const checkySuggestions: CheckyStrategySource[] = acceptedSuggestions.map((suggestion) => ({
+  // Mismo gate que en la escritura: una sugerencia de estrategia sin pareja DOFA válida no se
+  // proyecta en Checky ni en los endpoints de estrategias, aunque esté aceptada y guardada.
+  const usableSuggestions = filterCheckySuggestions(acceptedSuggestions, citedItems, crossRefs)
+  // Una sugerencia puede citar el cruce en lugar de los dos factores: la pareja ya se resolvió arriba,
+  // así que aquí se desdobla el cruce en sus factores para que la estrategia muestre de qué DOFA vive.
+  const factorsOfCitedCross = new Map(crossRefs.filter((cross) => citedCrossIds.has(cross.id)).map((cross) => [cross.id, [cross.factor1Id, cross.factor2Id]]))
+  const checkySuggestions: CheckyStrategySource[] = usableSuggestions.map((suggestion) => ({
     messageId: suggestion.id,
     category: suggestion.category ?? '',
     evidenceIds: suggestion.evidenceIds,
     title: suggestion.suggestedStrategyTitle,
     description: suggestion.suggestedStrategyDescription,
-    factors: suggestion.evidenceIds.map((id) => factorById.get(id)).filter((item): item is StrategyFactor => item !== undefined),
+    factors: suggestion.evidenceIds
+      .flatMap((id) => factorsOfCitedCross.get(id) ?? [id])
+      .map((id) => factorById.get(id))
+      .filter((item): item is StrategyFactor => item !== undefined),
   }))
 
   const crossSources: CrossStrategySource[] = crosses.map((cross) => ({
@@ -378,6 +464,29 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
     actionPlan: strategyTaskPlans.find((plan) => plan.strategySource === strategy.source && plan.strategySourceRef === strategySourceRef(strategy.description)) ?? null,
   }))
 }
+
+const sanitizedStrategyView = (strategy: StrategyForPrioritization, items: readonly SwotTextItem[]): StrategyForPrioritization => ({
+  ...strategy,
+  title: sanitizeTextWithSwotItems(strategy.title, items),
+  description: sanitizeTextWithSwotItems(strategy.description, items),
+  actionPlan: strategy.actionPlan
+    ? {
+        ...strategy.actionPlan,
+        strategyTitle: strategy.actionPlan.strategyTitle === null ? null : sanitizeTextWithSwotItems(strategy.actionPlan.strategyTitle, items),
+        strategyDescription: strategy.actionPlan.strategyDescription === null ? null : sanitizeTextWithSwotItems(strategy.actionPlan.strategyDescription, items),
+      }
+    : null,
+})
+
+const sanitizeCrossAnalysis = (analysis: CrossAnalysisResult, items: readonly SwotTextItem[]): CrossAnalysisResult => ({
+  ...analysis,
+  relevance: sanitizeTextWithSwotItems(analysis.relevance, items),
+  strategy: sanitizeTextWithSwotItems(analysis.strategy, items),
+  expectedImpact: sanitizeTextWithSwotItems(analysis.expectedImpact, items),
+  risks: analysis.risks.map((text) => sanitizeTextWithSwotItems(text, items)),
+  opportunities: analysis.opportunities.map((text) => sanitizeTextWithSwotItems(text, items)),
+  recommendation: sanitizeTextWithSwotItems(analysis.recommendation, items),
+})
 
 const strategyBandToActionPriority: Record<string, Priority> = {
   INMEDIATA: Priority.HIGH,
@@ -760,7 +869,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const diagnostic = await db.qualityDiagnostic.findUnique({
       where: { id: String(request.params.id) },
-      include: { company: { select: { id: true } }, swotAnalysis: { include: { items: { select: { id: true, type: true } } } } },
+      include: { company: { select: { id: true } }, swotAnalysis: { include: { items: { select: { id: true, type: true, description: true } } } } },
     })
     if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
       response.status(404).json({ error: 'Diagnostic not found' })
@@ -794,7 +903,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const cross = await db.strategicCross.create({
-      data: { diagnosticId: diagnostic.id, crossType: crossType as CrossType, origin: 'USER', factor1Id: internal.id, factor2Id: external.id, strategy: parsed.data.strategy ?? null, createdById: request.user!.id },
+      data: { diagnosticId: diagnostic.id, crossType: crossType as CrossType, origin: 'USER', factor1Id: internal.id, factor2Id: external.id, strategy: parsed.data.strategy ? sanitizeTextWithSwotItems(parsed.data.strategy, items) : null, createdById: request.user!.id },
       include: crossInclude,
     })
     response.status(201).json({ cross: crossView(cross) })
@@ -819,7 +928,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Cross not found' })
       return
     }
-    const cross = await db.strategicCross.update({ where: { id: existing.id }, data: parsed.data, include: crossInclude })
+    const factors = await db.sWOTItem.findMany({ where: { id: { in: [existing.factor1Id, existing.factor2Id] }, swot: { diagnosticId: existing.diagnosticId } }, select: { id: true, description: true } })
+    const data = parsed.data.strategy === undefined
+      ? parsed.data
+      : { ...parsed.data, strategy: sanitizeTextWithSwotItems(parsed.data.strategy, factors) }
+    const cross = await db.strategicCross.update({ where: { id: existing.id }, data, include: crossInclude })
     response.json({ cross: crossView(cross) })
   }))
 
@@ -896,8 +1009,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const strategies = await loadDiagnosticStrategies(db, diagnostic.id, request.query.acceptedOnly === 'true')
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: diagnostic.id } }, select: { id: true, description: true } })
     response.json({
-      strategies,
+      strategies: strategies.map((strategy) => sanitizedStrategyView(strategy, items)),
       weightingLevels: WEIGHTING_LEVEL_SCORE,
     })
   }))
@@ -986,11 +1100,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       const existing = existingByPair.get(pairKey)
       if (existing) {
         if (existing.origin !== 'BOTH' || !existing.strategy) {
-          await db.strategicCross.update({ where: { id: existing.id }, data: { origin: 'BOTH', strategy: existing.strategy ?? cross.strategy } })
+          await db.strategicCross.update({ where: { id: existing.id }, data: { origin: 'BOTH', strategy: existing.strategy ?? sanitizeTextWithSwotItems(cross.strategy, items) } })
         }
         continue
       }
-      await db.strategicCross.create({ data: { diagnosticId: diagnostic.id, crossType: cross.type, origin: 'AI', factor1Id: ordered.factor1Id, factor2Id: ordered.factor2Id, strategy: cross.strategy, createdById: request.user!.id } })
+      await db.strategicCross.create({ data: { diagnosticId: diagnostic.id, crossType: cross.type, origin: 'AI', factor1Id: ordered.factor1Id, factor2Id: ordered.factor2Id, strategy: sanitizeTextWithSwotItems(cross.strategy, items), createdById: request.user!.id } })
     }
     const crosses = await db.strategicCross.findMany({ where: { diagnosticId: diagnostic.id }, include: crossInclude, orderBy: { updatedAt: 'desc' } })
     response.json({ crosses: crosses.map(crossView) })
@@ -1028,7 +1142,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     await Promise.all(analyses.map(async (entry) => {
       const cross = crosses.find((item) => item.id === entry.crossId)
       if (!cross) return
-      await db.strategicCross.update({ where: { id: cross.id }, data: { aiAnalysis: entry.analysis, priority: entry.analysis.priority } })
+      const analysis = sanitizeCrossAnalysis(entry.analysis, [cross.factor1, cross.factor2])
+      await db.strategicCross.update({ where: { id: cross.id }, data: { aiAnalysis: analysis, priority: analysis.priority } })
     }))
     const updated = await db.strategicCross.findMany({ where: { diagnosticId: diagnostic.id }, include: crossInclude, orderBy: { updatedAt: 'desc' } })
     response.json({ crosses: updated.map(crossView) })
@@ -1052,12 +1167,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // Al modelo solo va lo que le sirve para analizar: el id, para poder citarlo, el tipo y la
     // descripción. Las columnas de la fila (`swotId`, `createdAt`) no se cuelan en el prompt.
     const swotItems = items.map((item) => ({ id: item.id, type: item.type, description: item.description }))
-    const result = await aiService.analyze({
+    const result = sanitizeAIAnalysisResult(await aiService.analyze({
       title: diagnostic.title,
       description: diagnostic.description,
       status: diagnostic.status,
       swotItems,
-    })
+    }), swotItems)
     // La huella se guarda junto a la lectura, no se deduce de fechas: es lo que permite que la
     // próxima consulta a Checky sepa si lo que ya está guardado describe la matriz de hoy o una
     // anterior. Sin ella, editar un factor dejaría en pantalla una lectura vieja como si fuera actual.
@@ -1126,7 +1241,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const recommendations = await db.recommendation.findMany({ where: { diagnosticId: diagnostic.id }, orderBy: { createdAt: 'desc' } })
-    response.json({ recommendations: recommendations.map(recommendationView) })
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: diagnostic.id } }, select: { id: true, description: true } })
+    response.json({ recommendations: recommendations.map((recommendation) => sanitizedRecommendationView(recommendation, items)) })
   }))
 
   app.post('/api/diagnostics/:id/recommendations/import', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1140,7 +1256,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'AI analysis not found' })
       return
     }
-    const aiRecommendations = aiAnalysisSchema.parse({ executiveSummary: analysis.executiveSummary, diagnosis: analysis.diagnosis, keyFindings: analysis.keyFindings, foStrategies: analysis.foStrategies, doStrategies: analysis.doStrategies, faStrategies: analysis.faStrategies, daStrategies: analysis.daStrategies, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities, recommendations: analysis.recommendations }).recommendations
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: diagnostic.id } }, select: { id: true, description: true } })
+    const parsedAnalysis = aiAnalysisSchema.parse({ executiveSummary: analysis.executiveSummary, diagnosis: analysis.diagnosis, keyFindings: analysis.keyFindings, foStrategies: analysis.foStrategies, doStrategies: analysis.doStrategies, faStrategies: analysis.faStrategies, daStrategies: analysis.daStrategies, priorityRisks: analysis.priorityRisks, priorityOpportunities: analysis.priorityOpportunities, recommendations: analysis.recommendations })
+    const aiRecommendations = sanitizeAIAnalysisResult(parsedAnalysis, items).recommendations
     const existing = await db.recommendation.findMany({ where: { diagnosticId: diagnostic.id }, select: { title: true } })
     const existingTitles = new Set(existing.map((item) => item.title))
     const toImport = aiRecommendations.filter((recommendation) => !existingTitles.has(recommendation.title))
@@ -1203,7 +1321,12 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       return
     }
     const messages = await db.checkyMessage.findMany({ where: { sessionId: session.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
-    response.json({ session: checkySessionView(session), messages: messages.map(checkyMessageView) })
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: session.diagnosticId } }, select: { id: true, type: true, description: true } })
+    const crosses = await db.strategicCross.findMany({ where: { diagnosticId: session.diagnosticId }, select: { id: true, factor1Id: true, factor2Id: true } })
+    // La lectura vuelve a aplicar la regla: una sugerencia que pretende ser estrategia sin pareja
+    // DOFA válida no se muestra, aunque exista en la tabla por un registro anterior o de otro flujo.
+    const visibleMessages = visibleCheckyMessages(messages, items, crosses)
+    response.json({ session: checkySessionView(session), messages: visibleMessages.map((message) => checkyMessageView(message, items)) })
   }))
 
   app.post('/api/checky/sessions/:sessionId/messages', authMiddleware, userWriteGuard, checkyLimiter, asyncHandler(async (request, response) => {
@@ -1262,13 +1385,22 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       }
       throw error
     }
-    const reply = await db.checkyMessage.create({ data: { sessionId: session.id, role: 'CHECKY', content: result.reply, insufficientData: result.insufficientData, missingInformation: result.missingInformation, evidenceIds: [] } })
+    const safeResult = sanitizeCheckyResult(result, context)
+    // Solo se persisten las sugerencias con una pareja DOFA válida: las demás no son estrategias
+    // y no deben llegar ni a Checky ni a Ponderación.
+    const usableFindings = await usableCheckyFindings(db, session.diagnosticId, safeResult.findings, context.crosses)
+    const reply = await db.checkyMessage.create({ data: { sessionId: session.id, role: 'CHECKY', content: safeResult.reply, insufficientData: safeResult.insufficientData, missingInformation: safeResult.missingInformation, evidenceIds: [] } })
     const suggestions = []
-    for (const finding of result.findings) {
+    for (const finding of usableFindings) {
       suggestions.push(await db.checkyMessage.create({ data: { sessionId: session.id, role: 'CHECKY', content: `${finding.title}\n${finding.detail}`, category: finding.category as CheckyCategory, basis: finding.basis as CheckyFindingBasis, evidenceIds: finding.evidenceIds, suggestedStrategyTitle: finding.suggestedStrategy?.title ?? null, suggestedStrategyDescription: finding.suggestedStrategy?.description ?? null, status: 'PENDING' } }))
     }
     const messages = await db.checkyMessage.findMany({ where: { sessionId: session.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
-    response.status(201).json({ userMessage: checkyMessageView(userMessage), reply: checkyMessageView(reply), suggestions: suggestions.map(checkyMessageView), messages: messages.map(checkyMessageView) })
+    // El historial de la sesión se devuelve con la misma regla que el GET: lo que no tiene pareja
+    // DOFA válida no vuelve a aparecer ni siquiera en la respuesta de esta consulta.
+    const factors = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: session.diagnosticId } }, select: { id: true, type: true, description: true } })
+    const sessionCrosses = await db.strategicCross.findMany({ where: { diagnosticId: session.diagnosticId }, select: { id: true, factor1Id: true, factor2Id: true } })
+    const visibleMessages = visibleCheckyMessages(messages, factors, sessionCrosses)
+    response.status(201).json({ userMessage: checkyMessageView(userMessage), reply: checkyMessageView(reply, context.swotItems), suggestions: suggestions.map((message) => checkyMessageView(message, context.swotItems)), messages: visibleMessages.map((message) => checkyMessageView(message, context.swotItems)) })
   }))
 
   app.patch('/api/checky/sessions/:sessionId/messages/:messageId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1299,8 +1431,23 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(400).json({ error: 'Accept this missing cross through POST /api/checky/suggestions/:messageId/accept so the strategic cross is created' })
       return
     }
+    // Aceptar es lo que habilita Ponderación, así que solo se acepta una sugerencia de estrategia
+    // con una pareja DOFA válida detrás. Rechazar sigue estando permitido sin comprobar nada: no
+    // crea estrategia. Los factores se leen acotados a este diagnóstico, igual que en la aceptación.
+    if (parsed.data.status === 'ACCEPTED' && requiresCheckyCrossPair(existing)) {
+      const crosses = await db.strategicCross.findMany({ where: { diagnosticId: session.diagnosticId }, select: { id: true, factor1Id: true, factor2Id: true } })
+      const ids = [...new Set([...existing.evidenceIds, ...crosses.flatMap((cross) => [cross.factor1Id, cross.factor2Id])])]
+      const factors = ids.length > 0
+        ? await db.sWOTItem.findMany({ where: { id: { in: ids }, swot: { diagnosticId: session.diagnosticId } }, select: { id: true, type: true, description: true } })
+        : []
+      if (!resolveCheckyCrossPair(existing, factors, crosses)) {
+        response.status(400).json({ error: 'This suggestion does not reference a valid DOFA cross (FO, FA, DO or DA)' })
+        return
+      }
+    }
     const updated = await db.checkyMessage.update({ where: { id: existing.id }, data: { status: parsed.data.status, decisionNote: parsed.data.decisionNote ?? null } })
-    response.json({ message: checkyMessageView(updated) })
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: session.diagnosticId } }, select: { id: true, description: true } })
+    response.json({ message: checkyMessageView(updated, items) })
   }))
 
   app.post('/api/checky/suggestions/:messageId/accept', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1328,26 +1475,53 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     // The evidence ids come from the model, so they are only ever used to look up factors that
     // belong to this diagnostic. The diagnostic filter lives in the query, so an id from another
-    // diagnostic or company is never loaded and can never reach the StrategicCross.
-    const factors = await db.sWOTItem.findMany({
-      where: { id: { in: message.evidenceIds }, swot: { diagnosticId: session.diagnosticId } },
-      select: { id: true, type: true },
-      orderBy: { createdAt: 'asc' },
-    })
-    if (factors.length !== 2) {
-      response.status(400).json({ error: 'A missing cross suggestion must cite exactly two factors of this diagnostic' })
+    // diagnostic or company is never loaded and can never reach the StrategicCross. If the evidence
+    // cites a cross instead of its two factors, those factors are added to the lookup: the pair can
+    // be written either way, and the resolution follows the same A → E order as write and read.
+    const crossRows = await db.strategicCross.findMany({ where: { diagnosticId: session.diagnosticId }, include: crossInclude })
+    const crossRefs: CheckyCrossRef[] = crossRows.map((cross) => ({ id: cross.id, factor1Id: cross.factor1Id, factor2Id: cross.factor2Id }))
+    const lookupIds = [
+      ...new Set([
+        ...message.evidenceIds,
+        ...crossRefs.filter((cross) => message.evidenceIds.includes(cross.id)).flatMap((cross) => [cross.factor1Id, cross.factor2Id]),
+      ]),
+    ]
+    const factors = lookupIds.length > 0
+      ? await db.sWOTItem.findMany({
+          where: { id: { in: lookupIds }, swot: { diagnosticId: session.diagnosticId } },
+          select: { id: true, type: true, description: true },
+          orderBy: { createdAt: 'asc' },
+        })
+      : []
+    const pair = resolveCheckyCrossPair(message, factors, crossRefs)
+    if (!pair) {
+      const citedFactors = new Set(message.evidenceIds.filter((id) => factors.some((factor) => factor.id === id)))
+      response.status(400).json({
+        error: citedFactors.size === 2
+          ? 'These factors do not form a valid strategic cross (FO, DO, FA or DA)'
+          : 'A missing cross suggestion must cite exactly two factors of this diagnostic',
+      })
       return
     }
-    const [firstFactor, secondFactor] = factors
-    const internal = firstFactor.type === 'STRENGTH' || firstFactor.type === 'WEAKNESS' ? firstFactor : secondFactor
-    const external = internal.id === firstFactor.id ? secondFactor : firstFactor
-    const crossType = crossTypeFor(internal.type, external.type)
-    if (!crossType) {
-      response.status(400).json({ error: 'These factors do not form a valid strategic cross (FO, DO, FA or DA)' })
+    // La Matriz DOFA es la fuente de verdad: si la pareja ya es un StrategicCross, aceptar se apoya
+    // en ese cruce y no crea otro. La interpretación de Checky queda registrada en la propia
+    // sugerencia, de modo que las dos conviven y ambas siguen llegando a Ponderación.
+    const reusedCross = pair.crossId ? crossRows.find((cross) => cross.id === pair.crossId) : undefined
+    if (reusedCross) {
+      const suggestion = await db.checkyMessage.update({
+        where: { id: message.id },
+        data: { status: 'ACCEPTED', evidenceIds: checkyEvidenceWithPair(message.evidenceIds, pair) },
+      })
+      response.status(201).json({ suggestion: checkyMessageView(suggestion, factors), cross: crossView(reusedCross) })
       return
     }
+    const internal = pair.factor1
+    const external = pair.factor2
+    const crossType = pair.crossType
     // La estrategia llega estructurada desde la consulta de Checky, nunca se extrae del texto.
-    const strategy = message.suggestedStrategyDescription
+    const strategy = message.suggestedStrategyDescription === null
+      ? null
+      : sanitizeTextWithSwotItems(message.suggestedStrategyDescription, factors)
     let created: { cross: Prisma.StrategicCrossGetPayload<{ include: typeof crossInclude }>; suggestion: ReturnType<typeof checkyMessageView> }
     try {
       created = await db.$transaction(async (tx) => {
@@ -1373,7 +1547,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(500).json({ error: 'The strategic cross could not be created' })
       return
     }
-    response.status(201).json({ suggestion: checkyMessageView(created.suggestion), cross: crossView(created.cross) })
+    response.status(201).json({ suggestion: checkyMessageView(created.suggestion, factors), cross: crossView(created.cross) })
   }))
 
   app.get('/api/diagnostics/:id/action-plans', authMiddleware, asyncHandler(async (request, response) => {

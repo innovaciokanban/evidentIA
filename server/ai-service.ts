@@ -2,6 +2,7 @@ import OpenAI from 'openai'
 import { env } from './env.js'
 import { aiAnalysisSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, crossAnalysisSchema, crossTypeFor, crossTypeSchema } from './validation.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
+import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import type { z } from 'zod'
 
 export type AIAnalysisResult = z.infer<typeof aiAnalysisSchema>
@@ -290,6 +291,64 @@ export type CheckyConsultResult = {
   findings: Array<{ category: string; title: string; detail: string; basis: 'FACT' | 'INFERENCE'; evidenceIds: string[]; suggestedStrategy?: { title: string; description: string } | null }>
 }
 
+const checkyFactorCodePattern = /\b([FSWOT])(\d{1,3})\b/gi
+
+/** Checky uses the same id-to-description sanitizer, plus its existing F1/W1/O1/T1 reading aliases. */
+export const sanitizeCheckyText = (text: string, context: CheckyContext): string => {
+  const factorsByCode = new Map<string, string>()
+  for (const type of ['STRENGTH', 'WEAKNESS', 'OPPORTUNITY', 'THREAT']) {
+    const letter = type === 'STRENGTH' ? 'F' : type === 'WEAKNESS' ? 'W' : type === 'OPPORTUNITY' ? 'O' : 'T'
+    context.swotItems.filter((item) => item.type === type).forEach((item, index) => {
+      factorsByCode.set(`${letter}${index + 1}`, item.description)
+      if (type === 'STRENGTH') factorsByCode.set(`S${index + 1}`, item.description)
+    })
+  }
+
+  const withReadableCodes = text.replace(checkyFactorCodePattern, (_match, letter: string, number: string) => factorsByCode.get(`${letter.toUpperCase()}${number}`) ?? '')
+  return sanitizeTextWithSwotItems(withReadableCodes, context.swotItems)
+}
+
+export const sanitizeAIAnalysisResult = (result: AIAnalysisResult, swotItems: readonly SwotTextItem[]): AIAnalysisResult => ({
+  ...result,
+  executiveSummary: sanitizeTextWithSwotItems(result.executiveSummary, swotItems),
+  diagnosis: sanitizeTextWithSwotItems(result.diagnosis, swotItems),
+  keyFindings: result.keyFindings.map((finding) => ({
+    ...finding,
+    finding: sanitizeTextWithSwotItems(finding.finding, swotItems),
+    interpretation: finding.interpretation === undefined ? undefined : sanitizeTextWithSwotItems(finding.interpretation, swotItems),
+  })),
+  foStrategies: result.foStrategies.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  doStrategies: result.doStrategies.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  faStrategies: result.faStrategies.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  daStrategies: result.daStrategies.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  priorityRisks: result.priorityRisks.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  priorityOpportunities: result.priorityOpportunities.map((text) => sanitizeTextWithSwotItems(text, swotItems)),
+  recommendations: result.recommendations.map((recommendation) => ({
+    ...recommendation,
+    title: sanitizeTextWithSwotItems(recommendation.title, swotItems),
+    description: sanitizeTextWithSwotItems(recommendation.description, swotItems),
+    expectedImpact: sanitizeTextWithSwotItems(recommendation.expectedImpact, swotItems),
+    suggestedAction: sanitizeTextWithSwotItems(recommendation.suggestedAction, swotItems),
+  })),
+})
+
+export const sanitizeCheckyResult = (result: CheckyConsultResult, context: CheckyContext): CheckyConsultResult => ({
+  ...result,
+  reply: sanitizeCheckyText(result.reply, context),
+  missingInformation: result.missingInformation.map((text) => sanitizeCheckyText(text, context)),
+  findings: result.findings.map((finding) => ({
+    ...finding,
+    title: sanitizeCheckyText(finding.title, context),
+    detail: sanitizeCheckyText(finding.detail, context),
+    suggestedStrategy: finding.suggestedStrategy
+      ? {
+          title: sanitizeCheckyText(finding.suggestedStrategy.title, context),
+          description: sanitizeCheckyText(finding.suggestedStrategy.description, context),
+        }
+      : finding.suggestedStrategy,
+  })),
+})
+
 type OpenAIClient = { responses: { create: (input: unknown) => Promise<{ output_text?: string }> } }
 
 export class AIServiceError extends Error {
@@ -421,6 +480,12 @@ const CHECKY_DO_NOT_INVENT = [
   'Nunca inventes un id. evidenceIds solo admite ids copiados literalmente de swotItems o crosses; un id inexistente invalida toda la respuesta.',
 ].join('\n\n')
 
+const CHECKY_NO_INTERNAL_IDS = [
+  'SEPARACIÓN ENTRE TRAZABILIDAD Y TEXTO VISIBLE. Los ids son metadatos técnicos, no lenguaje para el usuario.',
+  'Escribe los ids únicamente dentro de `evidenceIds`. Nunca copies ids de factores, cruces, estrategias, `strategyRef`, `factorIds`, `crossId` ni `existingPairs` en `reply`, `title`, `detail`, `missingInformation`, `suggestedStrategy.title` o `suggestedStrategy.description`.',
+  'En la prosa identifica cada factor por su description humana y cada estrategia por su title o description. La asociación estructurada entre texto y evidencia queda exclusivamente en `evidenceIds`.',
+].join('\n\n')
+
 const CHECKY_ANTI_ECHO = [
   'El contexto incluye aiAnalysis, un análisis previo del mismo diagnóstico. Tu trabajo NO es repetirlo.',
   'Si un hallazgo tuyo reproduce executiveSummary, keyFindings, priorityRisks o priorityOpportunities, es redundante y debe desaparecer.',
@@ -434,7 +499,7 @@ const CHECKY_MISSING_CROSS_GATE = [
   '2. Ambos factores son relevantes para el objetivo del diagnóstico, no meramente útiles.',
   '3. La combinación tiene una relación estratégica razonada: puedes explicarla en una frase sin usar palabras vacías.',
   '4. El par equivalente NO existe ya. Usa existingPairs del contexto, que ya viene normalizado con el formato idInterno::idExterno, así que da igual en qué orden cites los dos factores. Lo único que se repite es la misma pareja: cambiar de factor interno o de factor externo sí es otro cruce y se puede proponer.',
-  'Para cada cruce sugerido, el detail debe cubrir: por qué puede ser relevante, qué factores relaciona y con qué ids, qué tipo de cruce sería, y una posible dirección estratégica. Proponerlo no es registrarlo: la crea el usuario.',
+  'Para cada cruce sugerido, el detail debe cubrir: por qué puede ser relevante, qué factores relaciona usando sus descriptions humanas, qué tipo de cruce sería, y una posible dirección estratégica. Los ids van únicamente en evidenceIds. Proponerlo no es registrarlo: la crea el usuario.',
   'Un cruce que no pasa la compuerta es peor que no decir nada, porque el usuario tiene que descartarlo.',
 ].join('\n\n')
 
@@ -486,7 +551,7 @@ const CHECKY_WEIGHTING_RULES = [
   'PONDERACIONES. El bloque weightings recoge lo que el usuario ya registró en la aplicación, junto con los conteos y listas de workMap (totalStrategies, evaluatedStrategies, pendingStrategies, priorityCounts, highPriorityStrategies, lowFeasibilityHighImpact, crossesWithoutStrategy, strategiesWithoutWeighting).',
   'weightedScore y weightingBand son datos de hecho: el ponderado lo calcula el servidor al guardar la ponderación y la banda sale de ese número. NO recalcules el ponderado, NO apliques los pesos de los criterios por tu cuenta y NO reetiquetes la banda. Cita el número y la banda tal cual llegan.',
   'Usa priorityCounts y highPriorityStrategies para ordenar la conversación: lo primero es atender las estrategias de mayor ponderado y, si el usuario pregunta por dónde empezar, contrasta con lowFeasibilityHighImpact (mucho impacto con poca viabilidad), que son candidatas a ejecución difícil, no de falta de valor.',
-  'pendingStrategies y strategiesWithoutWeighting son huecos reales de datos: si el usuario pregunta por prioridades y hay estrategias sin ponderar, dilo con esas ids en INFO_TO_COMPLEMENT o NEXT_STEPS. No les asignes un ponderado ni una banda.',
+  'pendingStrategies y strategiesWithoutWeighting son huecos reales de datos: si el usuario pregunta por prioridades y hay estrategias sin ponderar, identifícalas por su title o description en INFO_TO_COMPLEMENT o NEXT_STEPS. No escribas sus ids ni les asignes un ponderado o una banda.',
   'Si no hay ninguna ponderación registrada, el diagnóstico aún no está priorizado: dilo y ofrece ponderar, en lugar de inventar una jerarquía.',
 ].join('\n\n')
 
@@ -501,7 +566,7 @@ const CHECKY_CONSOLIDATED_STRATEGIES = [
   'ESTRATEGIAS CONSOLIDADAS. El bloque strategies y la sección analysis.strategyPrioritization traen juntas las estrategias del análisis con IA, las de los cruces y las sugerencias de Checky aceptadas, cada una con su source y, si el usuario ya la india, con su ponderado y su banda. Son la misma lista que el usuario ve en la pantalla de ponderación.',
   'REGLAS INNEGOCIABLES SOBRE LOS VALORES. weightedScore y weightingBand son hechos calculados por el servidor al guardar la ponderación. NO recalcules ningún ponderado, NO apliques los pesos de los criterios (20/25/20/15/20) por tu cuenta, NO cambies una banda y NO le asignes ponderado ni banda a una estrategia que llega con los dos en null. Si necesitas ponderar algo que no está ponderado, la propuesta es "valorar esta estrategia", nunca un número.',
   'La lista ya viene sin duplicados exactos: si dos textos eran idénticos, el servidor se quedó con uno. Lo que queda en possibleDuplicates es solapamiento real, no un error.',
-  'CÓMO CITAR. evidenceIds solo admite ids reales de factor o de cruce, los que llegan en factorIds y crossId. strategyRef es una etiqueta de referencia para nombrar la estrategia en tu prosa: copiarla en evidenceIds invalida toda la respuesta. Si una estrategia no trae factorIds ni crossId, es una estrategia del análisis con IA: puedes afirmar sus números como FACT porque están en el contexto, pero no tienes ningún id que citar, así que su hallazgo lleva evidenceIds vacío y lo explica en detail.',
+  'CÓMO CITAR. evidenceIds solo admite ids reales de factor o de cruce, los que llegan en factorIds y crossId. strategyRef es una etiqueta técnica: nunca la escribas en la prosa ni en evidenceIds. Si una estrategia no trae factorIds ni crossId, es una estrategia del análisis con IA: puedes afirmar sus números como FACT porque están en el contexto, pero no tienes ningún id que citar, así que su hallazgo lleva evidenceIds vacío y lo explica en detail.',
   'FACT E INFERENCE. Es FACT lo cuantitativo que se lee en el contexto: "tiene un ponderado de 3.45 y banda CORTO_PLAZO", "está sin ponderar", "3 de 7 estrategias valoradas", "estas dos se apoyan en los mismos factores". Es INFERENCE todo juicio sobre qué hacer: qué atender primero, qué reforzar, qué es redundante, qué falta. Las señales del servidor (needsAttention, highPriorityLowFeasibility, strengthenSignals, possibleDuplicates) son observaciones estructurales: el hecho es la coincidencia observable, y la lectura que hagas de ella va siempre en INFERENCE.',
   'SEIS PREGUNTAS, SEIS CATEGORÍAS EXISTENTES. Usa el bloque que te toca y nada más:',
   '1. Qué estrategias requieren atención: parte de needsAttention (banda alta) y de bySource, y responde en REVIEW_ASPECTS o STRATEGIC_RISKS según si el problema es de foco o de riesgo.',
@@ -541,7 +606,7 @@ const CHECKY_RECOMMENDATION_DISCIPLINE = [
  */
 const CHECKY_STRATEGIC_READING = [
   'LECTURA ESTRATÉGICA. Tu `reply` es la lectura de un consultor sobre este diagnóstico, no un resumen de los factores. Tienes que responder dos preguntas, en este orden y con la evidencia que las sostiene:',
-  '1. ¿QUÉ ESTÁ PASANDO en la organización con lo que hasta ahora se ha registrado? Describe la situación, la coherencia o la incoherencia entre factores y cruces, y el punto en el que la matriz se atasca. Apóyala en los ids que la sostienen.',
+  '1. ¿QUÉ ESTÁ PASANDO en la organización con lo que hasta ahora se ha registrado? Describe la situación, la coherencia o la incoherencia entre factores y cruces, y el punto en el que la matriz se atasca. Apóyala en evidenceIds, pero no escribas esos ids en la prosa.',
   '2. ¿QUÉ DEBERÍA PREOCUPARNOS Y PRIORIZARSE? Nombra qué exige atención antes que el resto, por qué lo crees y qué se pierde si no se atiende. Prioriza con un motivo, nunca con un adjetivo.',
   'Prohibido el resumen superficial. "La organización tiene fortalezas, debilidades, oportunidades y amenazas" no es una lectura: describe la estructura de la matriz, que el usuario ya ve. Una lectura útil dice qué significa esa estructura para este diagnóstico en concreto.',
   'Prohibido inventar para rellenar: no hay cifras de mercado, de clientes, de Competencia ni de sector que no estén en el contexto. Si el peso de la matriz impide sostener una de las dos preguntas, dilo con esas palabras en lugar de rellenarla.',
@@ -552,6 +617,7 @@ const checkySystemRules = [
   CHECKY_ROLE,
   CHECKY_JUDGMENT_RULES,
   CHECKY_DO_NOT_INVENT,
+  CHECKY_NO_INTERNAL_IDS,
   'Actúas como ASESOR, no como ejecutor. Todo lo que produzcas es una propuesta trazable: el usuario decide qué acepta, qué descarta y qué ejecuta. Nunca presentes una sugerencia como si ya estuviera aplicada, y nunca la redactes en modo imperativo sobre el sistema.',
   CHECKY_CROSS_TYPES,
   CHECKY_ANTI_ECHO,
@@ -875,6 +941,7 @@ export class AIService {
       'En `executiveSummary` sintetiza esas dos respuestas en dos o tres frases.',
       'En keyFindings marca cada elemento como FACT si está explícitamente en los datos o INFERENCE si es una inferencia razonable.',
       'Cada elemento de keyFindings lleva `finding` como conclusión principal, `interpretation` explicando por qué esa relación es relevante y `evidenceIds` con los ids de los elementos de `swotItems` de los que se apoya, copiados literalmente. Una inferencia que no se apoya en ningún factor recibido no es una inferencia, así que en ese caso devuelve el array vacío en lugar de inventar una cita.',
+      'Los ids de los factores son identificadores técnicos. Úsalos únicamente en `evidenceIds`; nunca los escribas dentro de executiveSummary, diagnosis, findings, interpretations, estrategias ni recomendaciones.',
       'Las estrategias y recomendaciones son propuestas, no hechos. Manténlas trazables a los factores recibidos.',
       'Devuelve únicamente JSON válido según el schema solicitado.',
       JSON.stringify(diagnostic),
@@ -890,7 +957,7 @@ export class AIService {
       try { candidate = JSON.parse(response.output_text) } catch { throw new AIServiceError('INVALID_RESPONSE') }
       const parsed = aiAnalysisSchema.safeParse(candidate)
       if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
-      return withRealEvidenceIds(parsed.data, diagnostic.swotItems)
+      return sanitizeAIAnalysisResult(withRealEvidenceIds(parsed.data, diagnostic.swotItems), diagnostic.swotItems)
     } catch (error) {
       this.fail(error)
     }
@@ -901,6 +968,7 @@ export class AIService {
     const prompt = [
       'Genera cruces DOFA (FO, DO, FA, DA) a partir de únicamente los factores SWOT proporcionados.',
       'Cada cruce debe formar parejas de factores que ya existen (usa sus ids) y solo entre tipos compatibles según la metodología DOFA.',
+      'Los ids de los factores son identificadores técnicos. Úsalos únicamente en factor1Id y factor2Id; nunca los escribas dentro de strategy.',
       'Escribe estrategias como propuestas trazables a los factores del par. No inventes hechos externos.',
       'Devuelve únicamente JSON válido según el schema solicitado.',
       JSON.stringify(items),
@@ -919,7 +987,7 @@ export class AIService {
         new Map(items.map((item) => [item.id, item.type])),
       ).safeParse(candidate)
       if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
-      return parsed.data.crosses
+      return parsed.data.crosses.map((cross) => ({ ...cross, strategy: sanitizeTextWithSwotItems(cross.strategy, items) }))
     } catch (error) {
       this.fail(error)
     }
@@ -930,6 +998,7 @@ export class AIService {
     const prompt = [
       'Analiza exclusivamente los cruces DOFA proporcionados a continuación.',
       'No inventes hechos, contexto, cifras ni información externa.',
+      'Los ids son identificadores técnicos. Nunca los escribas dentro de relevance, strategy, expectedImpact, risks, opportunities ni recommendation.',
       'Devuelve únicamente JSON válido según el schema solicitado.',
       JSON.stringify(crosses.map((cross) => ({ ...cross, strategy: cross.strategy ?? '' }))),
     ].join('\n\n')
@@ -994,7 +1063,7 @@ export class AIService {
         })
         throw new AIServiceError('INVALID_RESPONSE')
       }
-      return { ...parsed.data, findings: withoutRedundantMissingCrosses(parsed.data.findings, context.swotItems, workMap.existingPairs) }
+      return sanitizeCheckyResult({ ...parsed.data, findings: withoutRedundantMissingCrosses(parsed.data.findings, context.swotItems, workMap.existingPairs) }, context)
     } catch (error) {
       this.fail(error)
     }

@@ -96,6 +96,10 @@ const checkyMessageFixture = {
     opportunity: { id: checkyFactorIds.opportunity, type: 'OPPORTUNITY' as const, description: 'Mercado en expansión' },
     sameQuadrant: { id: 'cmdebilidad000000000000000001', type: 'STRENGTH' as const, description: 'Procesos lentos' },
     foreign: { id: 'cmoportunidade00000000001', type: 'OPPORTUNITY' as const, description: 'Demanda de otra empresa' },
+    // La pareja DOFA necesita los cuatro cuadrantes reales: debilidad y amenaza para poder armar
+    // las estrategias DA y DO sin apoyarse en un factor que en realidad es una fortaleza.
+    weakness: { id: 'cmdebilidaddo000000000000001', type: 'WEAKNESS' as const, description: 'Procesos manuales sin documentar' },
+    threat: { id: 'cmamenazada00000000000000001', type: 'THREAT' as const, description: 'Normativa nueva del sector' },
   }
   type WeightingLevelSeed = 'MUY_BAJO' | 'BAJO' | 'MEDIO' | 'ALTO' | 'MUY_ALTO'
   /**
@@ -160,6 +164,8 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
     ownSwotItem(checkySwotItemFixtures.strength),
     ownSwotItem(checkySwotItemFixtures.opportunity),
     ownSwotItem(checkySwotItemFixtures.sameQuadrant),
+    ownSwotItem(checkySwotItemFixtures.weakness),
+    ownSwotItem(checkySwotItemFixtures.threat),
     { ...checkySwotItemFixtures.foreign, swotId: 'cmswototro0000000000000001', createdAt: new Date('2026-01-04'), swot: { diagnosticId: 'cmdiagnosticotro00000000001' } },
   ]
   const normalizeTicket = (stored: StoredTicket, ownerId: string, assigneeId: string | null) => {
@@ -261,7 +267,7 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] }; swot?: { diagnosticId: string } } }) => {
         const wanted = where.id?.in ?? []
         const diagnosticId = where.swot?.diagnosticId
-        return storedSwotItems.filter((item) => wanted.includes(item.id) && (diagnosticId ? item.swot.diagnosticId === diagnosticId : true))
+        return storedSwotItems.filter((item) => (wanted.length === 0 || wanted.includes(item.id)) && (diagnosticId ? item.swot.diagnosticId === diagnosticId : true))
       }),
       update: vi.fn(async () => ({ ...swotItem, description: 'Factor actualizado', swot: { diagnostic: { companyId: company.id, company: { id: company.id, name: company.name } } } })),
       delete: vi.fn(),
@@ -983,6 +989,55 @@ describe('diagnostics and SWOT API', () => {
     expect(cross.body.cross.factor1).not.toHaveProperty('impact')
   })
 
+  it('sanitizes generated cross strategies before persisting them', async () => {
+    const supportId = 'cmuoch1430004uwl58z1940k'
+    const marketId = 'cmmarket1430004uwl58z1940x'
+    const items = [
+      { id: supportId, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH', description: 'El soporte del aplicativo contable está en casa', createdAt: new Date('2026-01-04') },
+      { id: marketId, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY', description: 'Mercado en expansión', createdAt: new Date('2026-01-04') },
+    ]
+    const db = makeDb()
+    ;(db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items } })
+    const aiService = {
+      generateCrosses: vi.fn(async () => [{ factor1Id: supportId, factor2Id: marketId, type: 'FO', strategy: `Relación estratégica: capitalizar ${supportId} junto con ${marketId}.` }]),
+    } as unknown as AIService
+    const agent = request.agent(createApp(db, aiService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const generated = await agent.post(`/api/diagnostics/${diagnostic.id}/crosses/generate`)
+    const createCall = (db.strategicCross.create as unknown as { mock: { calls: Array<Array<{ data: { strategy: string } }>> } }).mock.calls[0]?.[0]
+
+    expect(generated.status).toBe(200)
+    expect(createCall.data.strategy).toBe('Relación estratégica: capitalizar El soporte del aplicativo contable está en casa junto con Mercado en expansión.')
+    expect(createCall.data.strategy).not.toContain(supportId)
+    expect(createCall.data.strategy).not.toContain(marketId)
+  })
+
+  it('sanitizes legacy StrategicCross.strategy in crosses and consolidated strategies', async () => {
+    const legacyStrategy = `Relación estratégica: capitalizar ${checkyFactorIds.strength} junto con ${checkyFactorIds.opportunity}.`
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [{
+      id: 'cmlegacycross000000000001',
+      crossType: 'FO',
+      origin: 'AI',
+      factor1Id: checkyFactorIds.strength,
+      factor2Id: checkyFactorIds.opportunity,
+      strategy: legacyStrategy,
+      weighting: null,
+    }])
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const crosses = await agent.get(`/api/diagnostics/${diagnostic.id}/crosses`)
+    const strategies = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies`)
+    const consolidated = strategies.body.strategies.find((strategy: { source: string }) => strategy.source === 'STRATEGIC_CROSS')
+
+    expect(crosses.status).toBe(200)
+    expect(crosses.body.crosses[0].strategy).toContain('Equipo comprometido')
+    expect(crosses.body.crosses[0].strategy).not.toContain(checkyFactorIds.strength)
+    expect(consolidated.description).toContain('Equipo comprometido')
+    expect(consolidated.description).not.toContain(checkyFactorIds.strength)
+  })
+
   it('allows a company admin to manage diagnostics in its own company', async () => {
     const agent = request.agent(createApp(makeDb('COMPANY_ADMIN')))
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
@@ -1030,6 +1085,42 @@ describe('AI analysis service and API', () => {
     expect(created.body.analysis.executiveSummary).toBe(aiResult.executiveSummary)
     expect((await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)).status).toBe(200)
     expect(aiService.analyze).toHaveBeenCalledOnce()
+  })
+
+  it('sanitizes legacy AIAnalysis text on read while preserving evidenceIds', async () => {
+    const supportId = 'cmuoch1430004uwl58z1940k'
+    const marketId = 'cmmarket1430004uwl58z1940x'
+    const seededItems = [
+      { id: supportId, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH', description: 'El soporte del aplicativo contable está en casa', createdAt: new Date('2026-01-04') },
+      { id: marketId, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY', description: 'Mercado en expansión', createdAt: new Date('2026-01-04') },
+    ]
+    const legacy = {
+      ...persistedAIAnalysis,
+      executiveSummary: `Resumen ${supportId}`,
+      diagnosis: `Diagnóstico ${marketId}`,
+      keyFindings: [{ finding: `Hallazgo ${supportId}`, basis: 'INFERENCE', evidenceIds: [supportId], interpretation: `Relación estratégica ${marketId}` }],
+      foStrategies: [`Estrategia ${supportId}`],
+      doStrategies: [`Estrategia ${marketId}`],
+      faStrategies: [],
+      daStrategies: [],
+      priorityRisks: [`Riesgo ${supportId}`],
+      priorityOpportunities: [`Oportunidad ${marketId}`],
+      recommendations: [{ ...aiResult.recommendations[0], title: `Recomendación ${supportId}`, description: `Descripción ${marketId}` }],
+      swotFingerprint: swotFingerprint(seededItems),
+    }
+    const db = makeDb()
+    ;(db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: seededItems } })
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue(legacy)
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const read = await agent.get(`/api/diagnostics/${diagnostic.id}/ai-analysis`)
+    const visible = JSON.stringify({ ...read.body.analysis, keyFindings: read.body.analysis.keyFindings.map(({ evidenceIds, ...finding }: { evidenceIds: string[]; finding: string; interpretation: string }) => finding) })
+
+    expect(read.status).toBe(200)
+    expect(visible).not.toContain(supportId)
+    expect(visible).not.toContain(marketId)
+    expect(read.body.analysis.keyFindings[0].evidenceIds).toEqual([supportId])
   })
 
   it('returns a controlled error for missing configuration and invalid service output', async () => {
@@ -1667,6 +1758,75 @@ describe('Checky strategic assistant', () => {
     expect(read.body.messages).toHaveLength(4)
   })
 
+  it('sanitizes legacy Checky messages when reading a session without changing evidenceIds', async () => {
+    const db = makeDb()
+    const created = await (db.checkyMessage.create as unknown as (args: { data: Record<string, unknown> }) => Promise<{ id: string }> )({
+      data: {
+        sessionId: checkySessionFixture.id,
+        role: 'CHECKY',
+        content: `Hallazgo sobre ${checkyFactorIds.strength}.\nRelación estratégica con ${checkyFactorIds.opportunity}.`,
+        category: 'STRENGTHEN_STRATEGIES',
+        basis: 'INFERENCE',
+        evidenceIds: [checkyFactorIds.strength, checkyFactorIds.opportunity],
+        missingInformation: [],
+        suggestedStrategyTitle: `Activar ${checkyFactorIds.strength}`,
+        suggestedStrategyDescription: `Usar ${checkyFactorIds.opportunity} para validar la oportunidad.`,
+        status: 'PENDING',
+      },
+    })
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const read = await agent.get(`/api/checky/sessions/${checkySessionFixture.id}`)
+    const message = read.body.messages.find((entry: { id: string }) => entry.id === created.id)
+
+    expect(read.status).toBe(200)
+    expect(message.content).toContain('Equipo comprometido')
+    expect(message.content).toContain('Mercado en expansión')
+    expect(message.content).not.toContain(checkyFactorIds.strength)
+    expect(message.evidenceIds).toEqual([checkyFactorIds.strength, checkyFactorIds.opportunity])
+    expect(message.suggestedStrategyDescription).toContain('Mercado en expansión')
+    expect(message.suggestedStrategyDescription).not.toContain(checkyFactorIds.opportunity)
+  })
+
+  it('removes internal factor ids from persisted Checky text without changing evidence ids', async () => {
+    const dirtyResult = {
+      ...checkyConsultResult,
+      reply: `La relación entre ${checkyFactorIds.strength} y ${checkyFactorIds.opportunity} merece revisión.`,
+      findings: [{
+        ...checkyConsultResult.findings[0],
+        title: `Revisar ${checkyFactorIds.strength}`,
+        detail: `El cruce entre ${checkyFactorIds.strength} y ${checkyFactorIds.opportunity} puede abrir una línea de trabajo.`,
+        suggestedStrategy: {
+          title: `Activar ${checkyFactorIds.strength}`,
+          description: `Usar ${checkyFactorIds.strength} junto con ${checkyFactorIds.opportunity} para validar una oportunidad concreta.`,
+        },
+      }],
+    }
+    const db = makeDb()
+    const seededItems = [
+      { id: checkyFactorIds.strength, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH', description: 'Equipo comprometido', createdAt: new Date('2026-01-04') },
+      { id: checkyFactorIds.opportunity, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY', description: 'Mercado en expansión', createdAt: new Date('2026-01-04') },
+    ]
+    ;(db.qualityDiagnostic.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: seededItems } })
+    ;(db.aIAnalysis.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }).mockResolvedValue({ ...persistedAIAnalysis, swotFingerprint: swotFingerprint(seededItems) })
+    const agent = request.agent(createApp(db, { consultChecky: vi.fn(async () => dirtyResult) } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const sent = await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: '¿Qué debo revisar?' })
+
+    expect(sent.status).toBe(201)
+    expect(sent.body.reply.content).toContain('Equipo comprometido')
+    expect(sent.body.reply.content).toContain('Mercado en expansión')
+    expect(sent.body.reply.content).not.toContain(checkyFactorIds.strength)
+    expect(sent.body.reply.content).not.toContain(checkyFactorIds.opportunity)
+    expect(sent.body.suggestions[0].content).not.toContain(checkyFactorIds.strength)
+    expect(sent.body.suggestions[0].content).not.toContain(checkyFactorIds.opportunity)
+    expect(sent.body.suggestions[0].suggestedStrategyDescription).toContain('Equipo comprometido')
+    expect(sent.body.suggestions[0].suggestedStrategyDescription).toContain('Mercado en expansión')
+    expect(sent.body.suggestions[0].evidenceIds).toEqual([checkyFactorIds.strength, checkyFactorIds.opportunity])
+  })
+
   it('orchestrates the strategic analysis when the diagnostic has none, and reuses it afterwards', async () => {
     const db = makeDb('SUPERUSER')
     const aiService = { analyze: vi.fn(async () => aiResult), consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService
@@ -1988,19 +2148,28 @@ describe('Checky strategic assistant', () => {
       expect(db.strategicCross.create).not.toHaveBeenCalled()
     })
 
-    it('refuses to duplicate a pair that already has a strategic cross', async () => {
-      const db = makeDb()
+    it('accepts over the strategic cross that already exists for the pair instead of duplicating it', async () => {
+      const existingCross: SeededCross = {
+        id: 'cmcrossalreadythere0001',
+        crossType: 'FO',
+        origin: 'USER',
+        factor1Id: checkyFactorIds.strength,
+        factor2Id: checkyFactorIds.opportunity,
+        strategy: 'Cruce registrado por la usuaria antes de la sugerencia de Checky.',
+        weighting: null,
+      }
+      const db = makeDb('SUPERUSER', member.id, null, company.id, [], [existingCross])
       const agent = await loginAgent(db)
-      const findCross = db.strategicCross.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }
-      findCross.mockResolvedValue({ ...strategicCrossFixture, factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity })
       const suggestionId = await seedSuggestion(db)
 
       const response = await agent.post(`/api/checky/suggestions/${suggestionId}/accept`)
-      expect(response.status).toBe(409)
-      expect(response.body.error).toBe('A strategic cross between these factors already exists')
+      expect(response.status).toBe(201)
+      expect(response.body.suggestion.status).toBe('ACCEPTED')
+      // El cruce que ya existía es el que se devuelve: la Matriz DOFA manda y no se crea otro.
+      expect(response.body.cross.id).toBe(existingCross.id)
       expect(db.strategicCross.create).not.toHaveBeenCalled()
       const read = await agent.get(`/api/checky/sessions/${checkySessionFixture.id}`)
-      expect(read.body.messages.find((message: { id: string }) => message.id === suggestionId).status).toBe('PENDING')
+      expect(read.body.messages.find((message: { id: string }) => message.id === suggestionId).status).toBe('ACCEPTED')
     })
 
     it('rolls back the suggestion when the cross cannot be created', async () => {
@@ -3701,5 +3870,382 @@ describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
     // El campo no se acepta; la fila que se crea pertenece al diagnostic de la URL.
     expect(res.status).toBe(400)
     expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Regla de negocio de Checky: solo hay estrategia cuando detrás hay un cruce DOFA válido entre DOS
+ * factores reales del diagnóstico (FO, FA, DO o DA). Lo que no tiene pareja se descarta antes de
+ * persistirse, y si ya estuviera guardado no vuelve a mostrarse en Checky ni a llegar a Ponderación.
+ */
+describe('Checky solo propone estrategias con pareja DOFA válida', () => {
+  const f = {
+    strength: checkySwotItemFixtures.strength,
+    weakness: checkySwotItemFixtures.weakness,
+    opportunity: checkySwotItemFixtures.opportunity,
+    threat: checkySwotItemFixtures.threat,
+    otherStrength: checkySwotItemFixtures.sameQuadrant,
+  }
+  const strategy = { title: 'Abrir cuentas en el mercado', description: 'Asignar al equipo comprometido la apertura de cuentas nuevas durante el próximo trimestre.' }
+  const unknownFactorId = 'cminexistente0000000001'
+
+  const findingFor = (evidenceIds: string[], overrides: Record<string, unknown> = {}) => ({
+    category: 'STRENGTHEN_STRATEGIES',
+    title: 'Reforzar el enfoque comercial',
+    detail: 'La pareja de factores permite afinar el plan del próximo trimestre.',
+    basis: 'INFERENCE',
+    evidenceIds,
+    suggestedStrategy: { title: strategy.title, description: strategy.description },
+    ...overrides,
+  })
+  const resultFor = (findings: unknown[]) => ({ reply: 'Revisión lista.', insufficientData: false, missingInformation: [], findings })
+
+  type TestAgent = ReturnType<typeof request.agent>
+  const login = async (agent: TestAgent) => {
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+  }
+  /** La priorización es de solo lectura: si un test llegara a llamar a OpenAI, esto revienta. */
+  const readOnlyAI = () => new AIService({ responses: { create: async () => { throw new Error('Esta prueba no debe llamar a OpenAI') } } } as unknown as { responses: { create: (input: unknown) => Promise<{ output_text?: string }> } })
+
+  /** Consulta con la respuesta del modelo mockeada; el resto de la ruta es la de siempre. */
+  const consult = async (findings: unknown[], crosses: SeededCross[] = []) => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], crosses)
+    const aiService = { consultChecky: vi.fn(async () => resultFor(findings)) } as unknown as AIService
+    const agent = request.agent(createApp(db, aiService))
+    await login(agent)
+    const sent = await agent.post(`/api/checky/sessions/${checkySessionFixture.id}/messages`).send({ content: 'Propón estrategias' })
+    return { db, agent, sent, aiService }
+  }
+
+  const sessionOf = async (agent: TestAgent) => {
+    const read = await agent.get(`/api/checky/sessions/${checkySessionFixture.id}`)
+    return read.body.messages as Array<{ id: string; category: string | null; content: string; status: string | null }>
+  }
+
+  /** Sugerencia heredada, escrita directamente en la BD como si viniera de una versión anterior. */
+  const seedLegacySuggestion = async (db: ReturnType<typeof makeDb>, overrides: Record<string, unknown> = {}) => {
+    const created = await (db.checkyMessage.create as unknown as (args: { data: Record<string, unknown> }) => Promise<{ id: string }>)({
+      data: {
+        sessionId: checkySessionFixture.id,
+        role: 'CHECKY',
+        content: 'Posible cruce no explorado\nHallazgo heredado sin pareja validada.',
+        category: 'MISSING_CROSSES',
+        basis: 'FACT',
+        evidenceIds: [],
+        insufficientData: false,
+        missingInformation: [],
+        status: 'PENDING',
+        decisionNote: null,
+        suggestedStrategyTitle: 'Estrategia heredada',
+        suggestedStrategyDescription: 'Descripción de la estrategia heredada que no tiene pareja DOFA detrás.',
+        ...overrides,
+      },
+    })
+    return created.id
+  }
+
+  const validPairs = [
+    { crossType: 'FO', evidenceIds: [f.strength.id, f.opportunity.id], internal: 'STRENGTH', external: 'OPPORTUNITY' },
+    { crossType: 'FA', evidenceIds: [f.strength.id, f.threat.id], internal: 'STRENGTH', external: 'THREAT' },
+    { crossType: 'DO', evidenceIds: [f.weakness.id, f.opportunity.id], internal: 'WEAKNESS', external: 'OPPORTUNITY' },
+    { crossType: 'DA', evidenceIds: [f.weakness.id, f.threat.id], internal: 'WEAKNESS', external: 'THREAT' },
+  ]
+  for (const pair of validPairs) {
+    it(`acepta la pareja ${pair.crossType}, la enseña en Checky y la deja para Ponderación`, async () => {
+      const { agent, sent } = await consult([findingFor(pair.evidenceIds)])
+      expect(sent.status).toBe(201)
+      expect(sent.body.suggestions).toHaveLength(1)
+      expect(sent.body.suggestions[0].status).toBe('PENDING')
+
+      const decision = await agent.patch(`/api/checky/sessions/${checkySessionFixture.id}/messages/${sent.body.suggestions[0].id}`).send({ status: 'ACCEPTED' })
+      expect(decision.status).toBe(200)
+
+      const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+      expect(listed.status).toBe(200)
+      expect(listed.body.strategies).toHaveLength(1)
+      expect(listed.body.strategies[0]).toMatchObject({ source: 'CHECKY', description: strategy.description })
+      expect(listed.body.strategies[0].factor1).toMatchObject({ type: pair.internal })
+      expect(listed.body.strategies[0].factor2).toMatchObject({ type: pair.external })
+
+      // Ponderación valora exactamente la lista que acaba de leer.
+      const valued = await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({
+        source: 'CHECKY',
+        sourceRef: strategySourceRef(strategy.description),
+        impactoEstrategico: 'ALTO',
+        viabilidad: 'MEDIO',
+        urgencia: 'MEDIO',
+        sinergiaInterna: 'MEDIO',
+        impactoReputacional: 'MEDIO',
+      })
+      expect(valued.status).toBe(200)
+    })
+  }
+
+  it('descarta la sugerencia cuyo factor1 no existe en el diagnóstico', async () => {
+    const { agent, sent } = await consult([findingFor([unknownFactorId, f.opportunity.id])])
+    expect(sent.status).toBe(201)
+    expect(sent.body.suggestions).toEqual([])
+    const messages = await sessionOf(agent)
+    expect(messages.filter((message) => message.category !== null)).toEqual([])
+  })
+
+  it('descarta la sugerencia cuyo factor2 no existe en el diagnóstico', async () => {
+    const { agent, sent } = await consult([findingFor([f.strength.id, unknownFactorId])])
+    expect(sent.body.suggestions).toEqual([])
+    const messages = await sessionOf(agent)
+    expect(messages.filter((message) => message.category !== null)).toEqual([])
+  })
+
+  it('descarta la pareja de dos factores del mismo tipo, porque no es ningún cruce DOFA', async () => {
+    const { agent, sent } = await consult([
+      // Dos internas: fortaleza con fortaleza.
+      findingFor([f.strength.id, f.otherStrength.id]),
+      // Dos externas: amenaza con oportunidad.
+      findingFor([f.threat.id, f.opportunity.id]),
+    ])
+    expect(sent.body.suggestions).toEqual([])
+    const messages = await sessionOf(agent)
+    expect(messages.filter((message) => message.category !== null)).toEqual([])
+  })
+
+  it('descarta la sugerencia que cita el mismo factor como factor1 y factor2', async () => {
+    const { agent, sent } = await consult([findingFor([f.strength.id, f.strength.id])])
+    expect(sent.body.suggestions).toEqual([])
+    const messages = await sessionOf(agent)
+    expect(messages.filter((message) => message.category !== null)).toEqual([])
+  })
+
+  it('no persiste un MISSING_CROSSES sin pareja válida', async () => {
+    const { agent, sent } = await consult([
+      findingFor([f.strength.id], { category: 'MISSING_CROSSES' }),
+      findingFor([], { category: 'MISSING_CROSSES', suggestedStrategy: null }),
+    ])
+    expect(sent.body.suggestions).toEqual([])
+    // Ni en la respuesta de la consulta ni en la lectura posterior de la sesión.
+    expect(sent.body.messages.some((message: { category: string | null }) => message.category === 'MISSING_CROSSES')).toBe(false)
+    const messages = await sessionOf(agent)
+    expect(messages.some((message) => message.category === 'MISSING_CROSSES')).toBe(false)
+  })
+
+  it('no enseña en Checky ni entrega a Ponderación una sugerencia heredada sin pareja', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await login(agent)
+    const legacyId = await seedLegacySuggestion(db, { status: 'ACCEPTED' })
+
+    const messages = await sessionOf(agent)
+    expect(messages.some((message) => message.id === legacyId)).toBe(false)
+
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(listed.status).toBe(200)
+    expect(listed.body.strategies.filter((strategyEntry: { source: string }) => strategyEntry.source === 'CHECKY')).toEqual([])
+  })
+
+  it('no muestra el aviso "Posible cruce no explorado" como si fuera una estrategia', async () => {
+    const fresh = await consult([findingFor([], {
+      category: 'MISSING_CROSSES',
+      title: 'Posible cruce no explorado',
+      detail: 'Checky detectó una pareja que quizá convenga revisar.',
+      suggestedStrategy: null,
+    })])
+    expect(fresh.sent.body.suggestions).toEqual([])
+    expect((await sessionOf(fresh.agent)).some((message) => message.content.includes('Posible cruce no explorado'))).toBe(false)
+
+    const db = makeDb()
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await login(agent)
+    await seedLegacySuggestion(db, { status: 'ACCEPTED' })
+    expect((await sessionOf(agent)).some((message) => message.content.includes('Posible cruce no explorado'))).toBe(false)
+  })
+
+  it('no propone dos veces la misma pareja DOFA en una misma respuesta', async () => {
+    const { agent, sent } = await consult([
+      findingFor([f.strength.id, f.opportunity.id], { category: 'MISSING_CROSSES', detail: 'Falta el cruce FO entre la fortaleza y la oportunidad.' }),
+      findingFor([f.opportunity.id, f.strength.id], { category: 'MISSING_CROSSES', title: 'Otra vez el mismo cruce', detail: 'Segunda propuesta del mismo cruce FO.' }),
+    ])
+    expect(sent.body.suggestions).toHaveLength(1)
+    expect(sent.body.suggestions[0].content).toContain('Falta el cruce FO')
+    const messages = await sessionOf(agent)
+    expect(messages.filter((message) => message.category === 'MISSING_CROSSES')).toHaveLength(1)
+  })
+
+  it('relaciona la pareja con el StrategicCross existente y lo reutiliza al aceptar, sin duplicarlo', async () => {
+    const existingCross: SeededCross = {
+      id: 'cmcrossyaregistrado00001',
+      crossType: 'FO',
+      origin: 'USER',
+      factor1Id: f.strength.id,
+      factor2Id: f.opportunity.id,
+      strategy: 'Cruce ya registrado entre la fortaleza y la oportunidad.',
+      weighting: null,
+    }
+    const { db, agent, sent } = await consult([findingFor([f.strength.id, f.opportunity.id], { category: 'MISSING_CROSSES' })], [existingCross])
+    expect(sent.status).toBe(201)
+    // La pareja ya es un cruce de la matriz: la sugerencia se conserva y se relaciona con él.
+    expect(sent.body.suggestions).toHaveLength(1)
+    // La tarjeta necesita los dos ids de factor reales para pintar la pareja DOFA.
+    expect(sent.body.suggestions[0].evidenceIds).toEqual(expect.arrayContaining([f.strength.id, f.opportunity.id]))
+
+    const accepted = await agent.post(`/api/checky/suggestions/${sent.body.suggestions[0].id}/accept`)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body.cross.id).toBe(existingCross.id)
+    expect(accepted.body.suggestion.status).toBe('ACCEPTED')
+    expect(db.strategicCross.create).not.toHaveBeenCalled()
+
+    // El cruce del usuario queda en la matriz y la interpretación de Checky entra en Ponderación.
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies`)
+    expect(listed.body.strategies.filter((entry: { source: string }) => entry.source === 'STRATEGIC_CROSS')).toHaveLength(1)
+    const pondered = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(pondered.body.strategies.filter((entry: { source: string }) => entry.source === 'CHECKY')).toHaveLength(1)
+  })
+
+  it('acepta una sugerencia que cita solo el id de un cruce y deja escritos los dos factores', async () => {
+    const cross: SeededCross = {
+      id: 'cmcrosssoloidevidencia01',
+      crossType: 'FO',
+      origin: 'USER',
+      factor1Id: f.strength.id,
+      factor2Id: f.opportunity.id,
+      strategy: 'Cruce existente que Checky cita solo por su id.',
+      weighting: null,
+    }
+    const { db, agent, sent } = await consult([findingFor([cross.id], { category: 'MISSING_CROSSES' })], [cross])
+    expect(sent.body.suggestions).toHaveLength(1)
+    expect(sent.body.suggestions[0].evidenceIds).toEqual(expect.arrayContaining([cross.id, f.strength.id, f.opportunity.id]))
+
+    const accepted = await agent.post(`/api/checky/suggestions/${sent.body.suggestions[0].id}/accept`)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body.cross.id).toBe(cross.id)
+    expect(db.strategicCross.create).not.toHaveBeenCalled()
+
+    const read = await agent.get(`/api/checky/sessions/${checkySessionFixture.id}`)
+    const stored = read.body.messages.find((message: { id: string }) => message.id === sent.body.suggestions[0].id)
+    expect(stored.evidenceIds).toEqual(expect.arrayContaining([f.strength.id, f.opportunity.id]))
+  })
+
+  it('crea el cruce nuevo cuando la pareja todavía no existe en la matriz DOFA', async () => {
+    const { db, agent, sent } = await consult([findingFor([f.weakness.id, f.threat.id], { category: 'MISSING_CROSSES' })])
+    expect(sent.body.suggestions).toHaveLength(1)
+
+    const accepted = await agent.post(`/api/checky/suggestions/${sent.body.suggestions[0].id}/accept`)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body.cross).toMatchObject({ crossType: 'DA', diagnosticId: diagnostic.id })
+    expect(accepted.body.cross.factor1.id).toBe(f.weakness.id)
+    expect(accepted.body.cross.factor2.id).toBe(f.threat.id)
+    expect(db.strategicCross.create).toHaveBeenCalledTimes(1)
+    expect(db.strategicCross.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      origin: 'AI', crossType: 'DA', factor1Id: f.weakness.id, factor2Id: f.threat.id,
+    }) }))
+
+    // La estrategia de Checky queda aceptada para Ponderación; el cruce creado entra en la matriz.
+    const pondered = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(pondered.body.strategies.filter((entry: { source: string }) => entry.source === 'CHECKY')).toHaveLength(1)
+    expect(pondered.body.strategies[0].factor1).toMatchObject({ id: f.weakness.id })
+    expect(pondered.body.strategies[0].factor2).toMatchObject({ id: f.threat.id })
+  })
+
+  it('rechaza con 400 aceptar una sugerencia heredada sin pareja por la vía de aceptación', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await login(agent)
+    const singleFactor = await seedLegacySuggestion(db, { evidenceIds: [f.strength.id] })
+    const first = await agent.post(`/api/checky/suggestions/${singleFactor}/accept`)
+    expect(first.status).toBe(400)
+    expect(first.body.error).toBe('A missing cross suggestion must cite exactly two factors of this diagnostic')
+
+    const sameQuadrant = await seedLegacySuggestion(db, { evidenceIds: [f.strength.id, f.otherStrength.id] })
+    const second = await agent.post(`/api/checky/suggestions/${sameQuadrant}/accept`)
+    expect(second.status).toBe(400)
+    expect(second.body.error).toBe('These factors do not form a valid strategic cross (FO, DO, FA or DA)')
+    expect(db.strategicCross.create).not.toHaveBeenCalled()
+  })
+
+  it('el cruce DOFA que registró la usuaria llega al contexto con el que Checky decide', async () => {
+    const userCross: SeededCross = {
+      id: 'cmcrossusuariachecky01',
+      crossType: 'FO',
+      origin: 'USER',
+      factor1Id: f.strength.id,
+      factor2Id: f.opportunity.id,
+      strategy: 'Cruce creado por la usuaria desde la matriz DOFA.',
+      weighting: null,
+    }
+    const { aiService, sent } = await consult([findingFor([f.strength.id, f.opportunity.id], { category: 'MISSING_CROSSES' })], [userCross])
+    expect(sent.status).toBe(201)
+    const context = (aiService.consultChecky as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as { crosses: Array<{ id: string }> }
+    expect(context.crosses.map((cross) => cross.id)).toContain(userCross.id)
+  })
+
+  it('la sugerencia heredada que solo cita un cruce se lee con sus dos factores', async () => {
+    const cross: SeededCross = {
+      id: 'cmcrosslegacyevidence01',
+      crossType: 'FO',
+      origin: 'USER',
+      factor1Id: f.strength.id,
+      factor2Id: f.opportunity.id,
+      strategy: 'Cruce heredado citado solo por id en una sugerencia antigua.',
+      weighting: null,
+    }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [cross])
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await login(agent)
+    const legacyId = await seedLegacySuggestion(db, { evidenceIds: [cross.id] })
+
+    const read = await agent.get(`/api/checky/sessions/${checkySessionFixture.id}`)
+    const stored = read.body.messages.find((message: { id: string }) => message.id === legacyId)
+    expect(stored).toBeDefined()
+    expect(stored.evidenceIds).toEqual(expect.arrayContaining([cross.id, f.strength.id, f.opportunity.id]))
+  })
+
+  it('resuelve la pareja de una estrategia que cita un cruce por su id', async () => {
+    const cross: SeededCross = {
+      id: 'cmcrossporresolver00001',
+      crossType: 'FO',
+      origin: 'AI',
+      factor1Id: f.strength.id,
+      factor2Id: f.opportunity.id,
+      strategy: 'Cruce existente que Checky cita como evidencia.',
+      weighting: null,
+    }
+    const { agent, sent } = await consult([findingFor([cross.id])], [cross])
+    expect(sent.status).toBe(201)
+    expect(sent.body.suggestions).toHaveLength(1)
+
+    const decision = await agent.patch(`/api/checky/sessions/${checkySessionFixture.id}/messages/${sent.body.suggestions[0].id}`).send({ status: 'ACCEPTED' })
+    expect(decision.status).toBe(200)
+
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(listed.body.strategies).toHaveLength(1)
+    expect(listed.body.strategies[0]).toMatchObject({ source: 'CHECKY', description: strategy.description })
+    expect(listed.body.strategies[0].factor1).toMatchObject({ id: f.strength.id, type: 'STRENGTH' })
+    expect(listed.body.strategies[0].factor2).toMatchObject({ id: f.opportunity.id, type: 'OPPORTUNITY' })
+  })
+
+  it('conserva el hallazgo informativo sin pareja, porque no es una estrategia', async () => {
+    const { sent } = await consult([{
+      category: 'REVIEW_ASPECTS',
+      title: 'Sin amenazas registradas',
+      detail: 'La matriz no registra amenazas, así que el riesgo todavía no se puede evaluar.',
+      basis: 'FACT',
+      evidenceIds: [],
+      suggestedStrategy: null,
+    }])
+    expect(sent.body.suggestions).toHaveLength(1)
+  })
+
+  it('rechaza aceptar una sugerencia heredada que no tiene pareja DOFA válida', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await login(agent)
+    const legacyId = await seedLegacySuggestion(db, { category: 'STRENGTHEN_STRATEGIES', status: 'PENDING' })
+
+    const accepted = await agent.patch(`/api/checky/sessions/${checkySessionFixture.id}/messages/${legacyId}`).send({ status: 'ACCEPTED' })
+    expect(accepted.status).toBe(400)
+    expect(accepted.body.error).toBe('This suggestion does not reference a valid DOFA cross (FO, FA, DO or DA)')
+
+    // Rechazar sigue permitido: no crea estrategia.
+    const rejected = await agent.patch(`/api/checky/sessions/${checkySessionFixture.id}/messages/${legacyId}`).send({ status: 'REJECTED' })
+    expect(rejected.status).toBe(200)
+    expect(rejected.body.message.status).toBe('REJECTED')
   })
 })
