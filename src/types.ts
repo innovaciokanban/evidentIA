@@ -89,6 +89,8 @@ export type StrategicCross = {
   factor1: SWOTItem
   factor2: SWOTItem
   strategy: string | null
+  /** Decisión tomada sobre la estrategia del cruce en Checky. `null` = todavía no decidida. */
+  strategyStatus: CheckySuggestionStatus | null
   aiAnalysis: CrossAnalysis | null
   priority: Level | null
   createdById: string
@@ -111,10 +113,11 @@ export type CrossWeighting = {
   createdAt: string
   updatedAt: string
 }
-/** Fuentes de una estrategia consolidada. Los cruces conservan su propia ponderación aparte. */
+/** Fuentes de una estrategia consolidada. */
 export type StrategySource = 'AI_ANALYSIS' | 'STRATEGIC_CROSS' | 'CHECKY'
-/** Solo estas dos fuentes se valoran con PUT /diagnostics/:id/strategies/weighting. */
-export type WeightableStrategySource = 'AI_ANALYSIS' | 'CHECKY'
+/** Las tres fuentes se valoran con PUT /diagnostics/:id/strategies/weighting; la del cruce se
+ *  guarda en StrategicCrossWeighting, la misma fila que usa la matriz DOFA. */
+export type WeightableStrategySource = 'AI_ANALYSIS' | 'CHECKY' | 'STRATEGIC_CROSS'
 /** Banda que clasifica el backend. El frontend solo la lee para elegir el color. */
 export type StrategyBand = 'INMEDIATA' | 'CORTO_PLAZO' | 'MEDIANO_PLAZO' | 'LARGO_PLAZO'
 export type StrategyFactorRef = { id: string; type: SWOTType; description: string }
@@ -257,6 +260,25 @@ export type Ticket = {
     actionPlan: Pick<ActionPlan, 'id' | 'title' | 'strategySource' | 'strategySourceRef' | 'strategyTitle' | 'strategyDescription'>
   } | null
 }
+
+export type ProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
+/** Estado que guarda el backend. El mapa pinta su equivalente visual con ProcessStatus de la tarjeta. */
+export type ProcessState = 'ACTIVE' | 'INACTIVE'
+
+export type Process = {
+  id: string
+  companyId: string
+  name: string
+  code: string | null
+  type: ProcessType
+  objective: string
+  description: string | null
+  status: ProcessState
+  responsible: Pick<User, 'id' | 'name'> | null
+  createdAt: string
+  updatedAt: string
+}
+
 
 export type DashboardSummary = {
   totalCompanies: number

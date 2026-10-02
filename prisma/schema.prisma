@@ -357,6 +357,13 @@ model StrategicCross {
   factor1Id    String
   factor2Id    String
   strategy     String?
+  /**
+   * Decisión tomada sobre la estrategia de este cruce en la pantalla de Checky. Reutiliza el mismo
+   * enum que las sugerencias: null significa que todavía no se ha decidido, ACCEPTED es lo que
+   * habilita la estrategia en Ponderación y REJECTED la deja fuera. Vive en el cruce y no en una
+   * tabla nueva porque el cruce ya es la fuente de verdad de la pareja DOFA y de su estrategia.
+   */
+  strategyStatus CheckySuggestionStatus?
   aiAnalysis   Json?
   priority     Priority?
   createdById  String

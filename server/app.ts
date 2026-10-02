@@ -12,7 +12,7 @@ import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResu
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
-import { indexStrategyWeightings, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
+import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
@@ -110,6 +110,7 @@ const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof cros
   factor1: crossFactorView(cross.factor1),
   factor2: crossFactorView(cross.factor2),
   strategy: cross.strategy === null ? null : sanitizeTextWithSwotItems(cross.strategy, [cross.factor1, cross.factor2]),
+  strategyStatus: cross.strategyStatus,
   aiAnalysis: (() => {
     const parsed = cross.aiAnalysis ? crossAnalysisSchema.safeParse(cross.aiAnalysis) : null
     if (!parsed?.success) return null
@@ -454,6 +455,7 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
     factor1: { id: cross.factor1.id, type: cross.factor1.type, description: cross.factor1.description },
     factor2: { id: cross.factor2.id, type: cross.factor2.type, description: cross.factor2.description },
     strategy: cross.strategy,
+    strategyStatus: cross.strategyStatus,
     weighting: cross.weighting
       ? {
           id: cross.weighting.id,
@@ -470,9 +472,18 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
 
   const sources = acceptedOnly
     ? (() => {
-        // Ponderación muestra la aceptación explícita de Checky, no el cruce DOFA que pudo crear
-        // una sugerencia MISSING_CROSSES. La consolidación normal conserva el cruce por separado.
-        return { crosses: [], aiStrategies: [], checkySuggestions, includeMissingCrossStrategies: true }
+        // Ponderación muestra la aceptación explícita hecha en Checky, y esa pantalla acepta dos
+        // cosas: las sugerencias de Checky y la estrategia de un cruce de la matriz DOFA que la
+        // persona aceptó ahí mismo. El cruce entra con su fuente STRATEGIC_CROSS y con la
+        // ponderación que ya tiene en la matriz; el análisis con IA sigue fuera.
+        // Un texto que ya es una sugerencia aceptada no se suma dos veces: gana la sugerencia, que
+        // es la que la persona vio aceptar y la que desde aquí se puede valorar.
+        const acceptedByText = new Set(checkySuggestions.map((suggestion) => normalizeStrategyText(suggestion.description ?? '')))
+        const acceptedCrosses = crossSources.filter((cross) => {
+          const description = cross.strategy?.trim() ?? ''
+          return description.length > 0 && cross.strategyStatus === 'ACCEPTED' && !acceptedByText.has(normalizeStrategyText(description))
+        })
+        return { crosses: acceptedCrosses, aiStrategies: [], checkySuggestions, includeMissingCrossStrategies: true }
       })()
     : { crosses: crossSources, aiStrategies, checkySuggestions }
   const strategies = collectStrategies({ ...sources, weightings: indexStrategyWeightings(storedWeightings) })
@@ -1092,6 +1103,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const factors = await db.sWOTItem.findMany({ where: { id: { in: [existing.factor1Id, existing.factor2Id] }, swot: { diagnosticId: existing.diagnosticId } }, select: { id: true, description: true } })
+    // Decidir la estrategia de un cruce que no tiene ninguna no tiene lectura: no hay texto que
+    // aceptar ni que Ponderación pueda recoger después.
+    if (parsed.data.strategyStatus !== undefined && !(parsed.data.strategy ?? existing.strategy)?.trim()) {
+      response.status(400).json({ error: 'This strategic cross has no strategy to decide on' })
+      return
+    }
     const data = parsed.data.strategy === undefined
       ? parsed.data
       : { ...parsed.data, strategy: sanitizeTextWithSwotItems(parsed.data.strategy, factors) }
@@ -1218,6 +1235,24 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const strategy = matches.find((candidate) => candidate.source === source)
     if (!strategy) {
       response.status(400).json({ error: `This strategy belongs to ${matches[0].source}, not to ${source}` })
+      return
+    }
+
+    // La estrategia de un cruce se valora en su propia tabla, la misma que usa la Matriz DOFA:
+    // StrategicCrossWeighting es la única ponderación que tiene el cruce, así que esta pantalla y la
+    // matriz leen y escriben el mismo valor sin duplicar filas ni estados.
+    if (source === 'STRATEGIC_CROSS') {
+      if (!strategy.crossId) {
+        response.status(404).json({ error: 'Strategy not found' })
+        return
+      }
+      const weightedScore = calculateWeightedScore(criteria)
+      const weighting = await db.strategicCrossWeighting.upsert({
+        where: { crossId: strategy.crossId },
+        create: { crossId: strategy.crossId, ...criteria, weightedScore, createdById: request.user!.id },
+        update: { ...criteria, weightedScore },
+      })
+      response.json({ weighting: { source, sourceRef, ...strategyWeightingView(weighting) } })
       return
     }
 

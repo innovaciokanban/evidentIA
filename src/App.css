@@ -1358,6 +1358,16 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .checky-strategy-title { margin: 0; color: var(--ink); font-size: 12.5px; font-weight: 700; line-height: 1.45; }
 .checky-cross-note { margin: 0; padding: 8px 11px; border-radius: var(--radius-sm); background: var(--bg); color: var(--muted); font-size: 11.5px; line-height: 1.55; }
 
+/* "Cruces y estrategias": una tarjeta por cruce, con las estrategias que se aceptan por separado. */
+.checky-crosses { margin-top: 18px; padding: 16px; border: 1px solid var(--purple-border); border-radius: var(--radius-lg); background: linear-gradient(180deg, var(--purple-light) 0%, var(--surface) 180px); }
+.checky-crosses .checky-group-icon { color: var(--purple); border: 1px solid var(--purple-border); background: var(--purple-light); }
+.checky-crosses-intro { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.checky-crosses-group { margin-top: 16px; }
+.checky-crosses-group h5 { margin: 0; color: var(--ink); font: 700 12px 'Space Grotesk', sans-serif; letter-spacing: .3px; }
+.checky-crosses-note { margin: 3px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+.checky-cross-strategies { display: grid; gap: 10px; }
+.checky-cross-strategies .checky-cross-strategy { margin-top: 0; }
+
 .checky-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-light); }
 .checky-legend p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
 .checky-legend-item { display: inline-flex; }

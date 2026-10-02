@@ -9,6 +9,8 @@ import { askConfirm, ConfirmHost } from './components/ui/useConfirm'
 import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart'
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
+import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
+import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -148,14 +150,8 @@ const diagFlow: Array<{ key: FlowStep; label: string }> = [
 /** Numero de etapa que anuncia el indicador. Solo lo consumen los bloques que llevan chip numerado. */
 const flowStepNumber = (key: FlowStep) => diagFlow.findIndex((step) => step.key === key) + 1
 
-function crossTypeForPair(a: SWOTType, b: SWOTType): CrossType | null {
-  if (a === b) return null
-  const pair = [a, b].sort().join(':')
-  const matrix: Record<string, CrossType> = { 'OPPORTUNITY:STRENGTH': 'FO', 'STRENGTH:THREAT': 'FA', 'OPPORTUNITY:WEAKNESS': 'DO', 'THREAT:WEAKNESS': 'DA' }
-  return matrix[pair] ?? null}
-
-function isCompatibleCrossPair(a: SWOTType, b: SWOTType): boolean { return crossTypeForPair(a, b) !== null }
-
+/** La pareja DOFA se resuelve en `checky-crosses`, que es donde también se decide qué cruces de la
+ *  sección de Checky son estrategias aceptables. */
 function crossPairKey(a: { id: string; type: SWOTType }, b: { id: string; type: SWOTType }): string { const internal = [a, b].find((item) => item.type === 'STRENGTH' || item.type === 'WEAKNESS')!; const external = internal === a ? b : a; return `${internal.id}:${external.id}` }
 
 const levels: Array<{ value: Level; label: string }> = [{ value: 'LOW', label: 'Baja' }, { value: 'MEDIUM', label: 'Media' }, { value: 'HIGH', label: 'Alta' }]
@@ -1217,8 +1213,9 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
   const [open, setOpen] = useState(false)
   const source = strategySourceVisuals[strategy.source]
   const band = bandMeta(strategy.weightingBand)
-  // Solo IA y Checky se valoran desde aquí: los cruces conservan su propio flujo en la matriz DOFA.
-  const weightable = strategy.source === 'AI_ANALYSIS' || strategy.source === 'CHECKY'
+  // Toda estrategia que llegó a Ponderación se valora aquí, sea de IA, de Checky o de un cruce
+  // aceptado: el origen no decide si se puede valorar, solo su procedencia.
+  const weightable = isWeightableStrategySource(strategy.source)
   const editable = weightable && canValue && state !== 'saving'
   const baseline = strategy.weighting ? criteriaOfStrategy(strategy.weighting) : neutralWeightingCriteria
   const dirty = !sameCriteria(draft, baseline)
@@ -2410,6 +2407,118 @@ function CheckyFindingCard({ finding, refs, byCode, status, busy, onAccept, onRe
     </article>
   )}
 
+/**
+ * Una estrategia dentro de la tarjeta de su cruce: la que se escribió en la matriz o la que propuso
+ * Checky sobre ese mismo cruce. Se deciden por separado, así que aceptar una no acepta la otra, y
+ * en cuanto se decide deja de ofrecer el botón sin recargar nada.
+ */
+function CrossStrategyBlockCard({ block, byCode, busy, onAccept, onReject }: { block: CrossStrategyBlock; byCode: Map<string, SWOTItem>; busy: boolean; onAccept: () => void; onReject: () => void }) {
+  const isChecky = block.owner === 'CHECKY'
+  const title = isChecky && block.title ? checkyReadable(block.title, byCode) : ''
+  const description = isChecky ? checkyReadable(block.description, byCode) : block.description
+  return (
+    <div className="checky-cross-strategy">
+      <div className="checky-strategy-identity">
+        {isChecky && <img src={checkyImage} alt="" aria-hidden="true" />}
+        <p className="checky-cross-question"><span aria-hidden="true">🎯</span> {isChecky ? 'Estrategia propuesta por Checky' : 'Estrategia del cruce'}</p>
+        <CheckyStatusBadge status={block.status} />
+      </div>
+      {title && <p className="checky-strategy-title">{title}</p>}
+      <p className="checky-card-detail">{description}</p>
+      {block.status === 'PENDING' ? (
+        <div className="checky-actions">
+          <button type="button" className="button secondary small-button" onClick={onReject} disabled={busy}>Rechazar</button>
+          <button type="button" className="button primary small-button" onClick={onAccept} disabled={busy}>{block.acceptLabel ?? 'Aceptar estrategia'}</button>
+        </div>
+      ) : block.status === 'ACCEPTED'
+        ? <p className="checky-decided accepted"><span aria-hidden="true">✓</span> Aceptada: la estrategia queda disponible en Ponderación.</p>
+        : <p className="checky-decided rejected"><span aria-hidden="true">✕</span> Rechazada: esta estrategia no pasa a Ponderación.</p>}
+    </div>
+  )}
+
+/**
+ * Tarjeta de "Cruces y estrategias": un cruce de la matriz DOFA con sus dos factores y, debajo, las
+ * estrategias que se pueden aceptar para que pasen a Ponderación. El cruce nunca se toca ni se crea
+ * otro: la tarjeta solo decide el estado de sus estrategias.
+ */
+function CrossStrategyCard({ entry, items, crosses, byCode, busy, onDecide }: { entry: CrossStrategyEntry; items: SWOTItem[]; crosses: StrategicCross[]; byCode: Map<string, SWOTItem>; busy: boolean; onDecide: (block: CrossStrategyBlock, next: CheckySuggestionStatus) => void }) {
+  const [open, setOpen] = useState(false)
+  const { cross, crossType } = entry
+  const refs = checkyEvidenceRefs([cross.factor1.id, cross.factor2.id, cross.id], items, crosses)
+  return (
+    <article className="checky-card checky-card-cross">
+      <header className="checky-card-head">
+        <span className="checky-card-icon" aria-hidden="true">◈</span>
+        <div>
+          <p className="checky-card-kicker">Cruce DOFA</p>
+          <h4>{crossTypeCombos[crossType]}</h4>
+          <div className="checky-card-badges">
+            <span className={`cross-type-chip ${crossType.toLowerCase()}`} title="Combinación en la matriz DOFA">{crossType}</span>
+            <span className={`cross-origin ${cross.origin.toLowerCase()}`} title="Quién creó este cruce"><span aria-hidden="true">{crossOriginIcons[cross.origin]}</span> Origen: {entry.originLabel}</span>
+          </div>
+        </div>
+      </header>
+      <div className="checky-cross-pair">
+        <div className="checky-cross-factor">
+          <span className={`checky-cross-role ${cross.factor1.type.toLowerCase()}`}>{swotTypeLabels[cross.factor1.type]}</span>
+          <p>{cross.factor1.description}</p>
+        </div>
+        <span className="checky-cross-plus" aria-hidden="true">+</span>
+        <div className="checky-cross-factor">
+          <span className={`checky-cross-role ${cross.factor2.type.toLowerCase()}`}>{swotTypeLabels[cross.factor2.type]}</span>
+          <p>{cross.factor2.description}</p>
+        </div>
+      </div>
+      <div className="checky-cross-strategies">
+        {entry.blocks.map((block) => (
+          <CrossStrategyBlockCard
+            key={block.key}
+            block={block}
+            byCode={byCode}
+            busy={busy}
+            onAccept={() => onDecide(block, 'ACCEPTED')}
+            onReject={() => onDecide(block, 'REJECTED')}
+          />
+        ))}
+      </div>
+      <div className="checky-card-foot">
+        <button type="button" className="checky-review-btn" aria-expanded={open} onClick={() => setOpen((current) => !current)}>{open ? 'Ocultar evidencia' : 'Revisar'} <span aria-hidden="true">▾</span></button>
+      </div>
+      {open && <CheckyEvidence refs={refs} />}
+    </article>
+  )}
+
+/**
+ * Sección "CRUCES Y ESTRATEGIAS" de Checky, colocada justo después de las inferencias estratégicas.
+ * Agrupa las tarjetas en los dos orígenes que ya usa la matriz DOFA: los cruces que creó la
+ * persona y los que propuso la IA o Checky, sin que un mismo cruce aparezca en los dos grupos.
+ */
+function CrossStrategiesSection({ entries, items, crosses, byCode, busy, onDecide }: { entries: CrossStrategyEntry[]; items: SWOTItem[]; crosses: StrategicCross[]; byCode: Map<string, SWOTItem>; busy: boolean; onDecide: (block: CrossStrategyBlock, next: CheckySuggestionStatus) => void }) {
+  const groups = (['user', 'ai'] as const)
+    .map((group) => ({ group, entries: entries.filter((entry) => entry.group === group) }))
+    .filter((section) => section.entries.length > 0)
+  if (groups.length === 0) return null
+  return (
+    <section className="checky-crosses" aria-label="Cruces y estrategias">
+      <header className="checky-group-head checky-crosses-head">
+        <span className="checky-group-icon" aria-hidden="true">◈</span>
+        <h4>CRUCES Y ESTRATEGIAS</h4>
+      </header>
+      <p className="checky-crosses-intro">Las estrategias de tus cruces de la matriz DOFA, en un solo sitio. Acepta por separado las que quieras llevar a Ponderación: cada estrategia cuenta por su cuenta y el cruce no se duplica.</p>
+      {groups.map((section) => (
+        <div className="checky-crosses-group" key={section.group}>
+          <h5>{crossStrategyGroupLabels[section.group].title}</h5>
+          <p className="checky-crosses-note">{crossStrategyGroupLabels[section.group].note}</p>
+          <div className="checky-group-body">
+            {section.entries.map((entry) => (
+              <CrossStrategyCard key={entry.cross.id} entry={entry} items={items} crosses={crosses} byCode={byCode} busy={busy} onDecide={onDecide} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  )}
+
 function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisError, onCrossCreated, onConsulted }: { diagnostic: Diagnostic; items: SWOTItem[]; analysis: AIAnalysis | null; analysisLoading: boolean; analysisError: string; onCrossCreated: () => Promise<void> | void; onConsulted: () => Promise<void> | void }) {
   const [status, setStatus] = useState<CheckyStatus>('idle')
   const [error, setError] = useState('')
@@ -2506,10 +2615,52 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
       setBusy(false)
     }
   }
+  /**
+   * Decide una estrategia de la sección "Cruces y estrategias". La estrategia escrita en la matriz
+   * se decide en el propio cruce y la propuesta de Checky en su mensaje, que es como ya se decidían
+   * hasta ahora. En ningún caso se crea ni se modifica un cruce: la tarjeta existe porque el cruce
+   * ya está en la matriz, así que solo cambia el estado que hace que la estrategia llegue a
+   * Ponderación.
+   */
+  async function decideCross(block: CrossStrategyBlock, next: CheckySuggestionStatus) {
+    if (busy) return
+    if (block.owner === 'CHECKY') {
+      const message = block.messageId ? messages.find((item) => item.id === block.messageId) : undefined
+      if (!session || !message) return
+      setBusy(true)
+      setError('')
+      try {
+        const result = await api<{ message: CheckyMessage }>(`/checky/sessions/${session.id}/messages/${message.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
+        setMessages((current) => current.map((item) => item.id === result.message.id ? result.message : item))
+      } catch (requestError) {
+        setError(checkyErrorMessage(requestError))
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+    const cross = crosses.find((item) => item.id === block.crossId)
+    if (!cross) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api<{ cross: StrategicCross }>(`/crosses/${cross.id}`, { method: 'PATCH', body: JSON.stringify({ strategyStatus: next }) })
+      setCrosses((current) => current.map((item) => item.id === result.cross.id ? result.cross : item))
+    } catch (requestError) {
+      setError(checkyErrorMessage(requestError))
+    } finally {
+      setBusy(false)
+    }
+  }
   const factorCodes = useCheckyFactorCodes(items)
   const suggestions = messages.filter((message) => message.role === 'CHECKY' && message.category !== null)
+  // Cada cruce con estrategia se pinta una sola vez, dentro de "Cruces y estrategias". Las
+  // sugerencias de Checky que ya están dentro de una tarjeta salen de los grupos de abajo, para que
+  // la misma estrategia no aparezca dos veces ni con estados distintos.
+  const crossStrategy = useMemo(() => buildCrossStrategyEntries(crosses, messages), [crosses, messages])
+  const visibleSuggestions = suggestions.filter((message) => !crossStrategy.hiddenSuggestionIds.has(message.id))
   const groups = checkyCategoryOrder
-    .map((category) => ({ category, visual: checkyCategoryVisuals[category], items: suggestions.filter((message) => message.category === category) }))
+    .map((category) => ({ category, visual: checkyCategoryVisuals[category], items: visibleSuggestions.filter((message) => message.category === category) }))
     .filter((group) => group.items.length > 0)
     .sort((left, right) => Number(right.category === 'MISSING_CROSSES') - Number(left.category === 'MISSING_CROSSES'))
   const hasResults = suggestions.length > 0
@@ -2544,6 +2695,7 @@ function CheckyPanel({ diagnostic, items, analysis, analysisLoading, analysisErr
           <AiFindings findings={analysis.keyFindings} />
         </section>
       )}
+      <CrossStrategiesSection entries={crossStrategy.entries} items={items} crosses={crosses} byCode={factorCodes} busy={busy} onDecide={(block, next) => void decideCross(block, next)} />
       {status === 'idle' && !hasResults && (
         <p className="checky-idle">Pulsa <strong>Analizar con Checky</strong> para que revise tu análisis estratégico completo. Checky solo analiza y propone: no crea cruces, planes ni tickets, salvo cuando aceptas una sugerencia de cruce potencial.</p>
       )}

@@ -113,6 +113,8 @@ const checkyMessageFixture = {
     factor1Id: string
     factor2Id: string
     strategy: string | null
+    /** Decisión tomada sobre la estrategia en Checky. Sin campo, el cruce sigue sin decidir. */
+    strategyStatus?: 'PENDING' | 'ACCEPTED' | 'REJECTED' | null
     weighting?: {
       impactoEstrategico: WeightingLevelSeed
       viabilidad: WeightingLevelSeed
@@ -313,7 +315,9 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
         updatedAt: new Date('2026-01-08'),
         factor1: seededFactor(cross.factor1Id),
         factor2: seededFactor(cross.factor2Id),
-        weighting: cross.weighting ? { id: `cmweighting${cross.id}`, crossId: cross.id, ...cross.weighting, createdById: member.id, createdAt: new Date('2026-01-10'), updatedAt: new Date('2026-01-10') } : null,
+        // Lo que ya se ponderó (desde Ponderación o desde la matriz DOFA) gana sobre la siembra:
+        // es la única fila de ponderación que tiene el cruce.
+        weighting: storedCrossWeightings.find((weighting) => weighting.crossId === cross.id) ?? (cross.weighting ? { id: `cmweighting${cross.id}`, crossId: cross.id, ...cross.weighting, createdById: member.id, createdAt: new Date('2026-01-10'), updatedAt: new Date('2026-01-10') } : null),
       }))),
       create: vi.fn(async ({ data }: { data: { crossType: string; factor1Id: string; factor2Id: string; strategy: string | null } }) => ({
         ...strategicCrossFixture,
@@ -324,8 +328,10 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
         factor1: { id: data.factor1Id, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH' as const, description: 'Equipo comprometido', createdAt: new Date('2026-01-04') },
         factor2: { id: data.factor2Id, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY' as const, description: 'Nuevo mercado', createdAt: new Date('2026-01-04') },
       })),
-      update: vi.fn(async () => ({
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({
         ...strategicCrossFixture,
+        ...data,
+        id: where.id,
         factor1: { id: strategicCrossFixture.factor1Id, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH' as const, description: 'Equipo comprometido', createdAt: new Date('2026-01-04') },
         factor2: { id: strategicCrossFixture.factor2Id, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY' as const, description: 'Nuevo mercado', createdAt: new Date('2026-01-04') },
       })),
@@ -3566,6 +3572,122 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     const foreignAssignee = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId, tasks: [{ title: 'Responsable externo', responsibleId: otherCompanyUser.id, dueDate: '2026-05-01' }] })
     expect(foreignAssignee.status).toBe(403)
   })
+
+  it('incluye en Ponderación la estrategia de un cruce que se aceptó en Checky', async () => {
+    const acceptedCross: SeededCross = { ...weightedCross, id: 'cmprioridadaceptada00001', strategyStatus: 'ACCEPTED' }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [acceptedCross])
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toHaveLength(1)
+    expect(res.body.strategies[0]).toMatchObject({
+      id: `cross:${acceptedCross.id}`,
+      source: 'STRATEGIC_CROSS',
+      crossId: acceptedCross.id,
+      description: acceptedCross.strategy,
+      origin: 'USER',
+      weightedScore: priorityWeighting.weightedScore,
+    })
+    // Ponderación sigue sin recibir el análisis con IA: allí solo entra lo que se aceptó.
+    expect(res.body.strategies.some((strategy: { source: string }) => strategy.source === 'AI_ANALYSIS')).toBe(false)
+  })
+
+  it('deja fuera de Ponderación la estrategia de un cruce que nadie aceptó', async () => {
+    const pendingCross: SeededCross = { ...weightedCross, id: 'cmprioridadpendiente00001', strategyStatus: 'PENDING' }
+    const rejectedCross: SeededCross = { ...weightedCross, id: 'cmprioridadrechazada00001', strategyStatus: 'REJECTED' }
+    const undecidedCross: SeededCross = { ...unweightedCross, id: 'cmprioridadsindecision0001' }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [pendingCross, rejectedCross, undecidedCross])
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toEqual([])
+  })
+
+  it('no suma dos veces una estrategia que entra como cruce aceptado y como sugerencia aceptada', async () => {
+    const duplicated: SeededCross = { ...weightedCross, id: 'cmprioridadduplicada0001', strategy: checkyDescription, strategyStatus: 'ACCEPTED' }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [duplicated])
+    await seedAcceptedCheckyStrategy(db)
+    const agent = request.agent(createApp(db, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toHaveLength(1)
+    // Gana la sugerencia, que es la que la persona vio aceptar en Checky.
+    expect(res.body.strategies[0]).toMatchObject({ source: 'CHECKY', description: checkyDescription, crossId: null })
+  })
+})
+
+describe('decidir la estrategia de un cruce', () => {
+  const withCross = (target: PrismaClient, overrides: Record<string, unknown> = {}) => {
+    const findCross = target.strategicCross.findUnique as unknown as { mockResolvedValue: (value: unknown) => unknown }
+    findCross.mockResolvedValue({
+      ...strategicCrossFixture,
+      factor1: { id: strategicCrossFixture.factor1Id, swotId: diagnostic.swotAnalysis.id, type: 'STRENGTH', description: 'Equipo comprometido', createdAt: new Date('2026-01-04') },
+      factor2: { id: strategicCrossFixture.factor2Id, swotId: diagnostic.swotAnalysis.id, type: 'OPPORTUNITY', description: 'Nuevo mercado', createdAt: new Date('2026-01-04') },
+      diagnostic: { companyId: company.id, company: { id: company.id, name: company.name } },
+      ...overrides,
+    })
+    return target
+  }
+  const loginAgent = async (target: PrismaClient, email = admin.email) => {
+    const agent = request.agent(createApp(target, { consultChecky: vi.fn(async () => checkyConsultResult) } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
+    return agent
+  }
+
+  it('guarda la decisión de la estrategia en el propio cruce, sin crear otro', async () => {
+    const db = withCross(makeDb())
+    const agent = await loginAgent(db)
+
+    const response = await agent.patch(`/api/crosses/${strategicCrossFixture.id}`).send({ strategyStatus: 'ACCEPTED' })
+
+    expect(response.status).toBe(200)
+    expect(response.body.cross).toMatchObject({ id: strategicCrossFixture.id, strategy: strategicCrossFixture.strategy, strategyStatus: 'ACCEPTED' })
+    expect(db.strategicCross.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: strategicCrossFixture.id },
+      data: { strategyStatus: 'ACCEPTED' },
+    }))
+    // La sección de Checky solo decide: nunca materializa un cruce nuevo.
+    expect(db.strategicCross.create).not.toHaveBeenCalled()
+  })
+
+  it('rechaza decidir la estrategia de un cruce que no tiene ninguna', async () => {
+    const db = withCross(makeDb(), { strategy: null })
+    const agent = await loginAgent(db)
+
+    const response = await agent.patch(`/api/crosses/${strategicCrossFixture.id}`).send({ strategyStatus: 'ACCEPTED' })
+
+    expect(response.status).toBe(400)
+    expect(db.strategicCross.update).not.toHaveBeenCalled()
+  })
+
+  it('no admite un estado que no sea una decisión de estrategia', async () => {
+    const db = withCross(makeDb())
+    const agent = await loginAgent(db)
+
+    const response = await agent.patch(`/api/crosses/${strategicCrossFixture.id}`).send({ strategyStatus: 'APROBADA' })
+
+    expect(response.status).toBe(400)
+    expect(db.strategicCross.update).not.toHaveBeenCalled()
+  })
+
+  it('no encuentra un cruce de otra empresa para decidir su estrategia', async () => {
+    const db = makeDb()
+    const agent = await loginAgent(db)
+
+    const response = await agent.patch(`/api/crosses/${strategicCrossFixture.id}`).send({ strategyStatus: 'ACCEPTED' })
+
+    expect(response.status).toBe(404)
+    expect(db.strategicCross.update).not.toHaveBeenCalled()
+  })
 })
 
 describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
@@ -3602,6 +3724,22 @@ describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
   const put = (agent: Awaited<ReturnType<typeof login>>, body: Record<string, unknown>) =>
     agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send(body)
 
+  const crossText = 'Apoyarse en el equipo comprometido para abrir el mercado en expansión.'
+  const otherCrossText = 'Documentar los procesos manuales antes de que llegue la auditoría.'
+
+  /** Cruce aceptado en Checky, listo para aparecer en Ponderación. Sin valoración por defecto. */
+  const acceptedCrossStrategy = (overrides: Partial<SeededCross> = {}): SeededCross => ({
+    id: 'cmponderacioncruce00001',
+    crossType: 'FO',
+    origin: 'AI',
+    factor1Id: checkyFactorIds.strength,
+    factor2Id: checkyFactorIds.opportunity,
+    strategy: crossText,
+    strategyStatus: 'ACCEPTED',
+    weighting: null,
+    ...overrides,
+  })
+
   it('crea la ponderación de una estrategia de AI_ANALYSIS', async () => {
     const db = makeDb()
     const agent = await login(db)
@@ -3636,6 +3774,105 @@ describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
     expect(res.status).toBe(200)
     expect(res.body.weighting).toMatchObject({ source: 'CHECKY', sourceRef: strategySourceRef(checkyText), weightedScore: expectedScore })
     expect(db.strategyWeighting.upsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('acepta valorar una estrategia de cruce aceptada que todavía no tiene valoración', async () => {
+    const cross = acceptedCrossStrategy()
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [cross])
+    const agent = await login(db)
+
+    // Llega a Ponderación con "Sin valoración": es la tarjeta que tiene que quedar editable.
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(listed.status).toBe(200)
+    expect(listed.body.strategies).toHaveLength(1)
+    expect(listed.body.strategies[0]).toMatchObject({
+      id: `cross:${cross.id}`,
+      source: 'STRATEGIC_CROSS',
+      crossId: cross.id,
+      weighting: null,
+      weightedScore: null,
+    })
+
+    const res = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(crossText), ...criteria })
+
+    expect(res.status).toBe(200)
+    expect(res.body.weighting).toMatchObject({ source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(crossText), ...criteria, weightedScore: expectedScore, weightingBand: 'CORTO_PLAZO' })
+    expect(db.strategicCrossWeighting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { crossId: cross.id },
+      create: expect.objectContaining({ ...criteria, weightedScore: expectedScore }),
+    }))
+    // El cruce conserva su propia tabla: la ponderación de estrategias nunca se toca.
+    expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
+
+    // Al recargar, la tarjeta ya no está en "Sin valoración".
+    const reread = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(reread.body.strategies[0].weighting).toMatchObject({ ...criteria, weightedScore: expectedScore, weightingBand: 'CORTO_PLAZO' })
+    expect(reread.body.strategies[0].weightedScore).toBe(expectedScore)
+  })
+
+  it('conserva la valoración que el cruce ya tenía y la actualiza sin crear otra fila', async () => {
+    const cross = acceptedCrossStrategy({ weighting: { impactoEstrategico: 'BAJO', viabilidad: 'BAJO', urgencia: 'BAJO', sinergiaInterna: 'BAJO', impactoReputacional: 'BAJO', weightedScore: 2 } })
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [cross])
+    const agent = await login(db)
+
+    const before = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(before.body.strategies[0]).toMatchObject({ weightedScore: 2, weighting: expect.objectContaining({ weightedScore: 2 }) })
+
+    const res = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(crossText), ...criteria })
+
+    expect(res.status).toBe(200)
+    const upsert = db.strategicCrossWeighting.upsert as unknown as { mock: { calls: Array<[{ where: unknown; update: Record<string, unknown> }]> } }
+    expect(upsert.mock.calls).toHaveLength(1)
+    expect(upsert.mock.calls[0][0].where).toEqual({ crossId: cross.id })
+    expect(upsert.mock.calls[0][0].update).toMatchObject({ ...criteria, weightedScore: expectedScore })
+
+    const after = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(after.body.strategies[0].weightedScore).toBe(expectedScore)
+    expect(after.body.strategies[0].weighting.weightingBand).toBe('CORTO_PLAZO')
+  })
+
+  it('valora cruces aceptados con origen USER o IA por igual: el origen no decide si es editable', async () => {
+    const userCross = acceptedCrossStrategy({ id: 'cmponderacioncruceuser01', origin: 'USER' })
+    const aiCross = acceptedCrossStrategy({
+      id: 'cmponderacioncruceai0001',
+      origin: 'AI',
+      crossType: 'DA',
+      factor1Id: checkySwotItemFixtures.weakness.id,
+      factor2Id: checkySwotItemFixtures.threat.id,
+      strategy: otherCrossText,
+    })
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [userCross, aiCross])
+    const agent = await login(db)
+
+    const userRes = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(crossText), ...criteria })
+    const aiRes = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(otherCrossText), ...criteria })
+
+    expect(userRes.status).toBe(200)
+    expect(aiRes.status).toBe(200)
+    const upsert = db.strategicCrossWeighting.upsert as unknown as { mock: { calls: Array<[{ where: { crossId: string } }]> } }
+    expect(upsert.mock.calls.map((call) => call[0].where.crossId).sort()).toEqual([userCross.id, aiCross.id].sort())
+    expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
+  })
+
+  it('valora las tres fuentes de Ponderación con el mismo criterio, cada una en su propia tabla', async () => {
+    const cross = acceptedCrossStrategy()
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [cross])
+    await seedAcceptedCheckyStrategy(db)
+    const agent = await login(db)
+
+    const ai = await put(agent, { source: 'AI_ANALYSIS', sourceRef: strategySourceRef(aiText), ...criteria })
+    const checky = await put(agent, { source: 'CHECKY', sourceRef: strategySourceRef(checkyText), ...criteria })
+    const fromCross = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(crossText), ...criteria })
+
+    expect(ai.status).toBe(200)
+    expect(checky.status).toBe(200)
+    expect(fromCross.status).toBe(200)
+    // Misma metodología, mismo puntaje: solo cambia en qué tabla se guarda.
+    expect(ai.body.weighting.weightedScore).toBe(expectedScore)
+    expect(checky.body.weighting.weightedScore).toBe(expectedScore)
+    expect(fromCross.body.weighting.weightedScore).toBe(expectedScore)
+    expect(db.strategyWeighting.upsert).toHaveBeenCalledTimes(2)
+    expect(db.strategicCrossWeighting.upsert).toHaveBeenCalledTimes(1)
   })
 
   it('no permite ponderar una estrategia CHECKY que no fue aceptada', async () => {
@@ -3703,13 +3940,20 @@ describe('PUT /api/diagnostics/:id/strategies/weighting', () => {
     expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
   })
 
-  it('no acepta un cruce como fuente, porque el cruce conserva su propia ponderación', async () => {
-    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [{ id: 'cmprioridad00000000000001', crossType: 'FO', origin: 'USER', factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity, strategy: aiText, weighting: null }])
+  it('valora el cruce en su propia tabla de ponderación y jamás en la de estrategias', async () => {
+    const cross: SeededCross = { id: 'cmprioridad00000000000001', crossType: 'FO', origin: 'USER', factor1Id: checkyFactorIds.strength, factor2Id: checkyFactorIds.opportunity, strategy: aiText, strategyStatus: 'ACCEPTED', weighting: null }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [cross])
     const agent = await login(db)
 
+    // El texto es el mismo que el de una estrategia IA, pero gana el cruce, que es la fuente que la
+    // lista consolidada dejó: así no se le atribuye el valor a la fuente equivocada.
     const res = await put(agent, { source: 'STRATEGIC_CROSS', sourceRef: strategySourceRef(aiText), ...criteria })
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(200)
+    expect(db.strategicCrossWeighting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { crossId: cross.id },
+      create: expect.objectContaining({ weightedScore: expectedScore }),
+    }))
     expect(db.strategyWeighting.upsert).not.toHaveBeenCalled()
   })
 

@@ -232,6 +232,12 @@ export const crossCreateSchema = z.object({
 export const crossUpdateSchema = z.object({
   strategy: z.string().trim().min(3).max(3000).optional(),
   priority: priorityLevelSchema.optional(),
+  /**
+   * Decisión sobre la estrategia del cruce tomada en Checky. Es el mismo enum que usan las
+   * sugerencias, así que la pantalla pinta el mismo badge en los dos casos y Ponderación reconoce
+   * sin traducir qué estrategias aceptó la persona.
+   */
+  strategyStatus: z.enum(['PENDING', 'ACCEPTED', 'REJECTED']).optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
@@ -255,7 +261,12 @@ export const crossWeightingSchema = z.object({
  * Fuentes que admiten ponderación consolidada. Los cruces no entran aquí: se pesan con
  * crossWeightingSchema contra su propio cruce.
  */
-export const weightableStrategySourceSchema = z.enum(['AI_ANALYSIS', 'CHECKY'])
+/**
+ * Fuentes que Ponderación puede enviar en una valoración. STRATEGIC_CROSS se acepta aquí porque la
+ * estrategia de un cruce aceptado en Checky se valora en esta misma pantalla, pero el endpoint la
+ * redirige a StrategicCrossWeighting: esta solicitud nunca escribe en la tabla de estrategias.
+ */
+export const weightableStrategySourceSchema = z.enum(['AI_ANALYSIS', 'CHECKY', 'STRATEGIC_CROSS'])
 
 /**
  * Ponderación de una estrategia consolidada. El ancla (`source` y `sourceRef`) llega del cliente

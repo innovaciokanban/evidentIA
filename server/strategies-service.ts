@@ -1,4 +1,4 @@
-import type { CrossOrigin, CrossType } from '@prisma/client'
+import type { CheckySuggestionStatus, CrossOrigin, CrossType } from '@prisma/client'
 import type { CheckyWeightingBand } from './ai-service.js'
 import { normalizeStrategyText, strategySourceRef, strategyWeightingView, type StoredStrategyWeighting, type StoredWeighting, type StrategyWeightingView } from './strategy-weighting-service.js'
 
@@ -75,6 +75,11 @@ export type CrossStrategySource = {
   factor1: StrategyFactor
   factor2: StrategyFactor
   strategy: string | null
+  /**
+   * Decisión tomada sobre la estrategia en Checky. Solo la consulta con `acceptedOnly` la usa para
+   * quedarse con las aceptadas; la consolidación normal la ignora y sigue listando todos los cruces.
+   */
+  strategyStatus: CheckySuggestionStatus | null
   weighting: (StoredWeighting & { id: string; crossId: string }) | null
 }
 /** Una estrategia del análisis con IA: texto plano dentro de su cuadrante, sin cruce asociado. */

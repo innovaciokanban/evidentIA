@@ -40,6 +40,7 @@ const cross = (overrides: Partial<CrossStrategySource> = {}): CrossStrategySourc
   factor1: strength,
   factor2: opportunity,
   strategy: 'Llevar el equipo comprometido al mercado en expansión antes de que se consolide.',
+  strategyStatus: null,
   weighting: null,
   ...overrides,
 })
