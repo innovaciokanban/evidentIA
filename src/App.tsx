@@ -11,6 +11,7 @@ import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
+import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -1223,6 +1224,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
   // representa ese número, no lo calcula.
   const scorePercent = strategy.weighting ? Math.min(100, Math.max(0, (strategy.weighting.weightedScore / 5) * 100)) : 0
   const tone = band?.tone ?? 'pending'
+  const tasks = strategyTaskViews(strategy.actionPlan)
   const detailId = `swz-detail-${strategy.id}`
   return (
     <article className={`swz-card ${tone}${strategy.weighting ? ' weighed' : ' unweighed'}${open ? ' open' : ''}`} data-strategy-id={strategy.id}>
@@ -1300,7 +1302,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
             {state === 'saving' ? <><span className="button-loader" />Guardando...</> : 'Guardar valoración'}
           </button>
         )}
-        {strategy.weighting && canValue && <button type="button" className="button secondary small-button" onClick={() => onCreateTasks(strategy)}>{strategy.taskPlan?.items.length ? `Gestionar tareas (${strategy.taskPlan.items.length})` : 'Crear tareas'}</button>}
+        {strategy.weighting && canValue && <button type="button" className="button secondary small-button" onClick={() => onCreateTasks(strategy)}>{strategy.actionPlan?.items.length ? `Gestionar tareas (${strategy.actionPlan.items.length})` : 'Crear tareas'}</button>}
         <button type="button" className="priority-toggle" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((current) => !current)}>
           {open ? 'Ocultar detalle' : 'Ver detalle'}
           <span className="priority-chevron" aria-hidden="true">▾</span>
@@ -1340,6 +1342,18 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
           {strategy.factor1 || strategy.factor2
             ? <><p className="detail-label">FACTORES RELACIONADOS</p>{strategy.factor1 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor1.type]}</span>{strategy.factor1.description}</p>}{strategy.factor2 && <p className="cross-pair"><span className="cross-factor-chip">{swotTypeLabels[strategy.factor2.type]}</span>{strategy.factor2.description}</p>}</>
             : <p className="cross-pair">Viene directo del análisis, sin factores de un cruce.</p>}
+          <p className="detail-label">{STRATEGY_TASKS_LABEL}</p>
+          {tasks.length === 0
+            ? <p className="cross-pair">{STRATEGY_TASKS_EMPTY}</p>
+            : tasks.map((task) => (
+              <p className="cross-pair" key={task.id}>
+                <span aria-hidden="true">☐</span> <strong>{task.title}</strong>
+                {task.status && <span className={`kanban-status-badge ${task.status.toLowerCase()}`}>{actionItemStatusLabel[task.status]}</span>}
+                {' · Responsable: '}{task.responsible ?? 'Sin responsable'}
+                {task.dueDate ? ` · Fecha límite: ${new Date(task.dueDate).toLocaleDateString('es-CO')}` : ''}
+              </p>
+            ))}
+          {tasks.length > 0 && <p className="priority-updated">{strategyTasksCountLabel(tasks.length)}</p>}
           {strategy.weighting && <p className="priority-updated">Ponderado {strategy.weighting.weightedScore.toFixed(2)} de 5 · {band?.label ?? 'sin banda'}</p>}
         </div>
       )}
@@ -1361,11 +1375,11 @@ function StrategyTasksModal({ strategy, drafts, users, error, saving, onDraftsCh
           <strong>{strategy.title}</strong>
           <p className="detail-description">{strategy.description}</p>
         </div>
-        {strategy.taskPlan && strategy.taskPlan.items.length > 0 && <div className="detail-section"><p className="detail-label">TAREAS YA CREADAS</p>{strategy.taskPlan.items.map((item) => <p className="cross-pair" key={item.id}><strong>{item.title}</strong> · {item.responsible?.name ?? 'Sin responsable'} · {item.dueDate ? new Date(item.dueDate).toLocaleDateString('es-CO') : 'Sin fecha'}</p>)}</div>}
+        {strategy.actionPlan && strategy.actionPlan.items.length > 0 && <div className="detail-section"><p className="detail-label">TAREAS YA CREADAS</p>{strategy.actionPlan.items.map((item) => <p className="cross-pair" key={item.id}><strong>{item.title}</strong> · {item.responsible?.name ?? 'Sin responsable'} · {item.dueDate ? new Date(item.dueDate).toLocaleDateString('es-CO') : 'Sin fecha'}</p>)}</div>}
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="strategy-task-list">
           {drafts.map((task, index) => <div className="strategy-task-row" key={index}>
-            <label>Descripción de la tarea<input value={task.title} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Ej. Implementar el procedimiento aprobado" minLength={3} required /></label>
+            <label>Descripción de la tarea<input value={task.title} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Ej. Implementar el procedimiento aprobado" minLength={3} maxLength={120} required /></label>
             <div className="form-grid">
               <label>Responsable<select value={task.responsibleId} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleId: event.target.value } : item))} required><option value="">Selecciona un responsable</option>{users.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label>
               <label>Fecha de entrega<input type="date" value={task.dueDate} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, dueDate: event.target.value } : item))} required /></label>

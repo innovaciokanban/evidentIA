@@ -3623,6 +3623,201 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     // Gana la sugerencia, que es la que la persona vio aceptar en Checky.
     expect(res.body.strategies[0]).toMatchObject({ source: 'CHECKY', description: checkyDescription, crossId: null })
   })
+
+  const loginAgent = async (target: ReturnType<typeof makeDb>, email = admin.email) => {
+    const agent = request.agent(createApp(target, readOnlyAI()))
+    await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
+    return agent
+  }
+
+  /** Una fila de ActionItem tal como la devuelve la consulta del payload de estrategias. */
+  const taskItem = (id: string, title: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    title,
+    status: 'PENDING',
+    responsibleId: member.id,
+    responsible: { id: member.id, name: member.name },
+    dueDate: '2026-10-10',
+    ticket: null,
+    ...overrides,
+  })
+
+  /** Un ActionPlan ya asociado a una estrategia, con las claves que hace match en el GET. */
+  const planFor = (id: string, source: string, sourceRef: string, items: unknown[]) => ({
+    ...actionPlan,
+    id,
+    strategySource: source,
+    strategySourceRef: sourceRef,
+    strategyTitle: null,
+    strategyDescription: null,
+    items,
+  })
+
+  /** El mismo mock de creación que usa el endpoint real, para pasar por el flujo completo. */
+  const harnessTaskCreation = (target: ReturnType<typeof makeDb>) => {
+    const storedPlans: Array<Record<string, unknown>> = []
+    const planDelegate = target.actionPlan as unknown as {
+      findMany: { mockImplementation: (implementation: () => Promise<unknown[]>) => unknown }
+      findUnique: { mockImplementation: (implementation: (input: { where: Record<string, unknown> }) => Promise<unknown>) => unknown }
+      create: { mockImplementation: (implementation: (input: { data: Record<string, unknown> }) => Promise<unknown>) => unknown }
+    }
+    planDelegate.findMany.mockImplementation(async () => storedPlans)
+    planDelegate.findUnique.mockImplementation(async (input: { where: Record<string, unknown> }) => {
+      const where = input.where
+      if (where.id) return storedPlans.find((plan) => plan.id === where.id) ?? null
+      const key = where.diagnosticId_strategySource_strategySourceRef as { diagnosticId: string; strategySource: string; strategySourceRef: string }
+      return storedPlans.find((plan) => plan.diagnosticId === key.diagnosticId && plan.strategySource === key.strategySource && plan.strategySourceRef === key.strategySourceRef) ?? null
+    })
+    planDelegate.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      const created = { ...actionPlan, ...data, createdBy: member, items: [] as unknown[] }
+      storedPlans.push(created)
+      return created
+    })
+    const itemDelegate = target.actionItem as unknown as { create: { mockImplementation: (implementation: (input: { data: Record<string, unknown> }) => Promise<unknown>) => unknown } }
+    let createdItems = 0
+    itemDelegate.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      createdItems += 1
+      const created = { ...actionItem, ...data, id: `cmactionitemstrategy${createdItems}`, responsible: member, ticket: null }
+      ;(storedPlans[0]?.items as Array<unknown> | undefined)?.push(created)
+      return created
+    })
+    return storedPlans
+  }
+
+  it('devuelve actionPlan null para una estrategia sin tareas', async () => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [])
+    await seedAcceptedCheckyStrategy(db)
+    const agent = await loginAgent(db)
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.strategies).toHaveLength(1)
+    // Sin plan no hay tareas que pintar: la tarjeta queda en "Sin tareas asignadas".
+    expect(res.body.strategies[0].actionPlan).toBeNull()
+  })
+
+  it('devuelve la única tarea de una estrategia con sus datos', async () => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [])
+    await seedAcceptedCheckyStrategy(db)
+    const only = taskItem('cmactionitemtareas0000001', 'Recolectar las preguntas frecuentes del soporte', { status: 'IN_PROGRESS', dueDate: '2026-10-10' })
+    const findMany = db.actionPlan.findMany as unknown as { mockImplementation: (implementation: () => Promise<unknown[]>) => unknown }
+    findMany.mockImplementation(async () => [planFor('cmpplantareas0000000001', 'CHECKY', strategySourceRef(checkyDescription), [only])])
+    const agent = await loginAgent(db)
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    const strategy = res.body.strategies.find((item: { source: string }) => item.source === 'CHECKY')
+    expect(strategy.actionPlan.items).toHaveLength(1)
+    expect(strategy.actionPlan.items[0]).toMatchObject({
+      id: only.id,
+      title: only.title,
+      status: 'IN_PROGRESS',
+      dueDate: '2026-10-10',
+      responsible: { id: member.id, name: member.name },
+    })
+  })
+
+  it('devuelve todas las tareas de una estrategia, sin perder ninguna', async () => {
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [])
+    await seedAcceptedCheckyStrategy(db)
+    const items = [1, 2, 3].map((number) => taskItem(`cmactionitemtareas000000${number}`, `Control de cumplimiento ${number}`))
+    const findMany = db.actionPlan.findMany as unknown as { mockImplementation: (implementation: () => Promise<unknown[]>) => unknown }
+    findMany.mockImplementation(async () => [planFor('cmpplantareas0000000002', 'CHECKY', strategySourceRef(checkyDescription), items)])
+    const agent = await loginAgent(db)
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    const strategy = res.body.strategies.find((item: { source: string }) => item.source === 'CHECKY')
+    expect(strategy.actionPlan.items).toHaveLength(3)
+    expect(strategy.actionPlan.items.map((item: { title: string }) => item.title)).toEqual(items.map((item) => item.title))
+    expect(new Set(strategy.actionPlan.items.map((item: { id: string }) => item.id)).size).toBe(3)
+  })
+
+  it('deja cada tarea en la estrategia a la que pertenece, sin mezclarlas', async () => {
+    const acceptedCross: SeededCross = { ...weightedCross, id: 'cmprioridadaceptada00001', strategyStatus: 'ACCEPTED' }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [acceptedCross])
+    await seedAcceptedCheckyStrategy(db)
+    const crossTask = taskItem('cmactionitemtareas0000cru', 'Cerrar el plan del cruce FO')
+    const checkyTasks = [taskItem('cmactionitemtareas0000k1', 'Primera tarea de Checky'), taskItem('cmactionitemtareas0000k2', 'Segunda tarea de Checky')]
+    const findMany = db.actionPlan.findMany as unknown as { mockImplementation: (implementation: () => Promise<unknown[]>) => unknown }
+    findMany.mockImplementation(async () => [
+      planFor('cmpplantareas000000000c', 'STRATEGIC_CROSS', strategySourceRef(weightedCross.strategy ?? ''), [crossTask]),
+      planFor('cmpplantareas000000000k', 'CHECKY', strategySourceRef(checkyDescription), checkyTasks),
+    ])
+    const agent = await loginAgent(db)
+
+    const res = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+
+    expect(res.body.strategies).toHaveLength(2)
+    const fromCross = res.body.strategies.find((item: { source: string }) => item.source === 'STRATEGIC_CROSS')
+    const fromChecky = res.body.strategies.find((item: { source: string }) => item.source === 'CHECKY')
+    expect(fromCross.actionPlan.items.map((item: { id: string }) => item.id)).toEqual([crossTask.id])
+    expect(fromChecky.actionPlan.items.map((item: { id: string }) => item.id)).toEqual(checkyTasks.map((item) => item.id))
+  })
+
+  it('muestra las tareas creadas con el flujo existente después de recargar', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    harnessTaskCreation(db)
+    const agent = await loginAgent(db, member.email)
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+
+    const before = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(before.body.strategies[0].actionPlan).toBeNull()
+
+    const tasks = [
+      { title: 'Recolectar las preguntas frecuentes del soporte', responsibleId: member.id, dueDate: '2026-10-10' },
+      { title: 'Crear base de conocimiento', responsibleId: member.id, dueDate: '2026-10-15' },
+    ]
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId: before.body.strategies[0].id, tasks })
+    expect(created.status).toBe(201)
+    expect(created.body.createdCount).toBe(2)
+
+    // El mismo GET que dispara el reload existente después de crear las tareas.
+    const after = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(after.body.strategies[0].actionPlan.items).toHaveLength(2)
+    expect(after.body.strategies[0].actionPlan.items.map((item: { title: string }) => item.title)).toEqual(tasks.map((task) => task.title))
+    expect(new Set(after.body.strategies[0].actionPlan.items.map((item: { id: string }) => item.id)).size).toBe(2)
+
+    // Repetir la misma tarea no duplica filas ni en la base ni en la tarjeta.
+    const repeated = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId: before.body.strategies[0].id, tasks: [tasks[0]] })
+    expect(repeated.status).toBe(200)
+    expect(repeated.body.createdCount).toBe(0)
+    const reloaded = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(reloaded.body.strategies[0].actionPlan.items).toHaveLength(2)
+  })
+
+  it('acepta como responsable un id de usuario con formato uuid, sin rechazar el envío', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    harnessTaskCreation(db)
+    // Id real de un usuario creado por el seed (gen_random_uuid): no cumple el formato cuid.
+    const uuidResponsible = 'cafe89c0-079b-4f41-97d0-5d6de3b5f147'
+    const findUnique = db.user.findUnique as unknown as {
+      getMockImplementation: () => ((input: { where: { email?: string; id?: string } }) => Promise<unknown>) | undefined
+      mockImplementation: (implementation: (input: { where: { email?: string; id?: string } }) => Promise<unknown>) => unknown
+    }
+    const lookup = findUnique.getMockImplementation()
+    findUnique.mockImplementation(async (input) => {
+      if (input.where.id === uuidResponsible) return { id: uuidResponsible, companyId: company.id, role: 'COMPANY_USER' }
+      return lookup ? lookup(input) : null
+    })
+    const agent = await loginAgent(db, member.email)
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+
+    const before = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({
+      strategyId: before.body.strategies[0].id,
+      tasks: [{ title: 'Acompañar la apertura de cuentas', responsibleId: uuidResponsible, dueDate: '2026-10-08' }],
+    })
+
+    // Antes el formato del id hacía fallar la validación con "Invalid strategy task data".
+    expect(created.status).toBe(201)
+    expect(created.body.createdCount).toBe(1)
+  })
 })
 
 describe('decidir la estrategia de un cruce', () => {

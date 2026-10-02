@@ -215,7 +215,11 @@ export const strategyTasksCreateSchema = z.object({
   strategyId: z.string().trim().min(1).max(200),
   tasks: z.array(z.object({
     title: z.string().trim().min(3).max(120),
-    responsibleId: z.string().cuid(),
+    // Los ids de usuario de esta base no tienen un solo formato: Prisma genera cuid y el seed
+    // genera uuid (gen_random_uuid). Exigir cuid rechazaba responsables reales con un
+    // "Invalid strategy task data". El endpoint comprueba además que el responsable exista y
+    // pertenezca a la compañía, así que aquí solo se pide que venga un id.
+    responsibleId: z.string().trim().min(1),
     dueDate: z.coerce.date(),
   })).min(1).max(50),
 })
