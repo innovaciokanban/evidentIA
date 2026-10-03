@@ -11,7 +11,7 @@ import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
-import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
+import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -1210,8 +1210,8 @@ function valuationErrorMessage(error: unknown): string {
   return 'No se pudo guardar la valoración.'
 }
 
-function StrategyValuationCard({ strategy, draft, levelScores, state, error, canValue, onChange, onSave, onCreateTasks }: { strategy: DiagnosticStrategy; draft: CrossWeightingCriteria; levelScores: Record<WeightingLevel, number> | null; state: 'idle' | 'saving' | 'saved' | 'error'; error: string; canValue: boolean; onChange: (criteria: CrossWeightingCriteria) => void; onSave: () => void; onCreateTasks: (strategy: DiagnosticStrategy) => void }) {
-  const [open, setOpen] = useState(false)
+export function StrategyValuationCard({ strategy, draft, levelScores, state, error, canValue, onChange, onSave, onCreateTasks, initialOpen = false }: { strategy: DiagnosticStrategy; draft: CrossWeightingCriteria; levelScores: Record<WeightingLevel, number> | null; state: 'idle' | 'saving' | 'saved' | 'error'; error: string; canValue: boolean; onChange: (criteria: CrossWeightingCriteria) => void; onSave: () => void; onCreateTasks: (strategy: DiagnosticStrategy) => void; initialOpen?: boolean }) {
+  const [open, setOpen] = useState(initialOpen)
   const source = strategySourceVisuals[strategy.source]
   const band = bandMeta(strategy.weightingBand)
   // Toda estrategia que llegó a Ponderación se valora aquí, sea de IA, de Checky o de un cruce
@@ -1225,6 +1225,7 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
   const scorePercent = strategy.weighting ? Math.min(100, Math.max(0, (strategy.weighting.weightedScore / 5) * 100)) : 0
   const tone = band?.tone ?? 'pending'
   const tasks = strategyTaskViews(strategy.actionPlan)
+  const progress = strategyTaskProgress(tasks)
   const detailId = `swz-detail-${strategy.id}`
   return (
     <article className={`swz-card ${tone}${strategy.weighting ? ' weighed' : ' unweighed'}${open ? ' open' : ''}`} data-strategy-id={strategy.id}>
@@ -1240,6 +1241,18 @@ function StrategyValuationCard({ strategy, draft, levelScores, state, error, can
           <span className="swz-score-value">{strategy.weighting ? strategy.weighting.weightedScore.toFixed(2) : '—'}</span>
           <span className="weighting-score-max">/5</span>
         </span>
+        {/* El progreso de las tareas vive junto a la calificación, nunca dentro de la sección TAREAS,
+            que sigue pintando el detalle. Se deriva en cada render desde actionPlan.items. */}
+        {progress.total > 0 && (
+          <span className={`swz-task-progress${progress.percent === 100 ? ' done' : ''}`}>
+            <span className="swz-task-progress-copy">
+              <span className="swz-task-progress-label">TAREAS</span>
+              <span className="swz-task-progress-value">{progress.completed} / {progress.total}</span>
+              <span className="swz-task-progress-percent">{progress.percent}%</span>
+            </span>
+            <span className="swz-task-progress-track" role="progressbar" aria-label={strategyTaskProgressLabel(progress)} aria-valuenow={progress.percent} aria-valuemin={0} aria-valuemax={100}><span className="swz-task-progress-fill" style={{ width: `${progress.percent}%` }} /></span>
+          </span>
+        )}
       </header>
       <div className="swz-strategy">
         <strong>{strategy.title}</strong>

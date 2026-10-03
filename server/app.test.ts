@@ -3673,13 +3673,32 @@ describe('GET /api/diagnostics/:id/strategies', () => {
       storedPlans.push(created)
       return created
     })
-    const itemDelegate = target.actionItem as unknown as { create: { mockImplementation: (implementation: (input: { data: Record<string, unknown> }) => Promise<unknown>) => unknown } }
+    const itemDelegate = target.actionItem as unknown as {
+      create: { mockImplementation: (implementation: (input: { data: Record<string, unknown> }) => Promise<unknown>) => unknown }
+      update: { mockImplementation: (implementation: (input: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>) => unknown }
+    }
     let createdItems = 0
     itemDelegate.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
       createdItems += 1
       const created = { ...actionItem, ...data, id: `cmactionitemstrategy${createdItems}`, responsible: member, ticket: null }
       ;(storedPlans[0]?.items as Array<unknown> | undefined)?.push(created)
       return created
+    })
+    // La actualización de una tarea (por ejemplo al cerrar su ticket desde Tickets) tiene que verse
+    // en el GET de estrategias, igual que en la base real.
+    itemDelegate.update.mockImplementation(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+      let updated: Record<string, unknown> = { ...actionItem, ...data }
+      for (const plan of storedPlans) {
+        const rows = plan.items
+        if (!Array.isArray(rows)) continue
+        plan.items = rows.map((item) => {
+          const row = item as { id: string }
+          if (row.id !== where.id) return item
+          updated = { ...row, ...data }
+          return updated
+        })
+      }
+      return { ...updated, responsible: member, ticket: null }
     })
     return storedPlans
   }
@@ -3787,6 +3806,91 @@ describe('GET /api/diagnostics/:id/strategies', () => {
     expect(repeated.body.createdCount).toBe(0)
     const reloaded = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
     expect(reloaded.body.strategies[0].actionPlan.items).toHaveLength(2)
+  })
+
+  it('refleja en Ponderación el estado de una tarea que se cambia desde Tickets', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    harnessTaskCreation(db)
+    const agent = await loginAgent(db, member.email)
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const tasks = [1, 2, 3].map((number) => ({ title: `Control de cumplimiento ${number}`, responsibleId: member.id, dueDate: `2026-10-0${number}` }))
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId: listed.body.strategies[0].id, tasks })
+    expect(created.status).toBe(201)
+
+    const before = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(before.body.strategies[0].actionPlan.items.map((item: { status: string }) => item.status)).toEqual(['PENDING', 'PENDING', 'PENDING'])
+
+    // El mismo movimiento que se hace en la pantalla de Tickets: la tarea pasa a resuelta.
+    const tickets = await agent.get('/api/tickets')
+    const linked = tickets.body.tickets.find((entry: { actionItemId: string | null }) => Boolean(entry.actionItemId))
+    expect(linked).toBeDefined()
+    const patched = await agent.patch(`/api/tickets/${linked.id}`).send({ status: 'RESOLVED' })
+    expect(patched.status).toBe(200)
+
+    // Volver a Ponderación es el mismo GET: el progreso se recalcula con el estado actual.
+    const after = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const items = after.body.strategies[0].actionPlan.items
+    expect(items.filter((item: { status: string }) => item.status === 'COMPLETED').map((item: { id: string }) => item.id)).toEqual([linked.actionItemId])
+    expect(items.filter((item: { status: string }) => item.status === 'PENDING')).toHaveLength(2)
+  })
+
+  it('no cambia la tarea vinculada cuando un ticket se guarda sin tocar su estado', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    harnessTaskCreation(db)
+    const agent = await loginAgent(db, member.email)
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId: listed.body.strategies[0].id, tasks: [{ title: 'Control de cumplimiento 1', responsibleId: member.id, dueDate: '2026-10-01' }] })
+    expect(created.status).toBe(201)
+
+    const tickets = await agent.get('/api/tickets')
+    const linked = tickets.body.tickets.find((entry: { actionItemId: string | null }) => Boolean(entry.actionItemId))
+    expect(await agent.patch(`/api/tickets/${linked.id}`).send({ status: 'OPEN', priority: 'HIGH' })).toHaveProperty('status', 200)
+
+    const after = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(after.body.strategies[0].actionPlan.items.map((item: { status: string }) => item.status)).toEqual(['PENDING'])
+    expect((db.actionItem.update as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0)
+  })
+
+  it('al cambiar el estado de una tarea y volver a cargar, el progreso se recalcula con lo actual', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [])
+    const strategyDescription = 'Estandarizar la apertura de cuentas con responsables y controles definidos.'
+    await seedAcceptedCheckyStrategy(db, { suggestedStrategyTitle: 'Estandarizar la apertura de cuentas', suggestedStrategyDescription: strategyDescription })
+    const storedPlans = harnessTaskCreation(db)
+    const agent = await loginAgent(db, member.email)
+    await agent.put(`/api/diagnostics/${diagnostic.id}/strategies/weighting`).send({ source: 'CHECKY', sourceRef: strategySourceRef(strategyDescription), impactoEstrategico: 'ALTO', viabilidad: 'MEDIO', urgencia: 'ALTO', sinergiaInterna: 'MEDIO', impactoReputacional: 'MEDIO' })
+    const listed = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    const created = await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({
+      strategyId: listed.body.strategies[0].id,
+      tasks: [
+        { title: 'Control de cumplimiento 1', responsibleId: member.id, dueDate: '2026-10-01' },
+        { title: 'Control de cumplimiento 2', responsibleId: member.id, dueDate: '2026-10-02' },
+      ],
+    })
+    expect(created.status).toBe(201)
+
+    const items = (storedPlans[0]?.items ?? []) as Array<{ id: string; status: string }>
+    expect(items.map((item) => item.status)).toEqual(['PENDING', 'PENDING'])
+    // El mock de findUnique devuelve la fila fija del fixture: aquí se le da la de esta estrategia.
+    const findUnique = db.actionItem.findUnique as unknown as { mockImplementation: (implementation: (input: { where: { id: string } }) => Promise<unknown>) => unknown }
+    findUnique.mockImplementation(async ({ where }) => {
+      const row = items.find((item) => item.id === where.id)
+      if (!row) return null
+      return { ...row, responsible: member, recommendation: null, actionPlan: { ...actionPlan, diagnosticId: diagnostic.id, diagnostic: { companyId: company.id, company: { id: company.id, name: company.name } } } }
+    })
+
+    const patched = await agent.patch(`/api/action-items/${items[0].id}`).send({ status: 'COMPLETED' })
+    expect(patched.status).toBe(200)
+
+    // El mismo GET que dispara Ponderación al volver a la pantalla.
+    const after = await agent.get(`/api/diagnostics/${diagnostic.id}/strategies?acceptedOnly=true`)
+    expect(after.body.strategies[0].actionPlan.items.map((item: { status: string }) => item.status)).toEqual(['COMPLETED', 'PENDING'])
   })
 
   it('acepta como responsable un id de usuario con formato uuid, sin rechazar el envío', async () => {

@@ -637,6 +637,25 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .priority-criterion-value { color: var(--muted); font-size: 10.5px; }
 .priority-criterion-value b { color: var(--ink); }
 .priority-updated { margin: 2px 0 0; color: var(--muted-light); font-size: 10.5px; }
+/* Estado de una tarea dentro de la tarjeta: mismos valores que el badge del panel de planes,
+   que ahí está bajo .plans-panel y por eso no le llega a esta tarjeta. */
+.swz-card .kanban-status-badge { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; padding: 3px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: .2px; vertical-align: middle; }
+.swz-card .kanban-status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.swz-card .kanban-status-badge.pending { color: var(--amber); background: var(--amber-light); border: 1px solid var(--amber-border); }
+.swz-card .kanban-status-badge.in_progress { color: var(--blue); background: var(--blue-light); border: 1px solid var(--blue-border); }
+.swz-card .kanban-status-badge.completed { color: var(--green); background: var(--green-light); border: 1px solid var(--green-border); }
+.swz-card .kanban-status-badge.cancelled { color: var(--muted); background: var(--bg-hover); border: 1px solid var(--border); }
+/* Progreso de ejecución de las tareas: se muestra en la cabecera, junto a la calificación, como un
+   bloque compacto y secundario al score (track --border-light, relleno --blue; --green solo al 100%). */
+.swz-card .swz-task-progress { display: flex; flex-direction: column; gap: 5px; min-width: 96px; padding: 5px 10px; border-radius: var(--radius); background: var(--bg-hover); }
+.swz-card .swz-task-progress-copy { display: flex; align-items: baseline; gap: 6px; }
+.swz-card .swz-task-progress-label { color: var(--muted-light); font-size: 10px; font-weight: 700; letter-spacing: .3px; }
+.swz-card .swz-task-progress-value { color: var(--ink); font: 700 13px/1 'Space Grotesk', sans-serif; }
+.swz-card .swz-task-progress-percent { margin-left: auto; color: var(--ink-secondary); font-size: 10.5px; font-weight: 700; }
+.swz-card .swz-task-progress-track { display: block; height: 5px; border-radius: 999px; background: var(--border-light); overflow: hidden; }
+.swz-card .swz-task-progress-fill { display: block; height: 100%; border-radius: 999px; background: var(--blue); transition: width var(--transition); }
+.swz-card .swz-task-progress.done .swz-task-progress-fill { background: var(--green); }
+.swz-card .swz-task-progress.done .swz-task-progress-percent { color: var(--green); }
 @media (max-width: 900px) {
   .priority-group-body { grid-template-columns: 1fr; }
 }

@@ -350,6 +350,21 @@ const actionItemToTicketPriority: Record<Priority, TicketPriority> = {
   [Priority.HIGH]: TicketPriority.HIGH,
 }
 
+/**
+ * Sentido inverso de actionItemToTicketStatus, usado solo por PATCH /api/tickets/:id: es la única
+ * escritura que llega desde la pantalla de Tickets, y ahí quien decide el estado es el ticket. La
+ * tarea vinculada es la fuente de verdad que Ponderación lee para el progreso de sus tarjetas
+ * (ActionItem.status), así que acompañe el cambio. Resuelto y cerrado cuentan como terminados para
+ * la tarea, y solo se sincroniza cuando el estado del ticket cambia de verdad: un ticket que ya
+ * estaba cerrado por una cancelación no se marca completado al editarlo sin tocar el estado.
+ */
+const ticketStatusToActionItemStatus: Record<TicketStatus, ActionItemStatus> = {
+  [TicketStatus.OPEN]: ActionItemStatus.PENDING,
+  [TicketStatus.IN_PROGRESS]: ActionItemStatus.IN_PROGRESS,
+  [TicketStatus.RESOLVED]: ActionItemStatus.COMPLETED,
+  [TicketStatus.CLOSED]: ActionItemStatus.COMPLETED,
+}
+
 const ticketDataFromActionItem = (item: { title: string; description: string; status: ActionItemStatus; priority: Priority; responsibleId: string | null; dueDate: Date | null; actionItemId: string; createdById: string }) => ({
   title: item.title,
   description: item.description,
@@ -398,6 +413,7 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
           select: {
             id: true,
             title: true,
+            status: true,
             responsibleId: true,
             responsible: { select: { id: true, name: true } },
             dueDate: true,
@@ -2093,7 +2109,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const ticket = await db.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
+    const newStatus = parsed.data.status
+    const ticket = await db.$transaction(async (tx) => {
+      const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
+      if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
+        await tx.actionItem.update({ where: { id: existing.actionItemId }, data: { status: ticketStatusToActionItemStatus[newStatus] } })
+      }
+      return updated
+    })
     response.json({ ticket: ticketView(ticket) })
   }))
 
