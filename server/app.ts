@@ -15,7 +15,7 @@ import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiS
 import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -375,6 +375,48 @@ const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => (
   redThreshold: kpi.redThreshold,
   createdAt: kpi.createdAt,
   updatedAt: kpi.updatedAt,
+})
+type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
+type SipocDelegate = {
+  findMany: (args: { where: { processId: string }; orderBy: { createdAt: 'asc' } }) => Promise<SipocRecord[]>
+  findUnique: (args: { where: { id: string } }) => Promise<SipocRecord | null>
+  create: (args: { data: { processId: string; description: string } }) => Promise<SipocRecord>
+  update: (args: { where: { id: string }; data: { description: string } }) => Promise<SipocRecord>
+  delete: (args: { where: { id: string } }) => Promise<SipocRecord>
+}
+const sipocItemView = (item: SipocRecord) => ({
+  id: item.id,
+  processId: item.processId,
+  description: item.description,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+})
+const riskLevelFor = (impact: number, probability: number) => {
+  const score = impact * probability
+  if (score <= 4) return 'LOW' as const
+  if (score <= 9) return 'MEDIUM' as const
+  if (score <= 16) return 'HIGH' as const
+  return 'CRITICAL' as const
+}
+const riskInclude = { controls: { orderBy: { createdAt: 'asc' as const } } } as const
+const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) => ({
+  id: risk.id,
+  processId: risk.processId,
+  name: risk.name,
+  description: risk.description,
+  riskType: risk.riskType,
+  bpmnActivity: risk.bpmnActivity,
+  inherentImpact: risk.inherentImpact,
+  inherentProbability: risk.inherentProbability,
+  inherentScore: risk.inherentImpact * risk.inherentProbability,
+  inherentLevel: riskLevelFor(risk.inherentImpact, risk.inherentProbability),
+  residualImpact: risk.residualImpact,
+  residualProbability: risk.residualProbability,
+  residualScore: risk.residualImpact * risk.residualProbability,
+  residualLevel: riskLevelFor(risk.residualImpact, risk.residualProbability),
+  controls: risk.controls,
+  createdAt: risk.createdAt,
+  updatedAt: risk.updatedAt,
 })
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
@@ -1067,10 +1109,221 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.status(204).send()
   }))
 
-  const findAccessibleKpiProcess = async (request: Request, processId: string) => {
+  const findAccessibleProcess = async (request: Request, processId: string) => {
     const process = await db.process.findUnique({ where: { id: processId }, include: { company: { select: { id: true } } } })
     return process && canAccessCompany(request, process.company) ? process : null
   }
+
+  const sipocDelegates: Record<'suppliers' | 'inputs' | 'outputs' | 'customers', SipocDelegate> = {
+    suppliers: db.sipocSupplier as unknown as SipocDelegate,
+    inputs: db.sipocInput as unknown as SipocDelegate,
+    outputs: db.sipocOutput as unknown as SipocDelegate,
+    customers: db.sipocCustomer as unknown as SipocDelegate,
+  }
+
+  app.get('/api/processes/:processId/sipoc', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const [suppliers, inputs, outputs, customers] = await Promise.all(
+      (Object.keys(sipocDelegates) as Array<keyof typeof sipocDelegates>).map(async (kind) => [kind, await sipocDelegates[kind].findMany({ where: { processId: process.id }, orderBy: { createdAt: 'asc' } })] as const),
+    )
+    response.json(Object.fromEntries([suppliers, inputs, outputs, customers].map(([kind, items]) => [kind, items.map(sipocItemView)])))
+  }))
+
+  app.post('/api/processes/:processId/sipoc/:kind', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsedKind = sipocKindSchema.safeParse(String(request.params.kind))
+    const parsed = sipocItemCreateSchema.safeParse(request.body)
+    if (!parsedKind.success) {
+      response.status(400).json({ error: 'Invalid SIPOC data', details: parsedKind.error.issues })
+      return
+    }
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid SIPOC data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const item = await sipocDelegates[parsedKind.data].create({ data: { processId: process.id, description: parsed.data.description } })
+    response.status(201).json({ item: sipocItemView(item) })
+  }))
+
+  app.patch('/api/processes/:processId/sipoc/:kind/:itemId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsedKind = sipocKindSchema.safeParse(String(request.params.kind))
+    const parsed = sipocItemUpdateSchema.safeParse(request.body)
+    if (!parsedKind.success) {
+      response.status(400).json({ error: 'Invalid SIPOC data', details: parsedKind.error.issues })
+      return
+    }
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid SIPOC data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const delegate = sipocDelegates[parsedKind.data]
+    const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'SIPOC item not found' })
+      return
+    }
+    const item = await delegate.update({ where: { id: existing.id }, data: { description: parsed.data.description } })
+    response.json({ item: sipocItemView(item) })
+  }))
+
+  app.delete('/api/processes/:processId/sipoc/:kind/:itemId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsedKind = sipocKindSchema.safeParse(String(request.params.kind))
+    if (!parsedKind.success) {
+      response.status(400).json({ error: 'Invalid SIPOC type', details: parsedKind.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const delegate = sipocDelegates[parsedKind.data]
+    const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'SIPOC item not found' })
+      return
+    }
+    await delegate.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  app.get('/api/processes/:processId/risks', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risks = await db.risk.findMany({ where: { processId: process.id }, include: riskInclude, orderBy: { createdAt: 'asc' } })
+    response.json({ risks: risks.map(riskView) })
+  }))
+
+  app.post('/api/processes/:processId/risks', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid risk data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.create({ data: { processId: process.id, ...parsed.data }, include: riskInclude })
+    response.status(201).json({ risk: riskView(risk) })
+  }))
+
+  app.patch('/api/processes/:processId/risks/:riskId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid risk data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const risk = await db.risk.update({ where: { id: existing.id }, data: parsed.data, include: riskInclude })
+    response.json({ risk: riskView(risk) })
+  }))
+
+  app.delete('/api/processes/:processId/risks/:riskId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    await db.risk.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  app.post('/api/processes/:processId/risks/:riskId/controls', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskControlCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid control data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const control = await db.riskControl.create({ data: { riskId: risk.id, ...parsed.data } })
+    response.status(201).json({ control })
+  }))
+
+  app.patch('/api/processes/:processId/risks/:riskId/controls/:controlId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskControlUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid control data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const existing = await db.riskControl.findUnique({ where: { id: String(request.params.controlId) } })
+    if (!existing || existing.riskId !== risk.id) {
+      response.status(404).json({ error: 'Control not found' })
+      return
+    }
+    const control = await db.riskControl.update({ where: { id: existing.id }, data: parsed.data })
+    response.json({ control })
+  }))
+
+  app.delete('/api/processes/:processId/risks/:riskId/controls/:controlId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const existing = await db.riskControl.findUnique({ where: { id: String(request.params.controlId) } })
+    if (!existing || existing.riskId !== risk.id) {
+      response.status(404).json({ error: 'Control not found' })
+      return
+    }
+    await db.riskControl.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
 
   app.get('/api/processes/:processId/kpis', authMiddleware, asyncHandler(async (request, response) => {
     const parsed = kpiQuerySchema.safeParse(request.query)
@@ -1078,7 +1331,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: 'Invalid KPI filters', details: parsed.error.issues })
       return
     }
-    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    const process = await findAccessibleProcess(request, String(request.params.processId))
     if (!process) {
       response.status(404).json({ error: 'Process not found' })
       return
@@ -1102,7 +1355,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: 'Invalid KPI data', details: parsed.error.issues })
       return
     }
-    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    const process = await findAccessibleProcess(request, String(request.params.processId))
     if (!process) {
       response.status(404).json({ error: 'Process not found' })
       return
@@ -1144,7 +1397,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: 'Invalid KPI data', details: parsed.error.issues })
       return
     }
-    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    const process = await findAccessibleProcess(request, String(request.params.processId))
     if (!process) {
       response.status(404).json({ error: 'Process not found' })
       return
@@ -1186,7 +1439,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   app.delete('/api/processes/:processId/kpis/:kpiId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
-    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    const process = await findAccessibleProcess(request, String(request.params.processId))
     if (!process) {
       response.status(404).json({ error: 'Process not found' })
       return

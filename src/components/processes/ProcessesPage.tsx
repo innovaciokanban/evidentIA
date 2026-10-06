@@ -5,6 +5,7 @@ import { LoadingState } from '../ui/LoadingState'
 import { AddProcessCard, ProcessCard, type ProcessCategory, type ProcessStatus } from './ProcessCard'
 import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
 import { ProcessKpiPanel } from './ProcessKpiPanel'
+import { ProcessRiskPanel } from './ProcessRiskPanel'
 import { ArrowDownIcon, ArrowRightIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
@@ -100,6 +101,7 @@ export function ProcessesPage({ user }: { user: User }) {
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [showKpis, setShowKpis] = useState(false)
+  const [showRisks, setShowRisks] = useState(false)
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
@@ -156,6 +158,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setEditing(null)
     setReadOnly(false)
     setShowKpis(false)
+    setShowRisks(false)
     setDraft({ ...emptyProcessDraft, type, companyId: draft.companyId || user.companyId || companies[0]?.id || '' })
     setShowForm(true)
     void ensureUsers()
@@ -168,6 +171,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setEditing(process)
     setReadOnly(false)
     setShowKpis(false)
+    setShowRisks(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
     void ensureUsers()
@@ -192,6 +196,16 @@ export function ProcessesPage({ user }: { user: User }) {
     setEditing(process)
     setShowForm(false)
     setShowKpis(true)
+    setShowRisks(false)
+  }
+
+  function openRisks(process: Process) {
+    setFormError('')
+    setNotice('')
+    setEditing(process)
+    setShowForm(false)
+    setShowKpis(false)
+    setShowRisks(true)
   }
 
   function returnToCharacterization() {
@@ -202,6 +216,7 @@ export function ProcessesPage({ user }: { user: User }) {
   function closeForm() {
     setShowForm(false)
     setShowKpis(false)
+    setShowRisks(false)
     setEditing(null)
     setReadOnly(false)
     setFormError('')
@@ -243,12 +258,24 @@ export function ProcessesPage({ user }: { user: User }) {
         personalData: draft.personalData,
       }
       const wasEditing = Boolean(editing)
+      let savedProcess: Process
       if (editing) {
-        await api<{ process: Process }>(`/processes/${editing.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        const result = await api<{ process: Process }>(`/processes/${editing.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        savedProcess = result.process
       } else {
-        await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, companyId: draft.companyId }) })
+        const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, companyId: draft.companyId }) })
+        savedProcess = result.process
       }
-      closeForm()
+      if (wasEditing) {
+        closeForm()
+      } else {
+        // Keep the new process open after its first save so SIPOC can use its real processId.
+        setEditing(savedProcess)
+        setReadOnly(false)
+        setDraft(draftFromProcess(savedProcess))
+        setShowForm(true)
+        void ensureUsers()
+      }
       const reloaded = await loadProcesses()
       setNotice(reloaded ? `Proceso ${wasEditing ? 'actualizado' : 'creado'} correctamente.` : 'El proceso se guardó, pero no pudimos actualizar el mapa.')
     } catch (requestError) {
@@ -284,7 +311,7 @@ export function ProcessesPage({ user }: { user: User }) {
 
   return (
     <div className="page processes-page">
-       {!showKpis && <div className="page-heading">
+       {!showKpis && !showRisks && <div className="page-heading">
          <div>
            <p className="eyebrow">GESTIÓN DE CALIDAD</p>
            <h1>Gestión por procesos</h1>
@@ -303,8 +330,10 @@ export function ProcessesPage({ user }: { user: User }) {
           </div>}
         </div>}
 
-        {notice && !showForm && !showKpis && <div className="form-success page-alert" role="status">{notice}</div>}
-        {showKpis && editing ? (
+        {notice && !showForm && !showKpis && !showRisks && <div className="form-success page-alert" role="status">{notice}</div>}
+        {showRisks && editing ? (
+          <ProcessRiskPanel process={editing} canWrite={canCreate} onBack={() => { setShowRisks(false); setShowForm(true) }} />
+        ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (
           <ProcessForm
@@ -314,11 +343,13 @@ export function ProcessesPage({ user }: { user: User }) {
            companies={companies}
            editing={Boolean(editing)}
            readOnly={readOnly}
-           saving={saving}
+            saving={saving}
             error={formError}
             onSubmit={(event) => void saveProcess(event)}
             onClose={closeForm}
             onOpenKpis={editing ? () => openKpis(editing) : undefined}
+            onOpenRisks={editing ? () => openRisks(editing) : undefined}
+            processId={editing?.id}
          />
        ) : <>
        <section className="metric-grid">

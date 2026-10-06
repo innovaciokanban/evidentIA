@@ -1,5 +1,6 @@
 import type { Dispatch, FormEvent, SetStateAction } from 'react'
 import type { Company, ProcessState, ProcessType, User } from '../../types'
+import { ProcessSipocSection } from './ProcessSipocSection'
 
 export type ProcessDraft = {
   name: string
@@ -52,6 +53,8 @@ type ProcessFormProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onClose: () => void
   onOpenKpis?: () => void
+  onOpenRisks?: () => void
+  processId?: string
 }
 
 const dateLabel = (value: string | null) => value
@@ -68,7 +71,7 @@ function ToggleField({ label, value, onChange }: { label: string; value: boolean
   )
 }
 
-export function ProcessForm({ draft, setDraft, users, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis }: ProcessFormProps) {
+export function ProcessForm({ draft, setDraft, users, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, processId }: ProcessFormProps) {
   // El servidor vuelve a validar esta relación; aquí evitamos ofrecer responsables de otra empresa.
   const availableUsers = users.filter((user) => !draft.companyId || user.companyId === draft.companyId)
   const selectedCompany = companies.find((company) => company.id === draft.companyId)
@@ -93,13 +96,39 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
 
       {error && <div className="form-error" role="alert">{error}</div>}
 
+      {editing && (
+        <section className="characterization-section process-modules-section">
+          <div className="characterization-section-heading">
+            <div><p className="detail-label">TRAZABILIDAD Y CONTROL</p><h3>MÓDULOS DEL PROCESO</h3></div>
+            <span className="characterization-helper">Selecciona un módulo para continuar</span>
+          </div>
+          <div className="process-module-grid">
+            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">▤</span><span><strong>Procedimiento</strong><small>Documentación operativa</small></span></button>
+            <button type="button" className="process-module-card interactive" onClick={onOpenKpis} disabled={!onOpenKpis}><span className="process-module-icon">◫</span><span><strong>KPI</strong><small>Indicadores del proceso</small></span><span className="process-module-arrow">→</span></button>
+            <button type="button" className="process-module-card interactive" onClick={onOpenRisks} disabled={!onOpenRisks}><span className="process-module-icon">!</span><span><strong>Riesgos</strong><small>Identificación y control</small></span><span className="process-module-arrow">→</span></button>
+            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">◌</span><span><strong>Auditoría</strong><small>Seguimiento y evidencia</small></span></button>
+            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">◇</span><span><strong>Valor</strong><small>Entrega al cliente</small></span></button>
+          </div>
+        </section>
+      )}
+
       <fieldset disabled={readOnly} className="characterization-fields">
       <section className="characterization-section">
         <div className="characterization-section-heading">
           <div><p className="detail-label">FICHA PRINCIPAL</p><h3>CARACTERIZACIÓN DEL PROCESO</h3></div>
           <span className={`characterization-status ${draft.status.toLowerCase()}`}>{draft.status === 'ACTIVE' ? 'Activo' : 'Inactivo'}</span>
         </div>
+      </section>
 
+      <section className="characterization-section objective-section">
+        <div className="characterization-section-heading"><div><p className="detail-label">PROPÓSITO Y ALCANCE</p><h3>OBJETIVO / DESCRIPCIÓN</h3></div></div>
+        <div className="characterization-copy-grid">
+          <label>Objetivo<textarea value={draft.objective} onChange={(event) => update('objective', event.target.value)} placeholder="¿Qué logra este proceso?" rows={5} minLength={3} maxLength={2000} required /></label>
+          <label>Descripción<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} placeholder="Alcance, entradas o consideraciones del proceso..." rows={5} maxLength={5000} /></label>
+        </div>
+      </section>
+
+      <section className="characterization-section">
         <div className="characterization-grid">
           <div className="characterization-field"><span>Fecha actualización</span><strong>{dateLabel(draft.updatedAt)}</strong></div>
           <label>Versión<input value={draft.version} onChange={(event) => update('version', event.target.value)} placeholder="Ej. 1.0" maxLength={120} /></label>
@@ -140,32 +169,10 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <ToggleField label="Afecta contabilidad" value={draft.affectsAccounting} onChange={() => update('affectsAccounting', !draft.affectsAccounting)} />
           <ToggleField label="Datos personales" value={draft.personalData} onChange={() => update('personalData', !draft.personalData)} />
         </div>
-      </section>
+       </section>
+       </fieldset>
 
-      <section className="characterization-section objective-section">
-        <div className="characterization-section-heading"><div><p className="detail-label">PROPÓSITO Y ALCANCE</p><h3>OBJETIVO / DESCRIPCIÓN</h3></div></div>
-        <div className="characterization-copy-grid">
-          <label>Objetivo<textarea value={draft.objective} onChange={(event) => update('objective', event.target.value)} placeholder="¿Qué logra este proceso?" rows={5} minLength={3} maxLength={2000} required /></label>
-          <label>Descripción<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} placeholder="Alcance, entradas o consideraciones del proceso..." rows={5} maxLength={5000} /></label>
-        </div>
-      </section>
-      </fieldset>
-
-      {editing && (
-        <section className="characterization-section process-modules-section">
-          <div className="characterization-section-heading">
-            <div><p className="detail-label">TRAZABILIDAD Y CONTROL</p><h3>MÓDULOS DEL PROCESO</h3></div>
-            <span className="characterization-helper">Selecciona un módulo para continuar</span>
-          </div>
-          <div className="process-module-grid">
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">▤</span><span><strong>Procedimiento</strong><small>Documentación operativa</small></span></button>
-            <button type="button" className="process-module-card interactive" onClick={onOpenKpis} disabled={!onOpenKpis}><span className="process-module-icon">◫</span><span><strong>KPI</strong><small>Indicadores del proceso</small></span><span className="process-module-arrow">→</span></button>
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">!</span><span><strong>Riesgos</strong><small>Identificación y control</small></span></button>
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">◌</span><span><strong>Auditoría</strong><small>Seguimiento y evidencia</small></span></button>
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">◇</span><span><strong>Valor</strong><small>Entrega al cliente</small></span></button>
-          </div>
-        </section>
-      )}
+      <ProcessSipocSection processId={processId} readOnly={readOnly} />
 
       <footer className="characterization-footer">
         <button type="button" className="button secondary" onClick={onClose}>{readOnly ? 'Volver al mapa' : 'Cancelar / volver al listado'}</button>

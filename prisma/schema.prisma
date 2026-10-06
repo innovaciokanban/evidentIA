@@ -138,6 +138,13 @@ enum ProcessStatus {
   INACTIVE
 }
 
+enum RiskControlEvaluation {
+  PENDING
+  WEAK
+  PARTIAL
+  EFFECTIVE
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -495,6 +502,11 @@ model Process {
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
   kpis          Kpi[]
+  sipocSuppliers SipocSupplier[]
+  sipocInputs    SipocInput[]
+  sipocOutputs   SipocOutput[]
+  sipocCustomers SipocCustomer[]
+  risks          Risk[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -532,4 +544,79 @@ model Kpi {
   @@index([processId])
   @@index([reportResponsibleId])
   @@index([monitorResponsibleId])
+}
+
+model SipocSupplier {
+  id          String   @id @default(cuid())
+  processId   String
+  description String
+  process     Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([processId])
+}
+
+model SipocInput {
+  id          String   @id @default(cuid())
+  processId   String
+  description String
+  process     Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([processId])
+}
+
+model SipocOutput {
+  id          String   @id @default(cuid())
+  processId   String
+  description String
+  process     Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([processId])
+}
+
+model SipocCustomer {
+  id          String   @id @default(cuid())
+  processId   String
+  description String
+  process     Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([processId])
+}
+
+model Risk {
+  id                   String        @id @default(cuid())
+  processId            String
+  name                 String
+  description          String
+  riskType             String
+  bpmnActivity         String
+  inherentImpact       Int
+  inherentProbability  Int
+  residualImpact       Int
+  residualProbability  Int
+  process              Process       @relation(fields: [processId], references: [id], onDelete: Cascade)
+  controls             RiskControl[]
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([processId])
+}
+
+model RiskControl {
+  id          String                 @id @default(cuid())
+  riskId      String
+  description String
+  evaluation  RiskControlEvaluation  @default(PENDING)
+  risk        Risk                   @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@index([riskId])
 }

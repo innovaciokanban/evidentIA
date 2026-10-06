@@ -175,6 +175,38 @@ export const kpiQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
 })
 
+export const sipocKindSchema = z.enum(['suppliers', 'inputs', 'outputs', 'customers'])
+export const sipocItemCreateSchema = z.object({
+  description: z.string().trim().min(1).max(500),
+})
+export const sipocItemUpdateSchema = sipocItemCreateSchema
+
+const riskScaleValue = z.number().int().min(1).max(5)
+export const riskCreateSchema = z.object({
+  name: z.string().trim().min(3).max(160),
+  description: z.string().trim().min(3).max(5000),
+  riskType: z.string().trim().min(2).max(120),
+  bpmnActivity: z.string().trim().min(2).max(160),
+  inherentImpact: riskScaleValue,
+  inherentProbability: riskScaleValue,
+  residualImpact: riskScaleValue,
+  residualProbability: riskScaleValue,
+})
+export const riskUpdateSchema = riskCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one risk field is required',
+)
+
+export const riskControlEvaluationSchema = z.enum(['PENDING', 'WEAK', 'PARTIAL', 'EFFECTIVE'])
+export const riskControlCreateSchema = z.object({
+  description: z.string().trim().min(3).max(1000),
+  evaluation: riskControlEvaluationSchema.default('PENDING'),
+})
+export const riskControlUpdateSchema = riskControlCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one control field is required',
+)
+
 export const diagnosticCreateSchema = z.object({
   title: z.string().trim().min(3).max(120),
   description: z.string().trim().min(3).max(5000),

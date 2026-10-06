@@ -316,6 +316,51 @@ export type ProcessKpi = {
   updatedAt: string
 }
 
+export type ProcessSipocItem = {
+  id: string
+  processId: string
+  description: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProcessSipoc = {
+  suppliers: ProcessSipocItem[]
+  inputs: ProcessSipocItem[]
+  outputs: ProcessSipocItem[]
+  customers: ProcessSipocItem[]
+}
+
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+export type RiskControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
+export type ProcessRiskControl = {
+  id: string
+  riskId: string
+  description: string
+  evaluation: RiskControlEvaluation
+  createdAt: string
+  updatedAt: string
+}
+export type ProcessRisk = {
+  id: string
+  processId: string
+  name: string
+  description: string
+  riskType: string
+  bpmnActivity: string
+  inherentImpact: number
+  inherentProbability: number
+  inherentScore: number
+  inherentLevel: RiskLevel
+  residualImpact: number
+  residualProbability: number
+  residualScore: number
+  residualLevel: RiskLevel
+  controls: ProcessRiskControl[]
+  createdAt: string
+  updatedAt: string
+}
+
 
 export type DashboardSummary = {
   totalCompanies: number
