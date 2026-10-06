@@ -157,6 +157,8 @@ model User {
   createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
   createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
   responsibleProcesses Process[] @relation("ResponsibleProcesses")
+  reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
+  monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -492,6 +494,7 @@ model Process {
   personalData  Boolean       @default(false)
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
+  kpis          Kpi[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -499,4 +502,34 @@ model Process {
   @@index([companyId])
   @@index([type])
   @@index([responsibleId])
+}
+
+/**
+ * Indicador de un proceso. La empresa se obtiene de process.companyId para evitar duplicar el
+ * tenant en dos columnas que podrían divergir; la API la devuelve como parte de la vista del KPI.
+ */
+model Kpi {
+  id                   String   @id @default(cuid())
+  processId            String
+  name                 String
+  description          String
+  frequency            String
+  target               String
+  formula              String
+  dataSource           String
+  unit                 String
+  reportResponsibleId  String?
+  monitorResponsibleId String?
+  greenThreshold       String?
+  yellowThreshold      String?
+  redThreshold         String?
+  process              Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  reportResponsible    User?    @relation("ReportResponsibleKpis", fields: [reportResponsibleId], references: [id], onDelete: SetNull)
+  monitorResponsible   User?    @relation("MonitorResponsibleKpis", fields: [monitorResponsibleId], references: [id], onDelete: SetNull)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([processId])
+  @@index([reportResponsibleId])
+  @@index([monitorResponsibleId])
 }

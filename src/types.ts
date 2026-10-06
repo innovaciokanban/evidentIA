@@ -296,6 +296,26 @@ export type Process = {
   updatedAt: string
 }
 
+export type ProcessKpi = {
+  id: string
+  processId: string
+  companyId: string
+  name: string
+  description: string
+  frequency: string
+  target: string
+  formula: string
+  dataSource: string
+  unit: string
+  reportResponsible: Pick<User, 'id' | 'name'> | null
+  monitorResponsible: Pick<User, 'id' | 'name'> | null
+  greenThreshold: string | null
+  yellowThreshold: string | null
+  redThreshold: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 
 export type DashboardSummary = {
   totalCompanies: number

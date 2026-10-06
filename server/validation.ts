@@ -146,6 +146,35 @@ export const processQuerySchema = z.object({
   companyId: z.string().cuid().optional(),
 })
 
+const kpiText = (max: number) => z.string().trim().min(1).max(max)
+const kpiNullableText = (max: number) => z.string().trim().max(max).nullable().optional()
+// Los ids de usuarios se validan contra la empresa en la API; la base existente también contiene UUIDs.
+const kpiResponsibleId = z.string().trim().min(1).max(64).nullable().optional()
+
+export const kpiCreateSchema = z.object({
+  name: kpiText(120).refine((value) => value.length >= 3, 'Name must have at least 3 characters'),
+  description: kpiText(5000),
+  frequency: kpiText(80),
+  target: kpiText(120),
+  formula: kpiText(1000),
+  dataSource: kpiText(1000),
+  unit: kpiText(80),
+  reportResponsibleId: kpiResponsibleId,
+  monitorResponsibleId: kpiResponsibleId,
+  greenThreshold: kpiNullableText(120),
+  yellowThreshold: kpiNullableText(120),
+  redThreshold: kpiNullableText(120),
+})
+
+export const kpiUpdateSchema = kpiCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one field is required',
+)
+
+export const kpiQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+})
+
 export const diagnosticCreateSchema = z.object({
   title: z.string().trim().min(3).max(120),
   description: z.string().trim().min(3).max(5000),

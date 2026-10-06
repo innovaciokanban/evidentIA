@@ -15,7 +15,7 @@ import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiS
 import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -351,6 +351,31 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
 })
 /** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
 const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
+
+const kpiInclude = {
+  process: { select: { id: true, companyId: true, name: true, code: true } },
+  reportResponsible: { select: { id: true, name: true } },
+  monitorResponsible: { select: { id: true, name: true } },
+} as const
+const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => ({
+  id: kpi.id,
+  processId: kpi.processId,
+  companyId: kpi.process.companyId,
+  name: kpi.name,
+  description: kpi.description,
+  frequency: kpi.frequency,
+  target: kpi.target,
+  formula: kpi.formula,
+  dataSource: kpi.dataSource,
+  unit: kpi.unit,
+  reportResponsible: kpi.reportResponsible,
+  monitorResponsible: kpi.monitorResponsible,
+  greenThreshold: kpi.greenThreshold,
+  yellowThreshold: kpi.yellowThreshold,
+  redThreshold: kpi.redThreshold,
+  createdAt: kpi.createdAt,
+  updatedAt: kpi.updatedAt,
+})
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
   [ActionItemStatus.PENDING]: TicketStatus.OPEN,
@@ -1039,6 +1064,139 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     await db.process.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  const findAccessibleKpiProcess = async (request: Request, processId: string) => {
+    const process = await db.process.findUnique({ where: { id: processId }, include: { company: { select: { id: true } } } })
+    return process && canAccessCompany(request, process.company) ? process : null
+  }
+
+  app.get('/api/processes/:processId/kpis', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = kpiQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid KPI filters', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const where: Prisma.KpiWhereInput = {
+      processId: process.id,
+      ...(parsed.data.search ? {
+        OR: [
+          { name: { contains: parsed.data.search, mode: 'insensitive' } },
+          { description: { contains: parsed.data.search, mode: 'insensitive' } },
+        ],
+      } : {}),
+    }
+    const kpis = await db.kpi.findMany({ where, include: kpiInclude, orderBy: { name: 'asc' } })
+    response.json({ kpis: kpis.map(kpiView) })
+  }))
+
+  app.post('/api/processes/:processId/kpis', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = kpiCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid KPI data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const reportResponsible = await resolveResponsible(parsed.data.reportResponsibleId, process.companyId)
+    if (!reportResponsible.ok) {
+      response.status(reportResponsible.status).json({ error: reportResponsible.error })
+      return
+    }
+    const monitorResponsible = await resolveResponsible(parsed.data.monitorResponsibleId, process.companyId)
+    if (!monitorResponsible.ok) {
+      response.status(monitorResponsible.status).json({ error: monitorResponsible.error })
+      return
+    }
+    const kpi = await db.kpi.create({
+      data: {
+        processId: process.id,
+        name: parsed.data.name,
+        description: parsed.data.description,
+        frequency: parsed.data.frequency,
+        target: parsed.data.target,
+        formula: parsed.data.formula,
+        dataSource: parsed.data.dataSource,
+        unit: parsed.data.unit,
+        reportResponsibleId: reportResponsible.responsibleId,
+        monitorResponsibleId: monitorResponsible.responsibleId,
+        greenThreshold: parsed.data.greenThreshold ?? null,
+        yellowThreshold: parsed.data.yellowThreshold ?? null,
+        redThreshold: parsed.data.redThreshold ?? null,
+      },
+      include: kpiInclude,
+    })
+    response.status(201).json({ kpi: kpiView(kpi) })
+  }))
+
+  app.patch('/api/processes/:processId/kpis/:kpiId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = kpiUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid KPI data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.kpi.findUnique({ where: { id: String(request.params.kpiId) }, include: kpiInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'KPI not found' })
+      return
+    }
+    if (parsed.data.reportResponsibleId !== undefined) {
+      const responsible = await resolveResponsible(parsed.data.reportResponsibleId, process.companyId)
+      if (!responsible.ok) {
+        response.status(responsible.status).json({ error: responsible.error })
+        return
+      }
+    }
+    if (parsed.data.monitorResponsibleId !== undefined) {
+      const responsible = await resolveResponsible(parsed.data.monitorResponsibleId, process.companyId)
+      if (!responsible.ok) {
+        response.status(responsible.status).json({ error: responsible.error })
+        return
+      }
+    }
+    const data: Prisma.KpiUncheckedUpdateInput = {}
+    if (parsed.data.name !== undefined) data.name = parsed.data.name
+    if (parsed.data.description !== undefined) data.description = parsed.data.description
+    if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency
+    if (parsed.data.target !== undefined) data.target = parsed.data.target
+    if (parsed.data.formula !== undefined) data.formula = parsed.data.formula
+    if (parsed.data.dataSource !== undefined) data.dataSource = parsed.data.dataSource
+    if (parsed.data.unit !== undefined) data.unit = parsed.data.unit
+    if (parsed.data.reportResponsibleId !== undefined) data.reportResponsibleId = parsed.data.reportResponsibleId
+    if (parsed.data.monitorResponsibleId !== undefined) data.monitorResponsibleId = parsed.data.monitorResponsibleId
+    if (parsed.data.greenThreshold !== undefined) data.greenThreshold = parsed.data.greenThreshold
+    if (parsed.data.yellowThreshold !== undefined) data.yellowThreshold = parsed.data.yellowThreshold
+    if (parsed.data.redThreshold !== undefined) data.redThreshold = parsed.data.redThreshold
+    const kpi = await db.kpi.update({ where: { id: existing.id }, data, include: kpiInclude })
+    response.json({ kpi: kpiView(kpi) })
+  }))
+
+  app.delete('/api/processes/:processId/kpis/:kpiId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleKpiProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.kpi.findUnique({ where: { id: String(request.params.kpiId) }, include: kpiInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'KPI not found' })
+      return
+    }
+    await db.kpi.delete({ where: { id: existing.id } })
     response.status(204).send()
   }))
 

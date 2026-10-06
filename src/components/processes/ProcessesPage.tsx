@@ -4,6 +4,7 @@ import { KPICard } from '../ui/KPICard'
 import { LoadingState } from '../ui/LoadingState'
 import { AddProcessCard, ProcessCard, type ProcessCategory, type ProcessStatus } from './ProcessCard'
 import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
+import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ArrowDownIcon, ArrowRightIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
@@ -98,6 +99,7 @@ export function ProcessesPage({ user }: { user: User }) {
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
+  const [showKpis, setShowKpis] = useState(false)
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
@@ -153,6 +155,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setNotice('')
     setEditing(null)
     setReadOnly(false)
+    setShowKpis(false)
     setDraft({ ...emptyProcessDraft, type, companyId: draft.companyId || user.companyId || companies[0]?.id || '' })
     setShowForm(true)
     void ensureUsers()
@@ -164,6 +167,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setNotice('')
     setEditing(process)
     setReadOnly(false)
+    setShowKpis(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
     void ensureUsers()
@@ -182,8 +186,22 @@ export function ProcessesPage({ user }: { user: User }) {
     setShowForm(true)
   }
 
+  function openKpis(process: Process) {
+    setFormError('')
+    setNotice('')
+    setEditing(process)
+    setShowForm(false)
+    setShowKpis(true)
+  }
+
+  function returnToCharacterization() {
+    setShowKpis(false)
+    setShowForm(true)
+  }
+
   function closeForm() {
     setShowForm(false)
+    setShowKpis(false)
     setEditing(null)
     setReadOnly(false)
     setFormError('')
@@ -266,28 +284,30 @@ export function ProcessesPage({ user }: { user: User }) {
 
   return (
     <div className="page processes-page">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">GESTIÓN DE CALIDAD</p>
-          <h1>Gestión por procesos</h1>
-          <p className="muted">Gestiona, caracteriza y mejora los procesos de tu organización.</p>
-        </div>
-       {!showForm && <div className="page-actions">
-          <button
-            type="button"
-            className="button primary"
-            disabled={!canCreate}
-            onClick={() => startCreate()}
-            title={canCreate ? undefined : 'Solo administradores pueden crear procesos.'}
-          >
-            + Nuevo proceso
-          </button>
-         </div>}
-       </div>
+       {!showKpis && <div className="page-heading">
+         <div>
+           <p className="eyebrow">GESTIÓN DE CALIDAD</p>
+           <h1>Gestión por procesos</h1>
+           <p className="muted">Gestiona, caracteriza y mejora los procesos de tu organización.</p>
+         </div>
+        {!showForm && <div className="page-actions">
+           <button
+             type="button"
+             className="button primary"
+             disabled={!canCreate}
+             onClick={() => startCreate()}
+             title={canCreate ? undefined : 'Solo administradores pueden crear procesos.'}
+           >
+             + Nuevo proceso
+           </button>
+          </div>}
+        </div>}
 
-       {notice && !showForm && <div className="form-success page-alert" role="status">{notice}</div>}
-       {showForm ? (
-         <ProcessForm
+        {notice && !showForm && !showKpis && <div className="form-success page-alert" role="status">{notice}</div>}
+        {showKpis && editing ? (
+          <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
+        ) : showForm ? (
+          <ProcessForm
            draft={draft}
            setDraft={setDraft}
            users={users}
@@ -295,9 +315,10 @@ export function ProcessesPage({ user }: { user: User }) {
            editing={Boolean(editing)}
            readOnly={readOnly}
            saving={saving}
-           error={formError}
-           onSubmit={(event) => void saveProcess(event)}
-           onClose={closeForm}
+            error={formError}
+            onSubmit={(event) => void saveProcess(event)}
+            onClose={closeForm}
+            onOpenKpis={editing ? () => openKpis(editing) : undefined}
          />
        ) : <>
        <section className="metric-grid">
