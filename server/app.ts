@@ -327,9 +327,24 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   name: process.name,
   code: process.code,
   type: process.type,
+  version: process.version,
+  frequency: process.frequency,
+  executionLevel: process.executionLevel,
+  organizationalArea: process.organizationalArea,
+  businessLine: process.businessLine,
+  supervision: process.supervision,
+  deliveryMethod: process.deliveryMethod,
+  executionType: process.executionType,
   objective: process.objective,
   description: process.description,
   status: process.status,
+  thirdPartyProvided: process.thirdPartyProvided,
+  critical: process.critical,
+  cashMovement: process.cashMovement,
+  contingencyPlan: process.contingencyPlan,
+  taxOperations: process.taxOperations,
+  affectsAccounting: process.affectsAccounting,
+  personalData: process.personalData,
   responsible: process.responsible,
   createdAt: process.createdAt,
   updatedAt: process.updatedAt,
@@ -933,10 +948,25 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         companyId,
         name: parsed.data.name,
         type: parsed.data.type,
+        version: parsed.data.version || null,
+        frequency: parsed.data.frequency || null,
+        executionLevel: parsed.data.executionLevel || null,
+        organizationalArea: parsed.data.organizationalArea || null,
+        businessLine: parsed.data.businessLine || null,
+        supervision: parsed.data.supervision || null,
+        deliveryMethod: parsed.data.deliveryMethod || null,
+        executionType: parsed.data.executionType || null,
         objective: parsed.data.objective,
         description: parsed.data.description || null,
         code: parsed.data.code || null,
         status: parsed.data.status ?? 'ACTIVE',
+        thirdPartyProvided: parsed.data.thirdPartyProvided ?? false,
+        critical: parsed.data.critical ?? false,
+        cashMovement: parsed.data.cashMovement ?? false,
+        contingencyPlan: parsed.data.contingencyPlan ?? false,
+        taxOperations: parsed.data.taxOperations ?? false,
+        affectsAccounting: parsed.data.affectsAccounting ?? false,
+        personalData: parsed.data.personalData ?? false,
         responsibleId: responsible.responsibleId,
       },
       include: processInclude,
@@ -975,14 +1005,29 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         return
       }
     }
-    const data: { name?: string; type?: 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'; objective?: string; description?: string | null; code?: string | null; status?: 'ACTIVE' | 'INACTIVE'; responsibleId?: string | null } = {}
+    const data: Prisma.ProcessUncheckedUpdateInput = {}
     if (parsed.data.name !== undefined) data.name = parsed.data.name
     if (parsed.data.type !== undefined) data.type = parsed.data.type
     if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
     if (parsed.data.description !== undefined) data.description = parsed.data.description || null
     if (parsed.data.code !== undefined) data.code = parsed.data.code || null
+    if (parsed.data.version !== undefined) data.version = parsed.data.version || null
+    if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency || null
+    if (parsed.data.executionLevel !== undefined) data.executionLevel = parsed.data.executionLevel || null
+    if (parsed.data.organizationalArea !== undefined) data.organizationalArea = parsed.data.organizationalArea || null
+    if (parsed.data.businessLine !== undefined) data.businessLine = parsed.data.businessLine || null
+    if (parsed.data.supervision !== undefined) data.supervision = parsed.data.supervision || null
+    if (parsed.data.deliveryMethod !== undefined) data.deliveryMethod = parsed.data.deliveryMethod || null
+    if (parsed.data.executionType !== undefined) data.executionType = parsed.data.executionType || null
     if (parsed.data.status !== undefined) data.status = parsed.data.status
     if (parsed.data.responsibleId !== undefined) data.responsibleId = parsed.data.responsibleId
+    if (parsed.data.thirdPartyProvided !== undefined) data.thirdPartyProvided = parsed.data.thirdPartyProvided
+    if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
+    if (parsed.data.cashMovement !== undefined) data.cashMovement = parsed.data.cashMovement
+    if (parsed.data.contingencyPlan !== undefined) data.contingencyPlan = parsed.data.contingencyPlan
+    if (parsed.data.taxOperations !== undefined) data.taxOperations = parsed.data.taxOperations
+    if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
+    if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
     const process = await db.process.update({ where: { id: existing.id }, data, include: processInclude })
     response.json({ process: processView(process) })
   }))

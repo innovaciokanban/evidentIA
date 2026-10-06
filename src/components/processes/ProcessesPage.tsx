@@ -7,9 +7,16 @@ import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
 import { ArrowDownIcon, ArrowRightIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
+import { askConfirm } from '../ui/useConfirm'
 
-const categoryOf: Record<ProcessType, ProcessCategory> = { STRATEGIC: 'estrategico', MISSIONAL: 'misional', SUPPORT: 'apoyo' }
+export const categoryOf: Record<ProcessType, ProcessCategory> = { STRATEGIC: 'estrategico', MISSIONAL: 'misional', SUPPORT: 'apoyo' }
 const visualStatusOf: Record<Process['status'], ProcessStatus> = { ACTIVE: 'active', INACTIVE: 'paused' }
+
+export function groupProcesses(processes: Process[]): Record<ProcessCategory, Process[]> {
+  const grouped: Record<ProcessCategory, Process[]> = { estrategico: [], misional: [], apoyo: [] }
+  for (const process of processes) grouped[categoryOf[process.type]].push(process)
+  return grouped
+}
 
 type ProcessBand = {
   key: ProcessCategory
@@ -34,7 +41,51 @@ const emptyProcessDraft: ProcessDraft = {
   code: '',
   responsibleId: '',
   companyId: '',
+  version: '1.0',
+  frequency: '',
+  executionLevel: '',
+  organizationalArea: '',
+  businessLine: '',
+  supervision: '',
+  deliveryMethod: '',
+  executionType: '',
+  status: 'ACTIVE',
+  updatedAt: null,
+  thirdPartyProvided: false,
+  critical: false,
+  cashMovement: false,
+  contingencyPlan: false,
+  taxOperations: false,
+  affectsAccounting: false,
+  personalData: false,
 }
+
+const draftFromProcess = (process: Process): ProcessDraft => ({
+  name: process.name,
+  type: process.type,
+  objective: process.objective,
+  description: process.description ?? '',
+  code: process.code ?? '',
+  responsibleId: process.responsible?.id ?? '',
+  companyId: process.companyId,
+  version: process.version ?? '',
+  frequency: process.frequency ?? '',
+  executionLevel: process.executionLevel ?? '',
+  organizationalArea: process.organizationalArea ?? '',
+  businessLine: process.businessLine ?? '',
+  supervision: process.supervision ?? '',
+  deliveryMethod: process.deliveryMethod ?? '',
+  executionType: process.executionType ?? '',
+  status: process.status,
+  updatedAt: process.updatedAt,
+  thirdPartyProvided: process.thirdPartyProvided,
+  critical: process.critical,
+  cashMovement: process.cashMovement,
+  contingencyPlan: process.contingencyPlan,
+  taxOperations: process.taxOperations,
+  affectsAccounting: process.affectsAccounting,
+  personalData: process.personalData,
+})
 
 export function ProcessesPage({ user }: { user: User }) {
   const canCreate = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
@@ -44,18 +95,24 @@ export function ProcessesPage({ user }: { user: User }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [formError, setFormError] = useState('')
+  const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<Process | null>(null)
+  const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
 
-  const loadProcesses = useCallback(async () => {
+  const loadProcesses = useCallback(async (): Promise<boolean> => {
     setLoading(true)
     setLoadError('')
     try {
       const result = await api<{ processes: Process[] }>('/processes')
       setProcesses(result.processes)
-    } catch {
+      return true
+    } catch (requestError) {
+      console.error('[processes] failed to load processes', requestError)
       setLoadError('No pudimos cargar los procesos.')
+      return false
     } finally {
       setLoading(false)
     }
@@ -93,15 +150,50 @@ export function ProcessesPage({ user }: { user: User }) {
   function startCreate(type: ProcessType = 'MISSIONAL') {
     if (!canCreate) return
     setFormError('')
+    setNotice('')
+    setEditing(null)
+    setReadOnly(false)
     setDraft({ ...emptyProcessDraft, type, companyId: draft.companyId || user.companyId || companies[0]?.id || '' })
     setShowForm(true)
     void ensureUsers()
+  }
+
+  function startEdit(process: Process) {
+    if (!canCreate) return
+    setFormError('')
+    setNotice('')
+    setEditing(process)
+    setReadOnly(false)
+    setDraft(draftFromProcess(process))
+    setShowForm(true)
+    void ensureUsers()
+  }
+
+  function openProcess(process: Process) {
+    if (canCreate) {
+      startEdit(process)
+      return
+    }
+    setFormError('')
+    setNotice('')
+    setEditing(process)
+    setReadOnly(true)
+    setDraft(draftFromProcess(process))
+    setShowForm(true)
+  }
+
+  function closeForm() {
+    setShowForm(false)
+    setEditing(null)
+    setReadOnly(false)
+    setFormError('')
   }
 
   async function saveProcess(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (saving) return
     setFormError('')
+    setNotice('')
     if (!draft.companyId) {
       setFormError('Selecciona una empresa para el proceso.')
       return
@@ -112,14 +204,35 @@ export function ProcessesPage({ user }: { user: User }) {
         name: draft.name,
         type: draft.type,
         objective: draft.objective,
-        description: draft.description.trim() || undefined,
-        code: draft.code.trim() || undefined,
+        description: draft.description.trim() || null,
+        code: draft.code.trim() || null,
         responsibleId: draft.responsibleId || null,
-        companyId: draft.companyId,
+        version: draft.version.trim() || null,
+        frequency: draft.frequency.trim() || null,
+        executionLevel: draft.executionLevel.trim() || null,
+        organizationalArea: draft.organizationalArea.trim() || null,
+        businessLine: draft.businessLine.trim() || null,
+        supervision: draft.supervision.trim() || null,
+        deliveryMethod: draft.deliveryMethod.trim() || null,
+        executionType: draft.executionType.trim() || null,
+        status: draft.status,
+        thirdPartyProvided: draft.thirdPartyProvided,
+        critical: draft.critical,
+        cashMovement: draft.cashMovement,
+        contingencyPlan: draft.contingencyPlan,
+        taxOperations: draft.taxOperations,
+        affectsAccounting: draft.affectsAccounting,
+        personalData: draft.personalData,
       }
-      const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify(payload) })
-      setProcesses((current) => [result.process, ...current])
-      setShowForm(false)
+      const wasEditing = Boolean(editing)
+      if (editing) {
+        await api<{ process: Process }>(`/processes/${editing.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      } else {
+        await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, companyId: draft.companyId }) })
+      }
+      closeForm()
+      const reloaded = await loadProcesses()
+      setNotice(reloaded ? `Proceso ${wasEditing ? 'actualizado' : 'creado'} correctamente.` : 'El proceso se guardó, pero no pudimos actualizar el mapa.')
     } catch (requestError) {
       setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el proceso.')
     } finally {
@@ -127,8 +240,22 @@ export function ProcessesPage({ user }: { user: User }) {
     }
   }
 
-  const grouped: Record<ProcessCategory, Process[]> = { estrategico: [], misional: [], apoyo: [] }
-  for (const process of processes) grouped[categoryOf[process.type]].push(process)
+  async function removeProcess(process: Process) {
+    if (!canCreate) return
+    const confirmed = await askConfirm({ title: 'Eliminar proceso', message: `Se eliminará «${process.name}». Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
+    if (!confirmed) return
+    setFormError('')
+    setNotice('')
+    try {
+      await api(`/processes/${process.id}`, { method: 'DELETE' })
+      const reloaded = await loadProcesses()
+      setNotice(reloaded ? 'Proceso eliminado correctamente.' : 'El proceso se eliminó, pero no pudimos actualizar el mapa.')
+    } catch (requestError) {
+      setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el proceso.')
+    }
+  }
+
+  const grouped = groupProcesses(processes)
 
   const summary = [
     { key: 'total', icon: '▤', label: 'Procesos', value: processes.length, tone: 'blue', hint: 'Total de procesos' },
@@ -145,7 +272,7 @@ export function ProcessesPage({ user }: { user: User }) {
           <h1>Gestión por procesos</h1>
           <p className="muted">Gestiona, caracteriza y mejora los procesos de tu organización.</p>
         </div>
-        <div className="page-actions">
+       {!showForm && <div className="page-actions">
           <button
             type="button"
             className="button primary"
@@ -155,10 +282,25 @@ export function ProcessesPage({ user }: { user: User }) {
           >
             + Nuevo proceso
           </button>
-        </div>
-      </div>
+         </div>}
+       </div>
 
-      <section className="metric-grid">
+       {notice && !showForm && <div className="form-success page-alert" role="status">{notice}</div>}
+       {showForm ? (
+         <ProcessForm
+           draft={draft}
+           setDraft={setDraft}
+           users={users}
+           companies={companies}
+           editing={Boolean(editing)}
+           readOnly={readOnly}
+           saving={saving}
+           error={formError}
+           onSubmit={(event) => void saveProcess(event)}
+           onClose={closeForm}
+         />
+       ) : <>
+       <section className="metric-grid">
         {summary.map((item) => (
           <KPICard key={item.key} icon={item.icon} label={item.label} value={item.value} tone={item.tone} hint={item.hint} />
         ))}
@@ -201,12 +343,14 @@ export function ProcessesPage({ user }: { user: User }) {
                         {processIndex > 0 && <span className="process-arrow"><ArrowRightIcon size={16} /></span>}
                         <ProcessCard
                           name={process.name}
+                          code={process.code}
+                          objective={process.objective}
                           description={process.description || process.objective}
                           category={band.key}
-                          indicators={0}
-                          risks={0}
                           status={visualStatusOf[process.status]}
                           responsible={process.responsible?.name ?? null}
+                          onOpen={() => openProcess(process)}
+                          onDelete={canCreate ? () => void removeProcess(process) : undefined}
                         />
                       </Fragment>
                     ))}
@@ -228,20 +372,8 @@ export function ProcessesPage({ user }: { user: User }) {
             ))}
           </div>
         )}
-      </section>
-
-      {showForm && (
-        <ProcessForm
-          draft={draft}
-          setDraft={setDraft}
-          users={users}
-          companies={companies}
-          saving={saving}
-          error={formError}
-          onSubmit={(event) => void saveProcess(event)}
-          onClose={() => { setShowForm(false); setFormError('') }}
-        />
-      )}
+       </section>
+       </>}
     </div>
   )
 }

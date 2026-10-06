@@ -1,4 +1,4 @@
-import { ActivityIcon, ArrowRightIcon, PlusIcon, RiskIcon, WorkflowIcon } from './ProcessIcons'
+import { ArrowRightIcon, PlusIcon, WorkflowIcon } from './ProcessIcons'
 
 /** Categoría del proceso dentro del mapa: define el tono visual de la tarjeta. */
 export type ProcessCategory = 'estrategico' | 'misional' | 'apoyo'
@@ -8,36 +8,42 @@ export type ProcessStatus = 'active' | 'draft' | 'paused'
 
 export type ProcessCardProps = {
   name: string
+  code: string | null
+  objective: string
   description: string
   category: ProcessCategory
-  indicators: number
-  risks: number
   status: ProcessStatus
   responsible: string | null
+  onOpen: () => void
+  onDelete?: () => void
 }
 
 const statusLabels: Record<ProcessStatus, string> = { active: 'Activo', draft: 'Borrador', paused: 'En pausa' }
 
-export function ProcessCard({ name, description, category, indicators, risks, status, responsible }: ProcessCardProps) {
+export function ProcessCard({ name, code, objective, description, category, status, responsible, onOpen, onDelete }: ProcessCardProps) {
   return (
     <article className={`process-card ${category}`}>
       <div className="process-card-head">
         <span className="process-card-icon"><WorkflowIcon /></span>
         <div className="process-card-copy">
-          <h4>{name}</h4>
+          <div className="process-card-title"><h4>{name}</h4>{code && <span className="process-card-code">{code}</span>}</div>
           <p className="process-card-desc">{description}</p>
-          <p className="process-card-owner">Responsable · {responsible ?? 'Sin asignar'}</p>
         </div>
       </div>
-      <div className="process-card-stats">
-        <span className="process-stat"><ActivityIcon />{indicators} indicadores</span>
-        <span className="process-stat risk"><RiskIcon />{risks} {risks === 1 ? 'riesgo' : 'riesgos'}</span>
+      <div className="process-card-detail">
+        <span>Responsable</span>
+        <strong>{responsible ?? 'Sin asignar'}</strong>
+      </div>
+      <div className="process-card-detail objective">
+        <span>Objetivo</span>
+        <p>{objective}</p>
       </div>
       <div className="process-card-foot">
         <span className={`process-status ${status}`}>{statusLabels[status]}</span>
-        <button type="button" className="process-card-link" disabled title="Próximamente podrás abrir el detalle del proceso.">
-          Ver proceso <ArrowRightIcon size={13} />
-        </button>
+        <div className="process-card-actions">
+          <button type="button" className="process-card-link" onClick={onOpen}>Ver proceso <ArrowRightIcon size={13} /></button>
+          {onDelete && <button type="button" className="process-card-delete" onClick={onDelete}>Eliminar</button>}
+        </div>
       </div>
     </article>
   )
@@ -49,7 +55,7 @@ export type AddProcessCardProps = {
   title?: string
 }
 
-/** Cierre visual de cada banda del mapa. Al pulsarlo se abre el formulario del proceso nuevo. */
+/** Cierre visual de cada banda del mapa. Al pulsarlo se abre la ficha embebida del proceso. */
 export function AddProcessCard({ onClick, disabled = false, title }: AddProcessCardProps) {
   return (
     <button type="button" className="process-add-card" onClick={onClick} disabled={disabled} title={title}>

@@ -58,3 +58,26 @@ export const strategyTaskProgressLabel = (progress: StrategyTaskProgress): strin
   const adjective = progress.total === 1 ? 'completada' : 'completadas'
   return `${progress.completed} de ${progress.total} ${noun} ${adjective}`
 }
+
+/** Lo mínimo que necesita el avance global de una estrategia: su plan de tareas. */
+export type StrategyTaskSource = { actionPlan: StrategyTaskPlan | null | undefined }
+
+/**
+ * Avance global de tareas: suma las tareas REALES de las estrategias que la pantalla ya considera
+ * ponderadas (el filtro se aplica afuera, con la misma condición del indicador "Ponderadas"), nunca
+ * el promedio de los porcentajes individuales: 1 de 2 más 9 de 10 es 10 de 12 (83%), no 70%.
+ *
+ * Se recalcula en cada llamada con los datos actuales de `ActionItem.status`, así que un cambio
+ * hecho en Tickets o una ponderación nueva se refleja al recargar Ponderación. Sin tareas el
+ * progreso queda en 0 (nunca 100%) para no dividir entre cero.
+ */
+export const globalStrategyTaskProgress = (strategies: readonly StrategyTaskSource[]): StrategyTaskProgress => {
+  const totals = strategies.reduce(
+    (accumulated, strategy) => {
+      const progress = strategyTaskProgress(strategyTaskViews(strategy.actionPlan))
+      return { total: accumulated.total + progress.total, completed: accumulated.completed + progress.completed }
+    },
+    { total: 0, completed: 0 },
+  )
+  return { ...totals, percent: totals.total === 0 ? 0 : Math.round((totals.completed / totals.total) * 100) }
+}

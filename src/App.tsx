@@ -11,7 +11,7 @@ import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
-import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
+import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -1177,10 +1177,11 @@ async function strategySourceRef(description: string): Promise<string> {
 // Una sola carga de GET /diagnostics/:id/strategies alimenta la pantalla completa: trae las
 // estrategias de IA, los cruces y las sugerencias de Checky, cada una con la ponderación que el
 // servidor ya guardó. weightingLevels es el valor de la escala que envía el propio backend.
-function useDiagnosticStrategies(diagnosticId: string) {
-  const [strategies, setStrategies] = useState<DiagnosticStrategy[]>([])
+function useDiagnosticStrategies(diagnosticId: string, initialStrategies?: DiagnosticStrategy[]) {
+  const [strategies, setStrategies] = useState<DiagnosticStrategy[]>(initialStrategies ?? [])
   const [levelScores, setLevelScores] = useState<Record<WeightingLevel, number> | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Solo las pruebas pasan estrategias iniciales: en la app real la carga siempre arranca pendiente.
+  const [loading, setLoading] = useState(initialStrategies === undefined)
   const [loadError, setLoadError] = useState('')
   const loadStrategies = useCallback(async () => {
     setLoading(true)
@@ -1407,8 +1408,8 @@ function StrategyTasksModal({ strategy, drafts, users, error, saving, onDraftsCh
   )
 }
 
-function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnostic; canValue: boolean }) {
-  const { strategies, setStrategies, levelScores, loading, loadError, reload } = useDiagnosticStrategies(diagnostic.id)
+export function StrategyWeightingScreen({ diagnostic, canValue, initialStrategies }: { diagnostic: Diagnostic; canValue: boolean; initialStrategies?: DiagnosticStrategy[] }) {
+  const { strategies, setStrategies, levelScores, loading, loadError, reload } = useDiagnosticStrategies(diagnostic.id, initialStrategies)
   const [drafts, setDrafts] = useState<Record<string, CrossWeightingCriteria>>({})
   const [states, setStates] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -1424,6 +1425,9 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
   const accepted = strategies
   const valued = useMemo(() => accepted.filter((strategy) => strategy.weighting), [accepted])
   const unweighted = useMemo(() => accepted.filter((strategy) => !strategy.weighting), [accepted])
+  // Avance global de tareas: solo las estrategias que ya están ponderadas (mismo `valued` del
+  // indicador "Ponderadas"), sumando tareas reales; nunca el promedio de los porcentajes.
+  const globalTasks = useMemo(() => globalStrategyTaskProgress(valued), [valued])
   // Cada valorada va al grupo de la banda que le dio el backend, sin recalcularla aquí.
   const groups = useMemo(() => weightingBands.map((band) => ({
     band,
@@ -1510,6 +1514,25 @@ function StrategyWeightingScreen({ diagnostic, canValue }: { diagnostic: Diagnos
         <span className="weighting-scale-note">Ponderado de 1 a 5 y banda calculados por el servidor</span>
       </div>
       {loadError && <div className="form-error" role="alert">{loadError}</div>}
+      {/* Fila nueva, siempre antes de la fila de resumen (Estrategias aceptadas / Ponderadas /
+          Avance), que queda intacta. Suma las tareas reales de las estrategias ponderadas con el
+          mismo filtro que el indicador "Ponderadas" y se recalcula en cada render. */}
+      {!loading && (
+        <div className="swz-global-tasks" role="group" aria-label="Avance global de tareas">
+          <div className="swz-global-tasks-head">
+            <span className="swz-summary-icon" aria-hidden="true">☑</span>
+            <span className="swz-global-tasks-title">AVANCE GLOBAL DE TAREAS</span>
+            <strong className="swz-global-tasks-percent">{globalTasks.percent}%</strong>
+          </div>
+          <div className="swz-global-tasks-body">
+            <span className="swz-global-tasks-label">{strategyTaskProgressLabel(globalTasks)}</span>
+            {globalTasks.total === 0 && <span className="swz-global-tasks-empty">Sin progreso</span>}
+            <span className="swz-global-tasks-bar" role="progressbar" aria-label={strategyTaskProgressLabel(globalTasks)} aria-valuenow={globalTasks.percent} aria-valuemin={0} aria-valuemax={100}>
+              <span className="swz-global-tasks-fill" style={{ width: `${globalTasks.percent}%` }} />
+            </span>
+          </div>
+        </div>
+      )}
       {loading ? <div className="inline-loading"><span className="loader" />Cargando estrategias...</div> : accepted.length === 0 ? (
         <EmptyState icon="◎" title="No hay estrategias aceptadas para ponderar" text="Acepta una sugerencia en Checky para habilitarla aquí." />
       ) : (

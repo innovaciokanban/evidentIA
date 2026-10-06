@@ -471,10 +471,25 @@ model Process {
   name          String
   code          String?
   type          ProcessType
+  version       String?
+  frequency     String?
+  executionLevel String?
+  organizationalArea String?
+  businessLine  String?
+  supervision   String?
+  deliveryMethod String?
+  executionType String?
   objective     String
   description   String?
   responsibleId String?
   status        ProcessStatus @default(ACTIVE)
+  thirdPartyProvided Boolean @default(false)
+  critical      Boolean       @default(false)
+  cashMovement  Boolean       @default(false)
+  contingencyPlan Boolean      @default(false)
+  taxOperations Boolean       @default(false)
+  affectsAccounting Boolean    @default(false)
+  personalData  Boolean       @default(false)
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
   createdAt     DateTime      @default(now())

@@ -8,7 +8,7 @@ import { AIService, AIServiceError, resolveWeightingBand, type CheckyContext } f
 import { dashboardScopesFor } from './dashboard-service.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { strategySourceRef } from './strategy-weighting-service.js'
-import { aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema } from './validation.js'
+import { aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema } from './validation.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -23,6 +23,13 @@ const ticket = {
 const company = {
   id: companyId, name: 'Acme Consultores', identification: '900123456-7', industry: 'Servicios', description: 'Empresa de consultoría estratégica',
   createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-02'), users: [member],
+}
+const processFixture = {
+  id: 'cmprocess000000000000000001', companyId: companyId, name: 'Gestión Comercial', code: 'PROC-01', type: 'MISSIONAL' as const,
+  version: null, frequency: null, executionLevel: null, organizationalArea: null, businessLine: null, supervision: null, deliveryMethod: null, executionType: null,
+  objective: 'Gestionar las oportunidades comerciales', description: 'Proceso existente', status: 'ACTIVE' as const,
+  thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false, affectsAccounting: false, personalData: false,
+  responsibleId: member.id, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-02'),
 }
 const diagnostic = {
   id: 'cmdiagnostic000000000000001', companyId: company.id, title: 'Diagnóstico inicial', description: 'Revisión general de la operación', status: 'DRAFT' as const, createdById: member.id,
@@ -161,6 +168,7 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   let storedCheckySessionOwners: Record<string, string> = { [checkySessionFixture.id]: diagnostic.id }
   let storedCrossWeightings: typeof crossWeightingFixture[] = []
   let storedStrategyWeightings: typeof strategyWeightingFixture[] = []
+  let storedProcesses: typeof processFixture[] = [processFixture]
   const ownSwotItem = (item: { id: string; type: string; description: string }) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04'), swot: { diagnosticId: diagnostic.id } })
   const storedSwotItems = [
     ownSwotItem(checkySwotItemFixtures.strength),
@@ -254,6 +262,26 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       update: vi.fn(async () => ({ ...company, name: 'Acme Actualizada', users: company.users })),
       delete: vi.fn(),
       count: vi.fn(async () => 1),
+    },
+    process: {
+      findMany: vi.fn(async ({ where }: { where?: { companyId?: string } } = {}) => storedProcesses.filter((item) => !where?.companyId || item.companyId === where.companyId).map((item) => ({ ...item, company: { id: item.companyId }, responsible: item.responsibleId === member.id ? { id: member.id, name: member.name } : null }))),
+      findFirst: vi.fn(async ({ where }: { where: { companyId: string; name: string; NOT?: { id: string } } }) => storedProcesses.find((item) => item.companyId === where.companyId && item.name === where.name && item.id !== where.NOT?.id) ? { id: 'duplicate' } : null),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const item = storedProcesses.find((process) => process.id === where.id)
+        return item ? { ...item, company: { id: item.companyId }, responsible: item.responsibleId === member.id ? { id: member.id, name: member.name } : null } : null
+      }),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const created = { ...processFixture, ...data, id: `cmprocesscreated${String(storedProcesses.length).padStart(10, '0')}`, createdAt: new Date('2026-02-01'), updatedAt: new Date('2026-02-01') } as typeof processFixture
+        storedProcesses = [created, ...storedProcesses]
+        return { ...created, company: { id: created.companyId }, responsible: created.responsibleId === member.id ? { id: member.id, name: member.name } : null }
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const current = storedProcesses.find((item) => item.id === where.id) ?? processFixture
+        const updated = { ...current, ...data, updatedAt: new Date('2026-02-02') } as typeof processFixture
+        storedProcesses = storedProcesses.map((item) => item.id === where.id ? updated : item)
+        return { ...updated, company: { id: updated.companyId }, responsible: updated.responsibleId === member.id ? { id: member.id, name: member.name } : null }
+      }),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => { storedProcesses = storedProcesses.filter((item) => item.id !== where.id); return { id: where.id } }),
     },
     qualityDiagnostic: {
       create: vi.fn(async () => ({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: [] } })),
@@ -440,6 +468,9 @@ describe('validation schemas', () => {
     expect(diagnosticUpdateSchema.safeParse({}).success).toBe(false)
     expect(swotItemCreateSchema.safeParse({ type: 'UNKNOWN', description: '' }).success).toBe(false)
     expect(swotItemUpdateSchema.safeParse({}).success).toBe(false)
+    expect(processCreateSchema.safeParse({ name: 'Proceso válido', type: 'MISSIONAL', objective: 'Objetivo válido', version: '1.0', critical: true }).success).toBe(true)
+    expect(processUpdateSchema.safeParse({ frequency: null, personalData: true }).success).toBe(true)
+    expect(processUpdateSchema.safeParse({}).success).toBe(false)
     expect(aiAnalysisSchema.safeParse(aiResult).success).toBe(true)
     expect(aiAnalysisSchema.safeParse({ ...aiResult, recommendations: [{ title: 'invalid' }] }).success).toBe(false)
   })
@@ -527,6 +558,8 @@ describe('authentication and authorization API', () => {
       request(app).get('/api/users'),
       request(app).get('/api/tickets'),
       request(app).get('/api/dashboard'),
+      request(app).get('/api/processes'),
+      request(app).post('/api/processes'),
       request(app).get('/api/companies'),
       request(app).get(`/api/companies/${company.id}/diagnostics`),
       request(app).get(`/api/diagnostics/${diagnostic.id}`),
@@ -546,7 +579,7 @@ describe('authentication and authorization API', () => {
       request(app).patch(`/api/action-items/${actionItem.id}`),
       request(app).delete(`/api/action-items/${actionItem.id}`),
     ])
-    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401])
+    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 401])
   })
 
   it('invalidates the session and cookie on logout', async () => {
@@ -722,6 +755,61 @@ describe('tickets API', () => {
     const list = await agent.get('/api/tickets?status=OPEN')
     expect(list.status).toBe(200)
     expect(list.body.tickets).toHaveLength(1)
+  })
+})
+
+describe('processes API', () => {
+  it('creates, lists and updates a process with its characterization fields', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const created = await agent.post('/api/processes').send({
+      name: 'Gestión de proveedores', type: 'SUPPORT', objective: 'Asegurar proveedores adecuados', companyId: company.id,
+      version: '2.1', frequency: 'Mensual', executionLevel: 'Operativo', organizationalArea: 'Compras', businessLine: 'Abastecimiento',
+      supervision: 'Jefatura administrativa', deliveryMethod: 'Plataforma interna', executionType: 'Interna', responsibleId: member.id,
+      critical: true, personalData: true,
+    })
+    expect(created.status).toBe(201)
+    expect(created.body.process).toMatchObject({ version: '2.1', frequency: 'Mensual', critical: true, personalData: true })
+
+    const listed = await agent.get('/api/processes')
+    expect(listed.status).toBe(200)
+    expect(listed.body.processes).toHaveLength(2)
+    expect(listed.body.processes.some((item: { name: string }) => item.name === 'Gestión de proveedores')).toBe(true)
+
+    const updated = await agent.patch(`/api/processes/${created.body.process.id}`).send({ type: 'STRATEGIC', frequency: 'Semanal', critical: false })
+    expect(updated.status).toBe(200)
+    expect(updated.body.process).toMatchObject({ type: 'STRATEGIC', frequency: 'Semanal', critical: false, personalData: true })
+
+    expect((await agent.delete(`/api/processes/${created.body.process.id}`)).status).toBe(204)
+    const afterDelete = await agent.get('/api/processes')
+    expect(afterDelete.body.processes.some((item: { id: string }) => item.id === created.body.process.id)).toBe(false)
+  })
+
+  it('keeps existing process rows readable with safe default attributes', async () => {
+    const agent = request.agent(createApp(makeDb('COMPANY_USER')))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const response = await agent.get('/api/processes')
+    expect(response.status).toBe(200)
+    expect(response.body.processes[0]).toMatchObject({ name: processFixture.name, critical: false, personalData: false })
+  })
+
+  it('allows company admins to write only for their company and keeps company users read-only', async () => {
+    const companyAdmin = request.agent(createApp(makeDb('COMPANY_ADMIN')))
+    await companyAdmin.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await companyAdmin.post('/api/processes').send({ name: 'Proceso propio', type: 'SUPPORT', objective: 'Objetivo propio' })).status).toBe(201)
+
+    const companyUser = request.agent(createApp(makeDb('COMPANY_USER')))
+    await companyUser.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await companyUser.post('/api/processes').send({ name: 'No permitido', type: 'SUPPORT', objective: 'Objetivo' })).status).toBe(403)
+    expect((await companyUser.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(403)
+    expect((await companyUser.delete(`/api/processes/${processFixture.id}`)).status).toBe(403)
+
+    const foreignAdmin = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, otherCompanyId)))
+    await foreignAdmin.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await foreignAdmin.get('/api/processes')).body.processes).toHaveLength(0)
+    expect((await foreignAdmin.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(404)
   })
 })
 

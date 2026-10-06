@@ -136,7 +136,8 @@ export type DiagnosticStrategy = {
   weighting: StrategyWeighting | null
   weightedScore: number | null
   weightingBand: StrategyBand | null
-  taskPlan: StrategyTaskPlan | null
+  /** Plan de acción asociado a esta estrategia, con sus tareas. Lo devuelve el GET de estrategias. */
+  actionPlan: StrategyTaskPlan | null
 }
 export type StrategyTaskPlan = {
   id: string
@@ -147,6 +148,7 @@ export type StrategyTaskPlan = {
   items: Array<{
     id: string
     title: string
+    status: ActionItemStatus
     responsibleId: string | null
     responsible: Pick<User, 'id' | 'name'> | null
     dueDate: string | null
@@ -271,9 +273,24 @@ export type Process = {
   name: string
   code: string | null
   type: ProcessType
+  version: string | null
+  frequency: string | null
+  executionLevel: string | null
+  organizationalArea: string | null
+  businessLine: string | null
+  supervision: string | null
+  deliveryMethod: string | null
+  executionType: string | null
   objective: string
   description: string | null
   status: ProcessState
+  thirdPartyProvided: boolean
+  critical: boolean
+  cashMovement: boolean
+  contingencyPlan: boolean
+  taxOperations: boolean
+  affectsAccounting: boolean
+  personalData: boolean
   responsible: Pick<User, 'id' | 'name'> | null
   createdAt: string
   updatedAt: string

@@ -1,4 +1,4 @@
-import type { CheckySuggestionStatus, CrossOrigin, CrossType } from '@prisma/client'
+import type { ActionItemStatus, CheckySuggestionStatus, CrossOrigin, CrossType } from '@prisma/client'
 import type { CheckyWeightingBand } from './ai-service.js'
 import { normalizeStrategyText, strategySourceRef, strategyWeightingView, type StoredStrategyWeighting, type StoredWeighting, type StrategyWeightingView } from './strategy-weighting-service.js'
 
@@ -29,6 +29,7 @@ export type StrategyTaskPlan = {
   items: Array<{
     id: string
     title: string
+    status: ActionItemStatus
     responsibleId: string | null
     responsible: { id: string; name: string } | null
     dueDate: Date | null

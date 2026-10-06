@@ -79,6 +79,8 @@ export const impactSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
 export const processTypeSchema = z.enum(['STRATEGIC', 'MISSIONAL', 'SUPPORT'])
 export const processStatusSchema = z.enum(['ACTIVE', 'INACTIVE'])
 
+const processReferenceFieldSchema = z.string().trim().max(120)
+
 /**
  * Alta de un proceso. El nombre y el objetivo no admiten solo espacios: el `trim` va antes del
  * `min`, de modo que "   " no sirve para pasar la validación. `companyId` es opcional porque solo
@@ -89,8 +91,23 @@ export const processCreateSchema = z.object({
   name: z.string().trim().min(3).max(120),
   type: processTypeSchema,
   objective: z.string().trim().min(3).max(2000),
-  description: z.string().trim().max(5000).optional(),
-  code: z.string().trim().max(40).optional(),
+  description: z.string().trim().max(5000).nullable().optional(),
+  code: z.string().trim().max(40).nullable().optional(),
+  version: processReferenceFieldSchema.nullable().optional(),
+  frequency: processReferenceFieldSchema.nullable().optional(),
+  executionLevel: processReferenceFieldSchema.nullable().optional(),
+  organizationalArea: processReferenceFieldSchema.nullable().optional(),
+  businessLine: processReferenceFieldSchema.nullable().optional(),
+  supervision: processReferenceFieldSchema.nullable().optional(),
+  deliveryMethod: processReferenceFieldSchema.nullable().optional(),
+  executionType: processReferenceFieldSchema.nullable().optional(),
+  thirdPartyProvided: z.boolean().optional(),
+  critical: z.boolean().optional(),
+  cashMovement: z.boolean().optional(),
+  contingencyPlan: z.boolean().optional(),
+  taxOperations: z.boolean().optional(),
+  affectsAccounting: z.boolean().optional(),
+  personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
   responsibleId: z.string().cuid().nullable().optional(),
   companyId: z.string().cuid().optional(),
@@ -101,8 +118,23 @@ export const processUpdateSchema = z.object({
   name: z.string().trim().min(3).max(120).optional(),
   type: processTypeSchema.optional(),
   objective: z.string().trim().min(3).max(2000).optional(),
-  description: z.string().trim().max(5000).optional(),
-  code: z.string().trim().max(40).optional(),
+  description: z.string().trim().max(5000).nullable().optional(),
+  code: z.string().trim().max(40).nullable().optional(),
+  version: processReferenceFieldSchema.nullable().optional(),
+  frequency: processReferenceFieldSchema.nullable().optional(),
+  executionLevel: processReferenceFieldSchema.nullable().optional(),
+  organizationalArea: processReferenceFieldSchema.nullable().optional(),
+  businessLine: processReferenceFieldSchema.nullable().optional(),
+  supervision: processReferenceFieldSchema.nullable().optional(),
+  deliveryMethod: processReferenceFieldSchema.nullable().optional(),
+  executionType: processReferenceFieldSchema.nullable().optional(),
+  thirdPartyProvided: z.boolean().optional(),
+  critical: z.boolean().optional(),
+  cashMovement: z.boolean().optional(),
+  contingencyPlan: z.boolean().optional(),
+  taxOperations: z.boolean().optional(),
+  affectsAccounting: z.boolean().optional(),
+  personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
   responsibleId: z.string().cuid().nullable().optional(),
 }).refine(
