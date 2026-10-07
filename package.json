@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "tsx watch server/index.ts",
-    "build": "tsc -b && vite build && tsc -p tsconfig.server.build.json",
+    "build": "prisma generate && tsc -b && vite build && tsc -p tsconfig.server.build.json",
     "build:server": "tsc -p tsconfig.server.build.json",
     "start": "node dist-server/index.js",
     "lint": "eslint .",
