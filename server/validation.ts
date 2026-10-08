@@ -33,7 +33,7 @@ export const userCreateSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(128),
   role: roleSchema,
-  companyId: z.string().cuid().nullable().optional(),
+  companyId: z.union([z.string().cuid(), z.string().uuid()]).nullable().optional(),
 })
 
 export const userUpdateSchema = z.object({

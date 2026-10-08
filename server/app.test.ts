@@ -8,7 +8,7 @@ import { AIService, AIServiceError, resolveWeightingBand, type CheckyContext } f
 import { dashboardScopesFor } from './dashboard-service.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { strategySourceRef } from './strategy-weighting-service.js'
-import { aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema } from './validation.js'
+import { aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema, userCreateSchema } from './validation.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -473,6 +473,20 @@ describe('validation schemas', () => {
     expect(processUpdateSchema.safeParse({}).success).toBe(false)
     expect(aiAnalysisSchema.safeParse(aiResult).success).toBe(true)
     expect(aiAnalysisSchema.safeParse({ ...aiResult, recommendations: [{ title: 'invalid' }] }).success).toBe(false)
+  })
+
+  it('accepts a CUID company id when creating a user', () => {
+    expect(userCreateSchema.safeParse({ name: 'New user', email: 'new@test.local', password: 'Password123!', role: 'COMPANY_USER', companyId }).success).toBe(true)
+  })
+
+  it('accepts a UUID company id when creating a user', () => {
+    expect(userCreateSchema.safeParse({ name: 'New user', email: 'new@test.local', password: 'Password123!', role: 'COMPANY_USER', companyId: '550e8400-e29b-41d4-a716-446655440000' }).success).toBe(true)
+  })
+
+  it('rejects invalid and empty company ids when creating a user', () => {
+    const baseUser = { name: 'New user', email: 'new@test.local', password: 'Password123!', role: 'COMPANY_USER' as const }
+    expect(userCreateSchema.safeParse({ ...baseUser, companyId: 'not-an-id' }).success).toBe(false)
+    expect(userCreateSchema.safeParse({ ...baseUser, companyId: '' }).success).toBe(false)
   })
 })
 
