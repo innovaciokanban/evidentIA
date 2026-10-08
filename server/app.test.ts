@@ -26,7 +26,7 @@ const company = {
 }
 const processFixture = {
   id: 'cmprocess000000000000000001', companyId: companyId, name: 'Gestión Comercial', code: 'PROC-01', type: 'MISSIONAL' as const,
-  version: null, frequency: null, executionLevel: null, organizationalArea: null, businessLine: null, supervision: null, deliveryMethod: null, executionType: null,
+  version: null, frequency: null, organizationalArea: null, supervision: null, deliveryMethod: null, executionType: null,
   objective: 'Gestionar las oportunidades comerciales', description: 'Proceso existente', status: 'ACTIVE' as const,
   thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false, affectsAccounting: false, personalData: false,
   responsibleId: member.id, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-02'),
@@ -780,7 +780,7 @@ describe('processes API', () => {
 
     const created = await agent.post('/api/processes').send({
       name: 'Gestión de proveedores', type: 'SUPPORT', objective: 'Asegurar proveedores adecuados', companyId: company.id,
-      version: '2.1', frequency: 'Mensual', executionLevel: 'Operativo', organizationalArea: 'Compras', businessLine: 'Abastecimiento',
+      version: '2.1', frequency: 'Mensual', organizationalArea: 'Compras',
       supervision: 'Jefatura administrativa', deliveryMethod: 'Plataforma interna', executionType: 'Interna', responsibleId: member.id,
       critical: true, personalData: true,
     })

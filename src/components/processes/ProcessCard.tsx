@@ -20,7 +20,7 @@ export type ProcessCardProps = {
 
 const statusLabels: Record<ProcessStatus, string> = { active: 'Activo', draft: 'Borrador', paused: 'En pausa' }
 
-export function ProcessCard({ name, code, objective, description, category, status, responsible, onOpen, onDelete }: ProcessCardProps) {
+export function ProcessCard({ name, code, description, category, status, onOpen, onDelete }: ProcessCardProps) {
   return (
     <article className={`process-card ${category}`}>
       <div className="process-card-head">
@@ -29,14 +29,6 @@ export function ProcessCard({ name, code, objective, description, category, stat
           <div className="process-card-title"><h4>{name}</h4>{code && <span className="process-card-code">{code}</span>}</div>
           <p className="process-card-desc">{description}</p>
         </div>
-      </div>
-      <div className="process-card-detail">
-        <span>Responsable</span>
-        <strong>{responsible ?? 'Sin asignar'}</strong>
-      </div>
-      <div className="process-card-detail objective">
-        <span>Objetivo</span>
-        <p>{objective}</p>
       </div>
       <div className="process-card-foot">
         <span className={`process-status ${status}`}>{statusLabels[status]}</span>

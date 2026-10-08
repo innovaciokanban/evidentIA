@@ -482,9 +482,7 @@ model Process {
   type          ProcessType
   version       String?
   frequency     String?
-  executionLevel String?
   organizationalArea String?
-  businessLine  String?
   supervision   String?
   deliveryMethod String?
   executionType String?

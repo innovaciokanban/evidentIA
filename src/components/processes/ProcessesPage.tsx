@@ -45,9 +45,7 @@ const emptyProcessDraft: ProcessDraft = {
   companyId: '',
   version: '1.0',
   frequency: '',
-  executionLevel: '',
   organizationalArea: '',
-  businessLine: '',
   supervision: '',
   deliveryMethod: '',
   executionType: '',
@@ -72,9 +70,7 @@ const draftFromProcess = (process: Process): ProcessDraft => ({
   companyId: process.companyId,
   version: process.version ?? '',
   frequency: process.frequency ?? '',
-  executionLevel: process.executionLevel ?? '',
   organizationalArea: process.organizationalArea ?? '',
-  businessLine: process.businessLine ?? '',
   supervision: process.supervision ?? '',
   deliveryMethod: process.deliveryMethod ?? '',
   executionType: process.executionType ?? '',
@@ -242,9 +238,7 @@ export function ProcessesPage({ user }: { user: User }) {
         responsibleId: draft.responsibleId || null,
         version: draft.version.trim() || null,
         frequency: draft.frequency.trim() || null,
-        executionLevel: draft.executionLevel.trim() || null,
         organizationalArea: draft.organizationalArea.trim() || null,
-        businessLine: draft.businessLine.trim() || null,
         supervision: draft.supervision.trim() || null,
         deliveryMethod: draft.deliveryMethod.trim() || null,
         executionType: draft.executionType.trim() || null,
@@ -397,7 +391,7 @@ export function ProcessesPage({ user }: { user: User }) {
                           name={process.name}
                           code={process.code}
                           objective={process.objective}
-                          description={process.description || process.objective}
+                          description={process.description || ''}
                           category={band.key}
                           status={visualStatusOf[process.status]}
                           responsible={process.responsible?.name ?? null}

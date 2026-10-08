@@ -8,7 +8,7 @@ type SipocKind = 'suppliers' | 'inputs' | 'outputs' | 'customers'
 type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
 type TestProcess = {
   id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null
-  executionLevel: string | null; organizationalArea: string | null; businessLine: string | null; supervision: string | null
+  organizationalArea: string | null; supervision: string | null
   deliveryMethod: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null
   status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; cashMovement: boolean; contingencyPlan: boolean
   taxOperations: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date
@@ -24,7 +24,7 @@ const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@sipoc.t
 
 const makeProcess = (id: string, owningCompanyId: string, name: string): TestProcess => ({
   id, companyId: owningCompanyId, name, code: name === 'Proceso principal' ? 'PROC-01' : 'PROC-02', type: 'MISSIONAL', version: '1.0', frequency: null,
-  executionLevel: null, organizationalArea: null, businessLine: null, supervision: null, deliveryMethod: null, executionType: null,
+  organizationalArea: null, supervision: null, deliveryMethod: null, executionType: null,
   objective: 'Gestionar el proceso', description: null, responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false,
   critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false, affectsAccounting: false, personalData: false,
   createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),

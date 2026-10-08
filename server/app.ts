@@ -329,9 +329,7 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   type: process.type,
   version: process.version,
   frequency: process.frequency,
-  executionLevel: process.executionLevel,
   organizationalArea: process.organizationalArea,
-  businessLine: process.businessLine,
   supervision: process.supervision,
   deliveryMethod: process.deliveryMethod,
   executionType: process.executionType,
@@ -1017,9 +1015,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         type: parsed.data.type,
         version: parsed.data.version || null,
         frequency: parsed.data.frequency || null,
-        executionLevel: parsed.data.executionLevel || null,
         organizationalArea: parsed.data.organizationalArea || null,
-        businessLine: parsed.data.businessLine || null,
         supervision: parsed.data.supervision || null,
         deliveryMethod: parsed.data.deliveryMethod || null,
         executionType: parsed.data.executionType || null,
@@ -1080,9 +1076,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.code !== undefined) data.code = parsed.data.code || null
     if (parsed.data.version !== undefined) data.version = parsed.data.version || null
     if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency || null
-    if (parsed.data.executionLevel !== undefined) data.executionLevel = parsed.data.executionLevel || null
     if (parsed.data.organizationalArea !== undefined) data.organizationalArea = parsed.data.organizationalArea || null
-    if (parsed.data.businessLine !== undefined) data.businessLine = parsed.data.businessLine || null
     if (parsed.data.supervision !== undefined) data.supervision = parsed.data.supervision || null
     if (parsed.data.deliveryMethod !== undefined) data.deliveryMethod = parsed.data.deliveryMethod || null
     if (parsed.data.executionType !== undefined) data.executionType = parsed.data.executionType || null

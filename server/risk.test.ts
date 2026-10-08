@@ -7,7 +7,7 @@ import { createApp } from './app.js'
 type ControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
 type StoredControl = { id: string; riskId: string; description: string; evaluation: ControlEvaluation; createdAt: Date; updatedAt: Date }
 type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; bpmnActivity: string; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; createdAt: Date; updatedAt: Date }
-type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; executionLevel: string | null; organizationalArea: string | null; businessLine: string | null; supervision: string | null; deliveryMethod: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; cashMovement: boolean; contingencyPlan: boolean; taxOperations: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
+type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; deliveryMethod: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; cashMovement: boolean; contingencyPlan: boolean; taxOperations: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -18,8 +18,8 @@ const companyUser = { id: 'cmuser0000000000000000001', email: 'user@risk.test', 
 const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@risk.test', name: 'Foreign Admin', role: 'COMPANY_ADMIN' as Role, companyId: otherCompanyId }
 
 const makeProcess = (id: string, owningCompanyId: string, name: string): TestProcess => ({
-  id, companyId: owningCompanyId, name, code: 'PROC-01', type: 'MISSIONAL', version: '1.0', frequency: null, executionLevel: null, organizationalArea: null,
-  businessLine: null, supervision: null, deliveryMethod: null, executionType: null, objective: 'Gestionar el proceso', description: null,
+  id, companyId: owningCompanyId, name, code: 'PROC-01', type: 'MISSIONAL', version: '1.0', frequency: null, organizationalArea: null,
+  supervision: null, deliveryMethod: null, executionType: null, objective: 'Gestionar el proceso', description: null,
   responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false,
   affectsAccounting: false, personalData: false, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
 })

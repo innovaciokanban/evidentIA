@@ -275,9 +275,7 @@ export type Process = {
   type: ProcessType
   version: string | null
   frequency: string | null
-  executionLevel: string | null
   organizationalArea: string | null
-  businessLine: string | null
   supervision: string | null
   deliveryMethod: string | null
   executionType: string | null

@@ -12,9 +12,7 @@ export type ProcessDraft = {
   companyId: string
   version: string
   frequency: string
-  executionLevel: string
   organizationalArea: string
-  businessLine: string
   supervision: string
   deliveryMethod: string
   executionType: string
@@ -36,7 +34,6 @@ const processTypeOptions: { value: ProcessType; label: string }[] = [
 ]
 
 const frequencyOptions = ['Diaria', 'Semanal', 'Mensual', 'Trimestral', 'Semestral', 'Anual', 'Eventual']
-const executionLevelOptions = ['Estratégico', 'Táctico', 'Operativo']
 const executionTypeOptions = ['Interna', 'Externa', 'Mixta']
 
 export type ProcessUser = Pick<User, 'id' | 'name'> & { companyId: string | null }
@@ -143,9 +140,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <label>Tipo de proceso<select value={draft.type} onChange={(event) => update('type', event.target.value as ProcessType)}>{processTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
 
           <label>Frecuencia<select value={draft.frequency} onChange={(event) => update('frequency', event.target.value)}><option value="">Selecciona una frecuencia</option>{frequencyOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-          <label>Nivel de ejecución<select value={draft.executionLevel} onChange={(event) => update('executionLevel', event.target.value)}><option value="">Selecciona un nivel</option>{executionLevelOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
           <label>Área del organigrama<input value={draft.organizationalArea} onChange={(event) => update('organizationalArea', event.target.value)} placeholder="Ej. Operaciones" maxLength={120} /></label>
-          <label>Línea de negocio<input value={draft.businessLine} onChange={(event) => update('businessLine', event.target.value)} placeholder="Ej. Servicios profesionales" maxLength={120} /></label>
 
           <label>Supervisión<input value={draft.supervision} onChange={(event) => update('supervision', event.target.value)} placeholder="Área o cargo supervisor" maxLength={120} /></label>
           <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{availableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>

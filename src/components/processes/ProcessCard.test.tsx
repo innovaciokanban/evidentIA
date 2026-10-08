@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ProcessCard } from './ProcessCard'
 
 describe('ProcessCard', () => {
-  it('muestra los datos reales de la ficha y sus acciones', () => {
+  it('muestra el resumen del proceso y sus acciones', () => {
     const markup = renderToStaticMarkup(
       <ProcessCard
         name="Gestión Comercial"
@@ -20,8 +20,9 @@ describe('ProcessCard', () => {
 
     expect(markup).toContain('Gestión Comercial')
     expect(markup).toContain('PR-001')
-    expect(markup).toContain('Andrés Santacruz')
-    expect(markup).toContain('Gestionar las oportunidades comerciales.')
+    expect(markup).toContain('Acompaña la relación con clientes.')
+    expect(markup).not.toContain('Andrés Santacruz')
+    expect(markup).not.toContain('Gestionar las oportunidades comerciales.')
     expect(markup).toContain('Activo')
     expect(markup).toContain('Ver proceso')
     expect(markup).toContain('Eliminar')
