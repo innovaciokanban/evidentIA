@@ -484,7 +484,6 @@ model Process {
   frequency     String?
   organizationalArea String?
   supervision   String?
-  deliveryMethod String?
   executionType String?
   objective     String
   description   String?

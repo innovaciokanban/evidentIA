@@ -277,7 +277,6 @@ export type Process = {
   frequency: string | null
   organizationalArea: string | null
   supervision: string | null
-  deliveryMethod: string | null
   executionType: string | null
   objective: string
   description: string | null

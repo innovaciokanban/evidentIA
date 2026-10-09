@@ -331,7 +331,6 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   frequency: process.frequency,
   organizationalArea: process.organizationalArea,
   supervision: process.supervision,
-  deliveryMethod: process.deliveryMethod,
   executionType: process.executionType,
   objective: process.objective,
   description: process.description,
@@ -1017,7 +1016,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         frequency: parsed.data.frequency || null,
         organizationalArea: parsed.data.organizationalArea || null,
         supervision: parsed.data.supervision || null,
-        deliveryMethod: parsed.data.deliveryMethod || null,
         executionType: parsed.data.executionType || null,
         objective: parsed.data.objective,
         description: parsed.data.description || null,
@@ -1078,7 +1076,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency || null
     if (parsed.data.organizationalArea !== undefined) data.organizationalArea = parsed.data.organizationalArea || null
     if (parsed.data.supervision !== undefined) data.supervision = parsed.data.supervision || null
-    if (parsed.data.deliveryMethod !== undefined) data.deliveryMethod = parsed.data.deliveryMethod || null
     if (parsed.data.executionType !== undefined) data.executionType = parsed.data.executionType || null
     if (parsed.data.status !== undefined) data.status = parsed.data.status
     if (parsed.data.responsibleId !== undefined) data.responsibleId = parsed.data.responsibleId

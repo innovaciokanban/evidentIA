@@ -14,7 +14,6 @@ export type ProcessDraft = {
   frequency: string
   organizationalArea: string
   supervision: string
-  deliveryMethod: string
   executionType: string
   status: ProcessState
   updatedAt: string | null
@@ -144,7 +143,6 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
 
           <label>Supervisión<input value={draft.supervision} onChange={(event) => update('supervision', event.target.value)} placeholder="Área o cargo supervisor" maxLength={120} /></label>
           <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{availableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
-          <label>Medio de entrega<input value={draft.deliveryMethod} onChange={(event) => update('deliveryMethod', event.target.value)} placeholder="Ej. Plataforma interna" maxLength={120} /></label>
           <label>Tipo de ejecución<select value={draft.executionType} onChange={(event) => update('executionType', event.target.value)}><option value="">Selecciona un tipo</option>{executionTypeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
 
           <label>Nombre del proceso<input value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Gestión Comercial" minLength={3} required /></label>

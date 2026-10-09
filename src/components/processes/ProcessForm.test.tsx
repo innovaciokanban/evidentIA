@@ -5,7 +5,7 @@ import { ProcessForm, type ProcessDraft } from './ProcessForm'
 
 const draft: ProcessDraft = {
   name: '', type: 'MISSIONAL', objective: '', description: '', code: '', responsibleId: '', companyId: 'company-1',
-  version: '1.0', frequency: '', organizationalArea: '', supervision: '', deliveryMethod: '', executionType: '',
+  version: '1.0', frequency: '', organizationalArea: '', supervision: '', executionType: '',
   status: 'ACTIVE', updatedAt: null, thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false,
   taxOperations: false, affectsAccounting: false, personalData: false,
 }
@@ -34,6 +34,7 @@ describe('ProcessForm embebido', () => {
     expect(markup).toContain('CARACTERIZACIÓN DEL PROCESO')
     expect(markup).toContain('ATRIBUTOS')
     expect(markup).toContain('role="switch"')
+    expect(markup).not.toContain('Medio de entrega')
     expect(markup).not.toContain('drawer-backdrop')
     expect(markup).not.toContain('centered-modal')
   })
