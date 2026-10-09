@@ -7,7 +7,7 @@ import { createApp } from './app.js'
 type ControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
 type StoredControl = { id: string; riskId: string; description: string; evaluation: ControlEvaluation; createdAt: Date; updatedAt: Date }
 type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; bpmnActivity: string; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; createdAt: Date; updatedAt: Date }
-type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; cashMovement: boolean; contingencyPlan: boolean; taxOperations: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
+type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -20,7 +20,7 @@ const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@risk.te
 const makeProcess = (id: string, owningCompanyId: string, name: string): TestProcess => ({
   id, companyId: owningCompanyId, name, code: 'PROC-01', type: 'MISSIONAL', version: '1.0', frequency: null, organizationalArea: null,
   supervision: null, executionType: null, objective: 'Gestionar el proceso', description: null,
-  responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false,
+  responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false, critical: false,
   affectsAccounting: false, personalData: false, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
 })
 
@@ -54,6 +54,7 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => where.id === companyId ? { id: companyId } : where.id === otherCompanyId ? { id: otherCompanyId } : null),
     },
     process: {
+      findMany: vi.fn(async ({ where }: { where?: { companyId?: string } } = {}) => storedProcesses.filter((item) => !where?.companyId || item.companyId === where.companyId).map(processView)),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const item = processFor(where.id); return item ? processView(item) : null }),
       findFirst: vi.fn(async ({ where }: { where: { companyId: string; name: string; NOT?: { id: string } } }) => storedProcesses.find((item) => item.companyId === where.companyId && item.name === where.name && item.id !== where.NOT?.id) ? { id: 'duplicate' } : null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -170,7 +171,7 @@ describe('process risk API', () => {
   it('creates a process before its risk and cascades risks when the process is deleted', async () => {
     const { db, storedRisks } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
-    const process = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', objective: 'Objetivo nuevo', companyId })
+    const process = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo nuevo', companyId })
     expect(process.status).toBe(201)
     const createdProcessId = process.body.process.id as string
     expect((await agent.post(`/api/processes/${createdProcessId}/risks`).send(riskPayload)).status).toBe(201)

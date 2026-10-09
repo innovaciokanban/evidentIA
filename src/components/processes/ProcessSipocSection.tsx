@@ -6,14 +6,15 @@ import { askConfirm } from '../ui/useConfirm'
 type SipocKind = keyof ProcessSipoc
 type SipocEditor = { kind: SipocKind; item: ProcessSipocItem | null }
 
-const kindMeta: Record<SipocKind, { title: string; singular: string; empty: string; description: string }> = {
+export const kindMeta: Record<SipocKind, { title: string; singular: string; empty: string; description: string }> = {
   suppliers: { title: 'PROVEEDORES', singular: 'proveedor', empty: 'Sin proveedores registrados', description: 'Quién suministra lo que el proceso necesita.' },
   inputs: { title: 'ENTRADAS', singular: 'entrada', empty: 'Sin entradas registradas', description: 'Información, recursos o requisitos de entrada.' },
+  processes: { title: 'PROCESO', singular: 'proceso', empty: 'Sin procesos registrados', description: 'Actividades y pasos que transforman las entradas.' },
   outputs: { title: 'SALIDAS', singular: 'salida', empty: 'Sin salidas registradas', description: 'Resultados que entrega el proceso.' },
   customers: { title: 'CLIENTES', singular: 'cliente', empty: 'Sin clientes registrados', description: 'Quién recibe o utiliza los resultados.' },
 }
 
-const emptySipoc: ProcessSipoc = { suppliers: [], inputs: [], outputs: [], customers: [] }
+const emptySipoc: ProcessSipoc = { suppliers: [], inputs: [], processes: [], outputs: [], customers: [] }
 
 function ItemForm({ kind, item, draft, saving, error, onDraftChange, onSubmit, onCancel }: {
   kind: SipocKind
@@ -35,6 +36,38 @@ function ItemForm({ kind, item, draft, saving, error, onDraftChange, onSubmit, o
         <button type="button" className="button primary small-button" disabled={saving || !draft.trim()} onClick={onSubmit}>{saving ? 'Guardando...' : item ? 'Guardar' : 'Agregar'}</button>
       </div>
     </div>
+  )
+}
+
+export function SipocColumn({ kind, items, readOnly, editor, draft, saving, error, onCreate, onEdit, onRemove, onDraftChange, onSubmit, onCancel }: {
+  kind: SipocKind
+  items: ProcessSipocItem[]
+  readOnly: boolean
+  editor: SipocEditor | null
+  draft: string
+  saving: boolean
+  error: string
+  onCreate: (kind: SipocKind) => void
+  onEdit: (kind: SipocKind, item: ProcessSipocItem) => void
+  onRemove: (kind: SipocKind, item: ProcessSipocItem) => void
+  onDraftChange: (value: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const meta = kindMeta[kind]
+  const editing = editor?.kind === kind ? editor.item : null
+  const creating = editor?.kind === kind && !editor.item
+
+  return (
+    <article className={`sipoc-column sipoc-${kind}`}>
+      <header className="sipoc-column-header"><div><span className="sipoc-column-kicker">{meta.title}</span><p>{meta.description}</p></div><span className="sipoc-count">{items.length}</span></header>
+      {editor?.kind === kind && <ItemForm kind={kind} item={editing} draft={draft} saving={saving} error={error} onDraftChange={onDraftChange} onSubmit={onSubmit} onCancel={onCancel} />}
+      <div className="sipoc-items">
+        {items.map((item) => <div className="sipoc-item" key={item.id}><span className="sipoc-item-marker" /><span className="sipoc-item-text">{item.description}</span>{!readOnly && !creating && <span className="sipoc-item-actions"><button type="button" className="sipoc-icon-button" aria-label={`Editar ${item.description}`} title="Editar" onClick={() => onEdit(kind, item)}>✎</button><button type="button" className="sipoc-icon-button danger" aria-label={`Eliminar ${item.description}`} title="Eliminar" onClick={() => onRemove(kind, item)}>×</button></span>}</div>)}
+        {items.length === 0 && (!editor || editor.kind !== kind) && <div className="sipoc-empty"><span>{meta.empty}</span>{!readOnly && <button type="button" className="text-button" onClick={() => onCreate(kind)}>+ Agregar {meta.singular}</button>}</div>}
+      </div>
+      {!readOnly && !editor && <button type="button" className="sipoc-add-button" onClick={() => onCreate(kind)}>+ Agregar {meta.singular}</button>}
+    </article>
   )
 }
 
@@ -123,7 +156,7 @@ export function ProcessSipocSection({ processId, readOnly }: { processId?: strin
   return (
     <section className="characterization-section sipoc-section">
       <div className="characterization-section-heading sipoc-heading">
-        <div><p className="detail-label">ANÁLISIS DEL PROCESO</p><h3>ANÁLISIS SIPOC</h3><p className="sipoc-subtitle">Identifica los proveedores, entradas, salidas y clientes relacionados con el proceso.</p></div>
+        <div><p className="detail-label">ANÁLISIS DEL PROCESO</p><h3>ANÁLISIS SIPOC</h3><p className="sipoc-subtitle">Identifica los proveedores, entradas, transformación, salidas y clientes relacionados con el proceso.</p></div>
         {!readOnly && processId && <div className="sipoc-header-actions"><button type="button" className="button secondary small-button" onClick={() => startCreate('suppliers')}>+ Proveedor / Entrada</button><button type="button" className="button secondary small-button" onClick={() => startCreate('outputs')}>+ Salida / Cliente</button></div>}
       </div>
       {!processId && <p className="sipoc-save-note">Guarda el proceso para comenzar a registrar sus elementos SIPOC.</p>}
@@ -131,21 +164,7 @@ export function ProcessSipocSection({ processId, readOnly }: { processId?: strin
       {processId && error && !editor && <div className="form-error sipoc-error" role="alert">{error}<button type="button" className="button secondary small-button" onClick={() => void loadSipoc()}>Reintentar</button></div>}
       {processId && (loading ? <div className="inline-loading"><span className="loader" />Cargando análisis SIPOC...</div> : (
         <div className="sipoc-grid">
-          {(Object.keys(kindMeta) as SipocKind[]).map((kind) => {
-            const meta = kindMeta[kind]
-            const items = sipoc[kind]
-            const editing = editor?.kind === kind ? editor.item : null
-            const creating = editor?.kind === kind && !editor.item
-            return <article className={`sipoc-column sipoc-${kind}`} key={kind}>
-              <header className="sipoc-column-header"><div><span className="sipoc-column-kicker">{meta.title}</span><p>{meta.description}</p></div><span className="sipoc-count">{items.length}</span></header>
-              {editor?.kind === kind && <ItemForm kind={kind} item={editing} draft={draft} saving={saving} error={error} onDraftChange={setDraft} onSubmit={() => void saveItem(kind, editing)} onCancel={closeEditor} />}
-              <div className="sipoc-items">
-                {items.map((item) => <div className="sipoc-item" key={item.id}><span className="sipoc-item-marker" /><span className="sipoc-item-text">{item.description}</span>{!readOnly && !creating && <span className="sipoc-item-actions"><button type="button" className="sipoc-icon-button" aria-label={`Editar ${item.description}`} title="Editar" onClick={() => startEdit(kind, item)}>✎</button><button type="button" className="sipoc-icon-button danger" aria-label={`Eliminar ${item.description}`} title="Eliminar" onClick={() => void removeItem(kind, item)}>×</button></span>}</div>)}
-                {items.length === 0 && (!editor || editor.kind !== kind) && <div className="sipoc-empty"><span>{meta.empty}</span>{!readOnly && <button type="button" className="text-button" onClick={() => startCreate(kind)}>+ Agregar {meta.singular}</button>}</div>}
-              </div>
-              {!readOnly && !editor && <button type="button" className="sipoc-add-button" onClick={() => startCreate(kind)}>+ Agregar {meta.singular}</button>}
-            </article>
-          })}
+          {(Object.keys(kindMeta) as SipocKind[]).map((kind) => <SipocColumn key={kind} kind={kind} items={sipoc[kind]} readOnly={readOnly} editor={editor} draft={draft} saving={saving} error={error} onCreate={startCreate} onEdit={startEdit} onRemove={(itemKind, item) => void removeItem(itemKind, item)} onDraftChange={setDraft} onSubmit={() => void saveItem(kind, editor?.kind === kind ? editor.item : null)} onCancel={closeEditor} />)}
         </div>
       ))}
     </section>

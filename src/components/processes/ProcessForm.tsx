@@ -19,9 +19,6 @@ export type ProcessDraft = {
   updatedAt: string | null
   thirdPartyProvided: boolean
   critical: boolean
-  cashMovement: boolean
-  contingencyPlan: boolean
-  taxOperations: boolean
   affectsAccounting: boolean
   personalData: boolean
 }
@@ -129,14 +126,14 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <div className="characterization-field"><span>Fecha actualización</span><strong>{dateLabel(draft.updatedAt)}</strong></div>
           <label>Versión<input value={draft.version} onChange={(event) => update('version', event.target.value)} placeholder="Ej. 1.0" maxLength={120} /></label>
           {companies.length > 1 ? (
-            <label>Entidad<select value={draft.companyId} onChange={(event) => setDraft({ ...draft, companyId: event.target.value, responsibleId: '' })} required>
+            <label>Empresa<select value={draft.companyId} onChange={(event) => setDraft({ ...draft, companyId: event.target.value, responsibleId: '' })} required>
               <option value="">Selecciona una entidad</option>
               {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
             </select></label>
           ) : (
-            <div className="characterization-field"><span>Entidad</span><strong>{selectedCompany?.name ?? 'Sin entidad disponible'}</strong></div>
+            <div className="characterization-field"><span>Empresa</span><strong>{selectedCompany?.name ?? 'Sin entidad disponible'}</strong></div>
           )}
-          <label>Tipo de proceso<select value={draft.type} onChange={(event) => update('type', event.target.value as ProcessType)}>{processTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <div className="characterization-field"><span>Tipo de proceso</span><strong>{processTypeOptions.find((option) => option.value === draft.type)?.label ?? draft.type}</strong></div>
 
           <label>Frecuencia<select value={draft.frequency} onChange={(event) => update('frequency', event.target.value)}><option value="">Selecciona una frecuencia</option>{frequencyOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
           <label>Área del organigrama<input value={draft.organizationalArea} onChange={(event) => update('organizationalArea', event.target.value)} placeholder="Ej. Operaciones" maxLength={120} /></label>
@@ -146,7 +143,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <label>Tipo de ejecución<select value={draft.executionType} onChange={(event) => update('executionType', event.target.value)}><option value="">Selecciona un tipo</option>{executionTypeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
 
           <label>Nombre del proceso<input value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Gestión Comercial" minLength={3} required /></label>
-          <label>Código<input value={draft.code} onChange={(event) => update('code', event.target.value)} placeholder="Ej. PROC-01" maxLength={40} /></label>
+          <label>Código<input value={draft.code} readOnly placeholder="Se asignará automáticamente" maxLength={40} /></label>
           <label>Estado<select value={draft.status} onChange={(event) => update('status', event.target.value as ProcessState)}><option value="ACTIVE">Activo</option><option value="INACTIVE">Inactivo</option></select></label>
         </div>
       </section>
@@ -156,16 +153,13 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
         <div className="characterization-toggle-grid">
           <ToggleField label="Provisto por tercero" value={draft.thirdPartyProvided} onChange={() => update('thirdPartyProvided', !draft.thirdPartyProvided)} />
           <ToggleField label="Proceso crítico" value={draft.critical} onChange={() => update('critical', !draft.critical)} />
-          <ToggleField label="Mov. efectivo" value={draft.cashMovement} onChange={() => update('cashMovement', !draft.cashMovement)} />
-          <ToggleField label="Plan contingencia" value={draft.contingencyPlan} onChange={() => update('contingencyPlan', !draft.contingencyPlan)} />
-          <ToggleField label="Op. tributarias" value={draft.taxOperations} onChange={() => update('taxOperations', !draft.taxOperations)} />
           <ToggleField label="Afecta contabilidad" value={draft.affectsAccounting} onChange={() => update('affectsAccounting', !draft.affectsAccounting)} />
           <ToggleField label="Datos personales" value={draft.personalData} onChange={() => update('personalData', !draft.personalData)} />
         </div>
        </section>
        </fieldset>
 
-      <ProcessSipocSection processId={processId} readOnly={readOnly} />
+       <ProcessSipocSection processId={processId} readOnly={readOnly} />
 
       <footer className="characterization-footer">
         <button type="button" className="button secondary" onClick={onClose}>{readOnly ? 'Volver al mapa' : 'Cancelar / volver al listado'}</button>

@@ -6,8 +6,7 @@ import { ProcessForm, type ProcessDraft } from './ProcessForm'
 const draft: ProcessDraft = {
   name: '', type: 'MISSIONAL', objective: '', description: '', code: '', responsibleId: '', companyId: 'company-1',
   version: '1.0', frequency: '', organizationalArea: '', supervision: '', executionType: '',
-  status: 'ACTIVE', updatedAt: null, thirdPartyProvided: false, critical: false, cashMovement: false, contingencyPlan: false,
-  taxOperations: false, affectsAccounting: false, personalData: false,
+  status: 'ACTIVE', updatedAt: null, thirdPartyProvided: false, critical: false, affectsAccounting: false, personalData: false,
 }
 
 const company = { id: 'company-1', name: 'Acme Consultores', identification: '900123', industry: 'Servicios', description: 'Empresa', admin: null, createdAt: '', updatedAt: '' }
@@ -32,9 +31,18 @@ describe('ProcessForm embebido', () => {
     expect(markup).toContain('process-characterization')
     expect(markup).toContain('NUEVO PROCESO')
     expect(markup).toContain('CARACTERIZACIÓN DEL PROCESO')
+    expect(markup).toContain('Tipo de proceso')
+    expect(markup).toContain('Misional')
+    expect(markup).toContain('readOnly')
+    expect(markup).toContain('Se asignará automáticamente')
+    expect(markup).toContain('<span>Empresa</span>')
+    expect(markup).not.toContain('<span>Entidad</span>')
     expect(markup).toContain('ATRIBUTOS')
     expect(markup).toContain('role="switch"')
     expect(markup).not.toContain('Medio de entrega')
+    expect(markup).not.toContain('Mov. efectivo')
+    expect(markup).not.toContain('Plan contingencia')
+    expect(markup).not.toContain('Op. tributarias')
     expect(markup).not.toContain('drawer-backdrop')
     expect(markup).not.toContain('centered-modal')
   })

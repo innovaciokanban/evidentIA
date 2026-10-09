@@ -4,14 +4,13 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
 
-type SipocKind = 'suppliers' | 'inputs' | 'outputs' | 'customers'
+type SipocKind = 'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers'
 type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
 type TestProcess = {
   id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null
   organizationalArea: string | null; supervision: string | null
   executionType: string | null; objective: string; description: string | null; responsibleId: string | null
-  status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; cashMovement: boolean; contingencyPlan: boolean
-  taxOperations: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date
+  status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date
 }
 
 const companyId = 'cmcompany00000000000000001'
@@ -26,7 +25,7 @@ const makeProcess = (id: string, owningCompanyId: string, name: string): TestPro
   id, companyId: owningCompanyId, name, code: name === 'Proceso principal' ? 'PROC-01' : 'PROC-02', type: 'MISSIONAL', version: '1.0', frequency: null,
   organizationalArea: null, supervision: null, executionType: null,
   objective: 'Gestionar el proceso', description: null, responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false,
-  critical: false, cashMovement: false, contingencyPlan: false, taxOperations: false, affectsAccounting: false, personalData: false,
+  critical: false, affectsAccounting: false, personalData: false,
   createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
 })
 
@@ -36,7 +35,7 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   let sessionActive = false
   let storedProcesses: TestProcess[] = [makeProcess(processId, companyId, 'Proceso principal'), makeProcess(otherProcessId, companyId, 'Otro proceso')]
-  const storedItems: Record<SipocKind, SipocRecord[]> = { suppliers: [], inputs: [], outputs: [], customers: [] }
+  const storedItems: Record<SipocKind, SipocRecord[]> = { suppliers: [], inputs: [], processes: [], outputs: [], customers: [] }
   let nextProcess = 3
   let nextItem = 1
 
@@ -58,6 +57,7 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => where.id === companyId ? { id: companyId } : where.id === otherCompanyId ? { id: otherCompanyId } : null),
     },
     process: {
+      findMany: vi.fn(async ({ where }: { where?: { companyId?: string } } = {}) => storedProcesses.filter((item) => !where?.companyId || item.companyId === where.companyId).map(processView)),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
         const item = processFor(where.id)
         return item ? processView(item) : null
@@ -86,7 +86,7 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   } as Record<string, unknown>
 
   // Keep the delegate names explicit because Prisma uses singular model properties.
-  const delegates: Record<SipocKind, string> = { suppliers: 'sipocSupplier', inputs: 'sipocInput', outputs: 'sipocOutput', customers: 'sipocCustomer' }
+  const delegates: Record<SipocKind, string> = { suppliers: 'sipocSupplier', inputs: 'sipocInput', processes: 'sipocProcess', outputs: 'sipocOutput', customers: 'sipocCustomer' }
   for (const kind of Object.keys(delegates) as SipocKind[]) {
     db[delegates[kind]] = {
       findMany: vi.fn(async ({ where }: { where: { processId: string } }) => storedItems[kind].filter((item) => item.processId === where.processId)),
@@ -119,10 +119,13 @@ async function loggedIn(db: PrismaClient, email: string) {
 }
 
 describe('process SIPOC API', () => {
-  it('creates, lists, edits and deletes suppliers, inputs, outputs and customers', async () => {
+  it('creates, lists, edits and deletes all five SIPOC record types', async () => {
     const { db } = makeSipocDb()
     const agent = await loggedIn(db, admin.email)
-    const descriptions: Record<SipocKind, string> = { suppliers: 'Área comercial', inputs: 'Solicitud del cliente', outputs: 'Respuesta al cliente', customers: 'Cliente externo' }
+    const empty = await agent.get(`/api/processes/${processId}/sipoc`)
+    expect(empty.status).toBe(200)
+    expect(empty.body.processes).toEqual([])
+    const descriptions: Record<SipocKind, string> = { suppliers: 'Área comercial', inputs: 'Solicitud del cliente', processes: 'Validar y responder la solicitud', outputs: 'Respuesta al cliente', customers: 'Cliente externo' }
     const ids: Partial<Record<SipocKind, string>> = {}
 
     for (const kind of Object.keys(descriptions) as SipocKind[]) {
@@ -134,7 +137,7 @@ describe('process SIPOC API', () => {
     const listed = await agent.get(`/api/processes/${processId}/sipoc`)
     expect(listed.status).toBe(200)
     const listedItems = listed.body as Record<SipocKind, unknown[]>
-    expect(Object.values(listedItems).map((items) => items.length)).toEqual([1, 1, 1, 1])
+    expect(Object.values(listedItems).map((items) => items.length)).toEqual([1, 1, 1, 1, 1])
 
     for (const kind of Object.keys(ids) as SipocKind[]) {
       const updated = await agent.patch(`/api/processes/${processId}/sipoc/${kind}/${ids[kind]}`).send({ description: `${descriptions[kind]} actualizado` })
@@ -149,11 +152,11 @@ describe('process SIPOC API', () => {
   it('keeps SIPOC attached to the requested process and does not mix sibling processes', async () => {
     const { db } = makeSipocDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${otherProcessId}/sipoc/inputs`).send({ description: 'Entrada del otro proceso' })
+    const created = await agent.post(`/api/processes/${otherProcessId}/sipoc/processes`).send({ description: 'Actividad del otro proceso' })
     expect(created.body.item.processId).toBe(otherProcessId)
-    expect((await agent.get(`/api/processes/${processId}/sipoc`)).body.inputs).toHaveLength(0)
-    expect((await agent.get(`/api/processes/${otherProcessId}/sipoc`)).body.inputs[0].description).toBe('Entrada del otro proceso')
-    expect((await agent.patch(`/api/processes/${processId}/sipoc/inputs/${created.body.item.id}`).send({ description: 'Intento cruzado' })).status).toBe(404)
+    expect((await agent.get(`/api/processes/${processId}/sipoc`)).body.processes).toHaveLength(0)
+    expect((await agent.get(`/api/processes/${otherProcessId}/sipoc`)).body.processes[0].description).toBe('Actividad del otro proceso')
+    expect((await agent.patch(`/api/processes/${processId}/sipoc/processes/${created.body.item.id}`).send({ description: 'Intento cruzado' })).status).toBe(404)
   })
 
   it('enforces tenant isolation and read-only permissions', async () => {
@@ -166,12 +169,13 @@ describe('process SIPOC API', () => {
     const readOnlyAgent = await loggedIn(readOnly.db, companyUser.email)
     expect((await readOnlyAgent.get(`/api/processes/${processId}/sipoc`)).status).toBe(200)
     expect((await readOnlyAgent.post(`/api/processes/${processId}/sipoc/suppliers`).send({ description: 'No permitido' })).status).toBe(403)
+    expect((await readOnlyAgent.post(`/api/processes/${processId}/sipoc/processes`).send({ description: 'No permitido' })).status).toBe(403)
   })
 
   it('creates a process before SIPOC, updates the process, and cascades on deletion', async () => {
     const { db, storedItems } = makeSipocDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', objective: 'Objetivo nuevo', companyId })
+    const created = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo nuevo', companyId })
     expect(created.status).toBe(201)
     const createdProcessId = created.body.process.id as string
     expect((await agent.patch(`/api/processes/${createdProcessId}`).send({ description: 'Descripción actualizada' })).status).toBe(200)

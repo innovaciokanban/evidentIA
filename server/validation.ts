@@ -77,6 +77,8 @@ export const priorityLevelSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
 export const impactSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
 
 export const processTypeSchema = z.enum(['STRATEGIC', 'MISSIONAL', 'SUPPORT'])
+export const processCategorySchema = z.enum(['estrategico', 'misional', 'apoyo'])
+export const processTypeForCategory = { estrategico: 'STRATEGIC', misional: 'MISSIONAL', apoyo: 'SUPPORT' } as const
 export const processStatusSchema = z.enum(['ACTIVE', 'INACTIVE'])
 
 const processReferenceFieldSchema = z.string().trim().max(120)
@@ -90,9 +92,9 @@ const processReferenceFieldSchema = z.string().trim().max(120)
 export const processCreateSchema = z.object({
   name: z.string().trim().min(3).max(120),
   type: processTypeSchema,
+  category: processCategorySchema,
   objective: z.string().trim().min(3).max(2000),
   description: z.string().trim().max(5000).nullable().optional(),
-  code: z.string().trim().max(40).nullable().optional(),
   version: processReferenceFieldSchema.nullable().optional(),
   frequency: processReferenceFieldSchema.nullable().optional(),
   organizationalArea: processReferenceFieldSchema.nullable().optional(),
@@ -100,23 +102,21 @@ export const processCreateSchema = z.object({
   executionType: processReferenceFieldSchema.nullable().optional(),
   thirdPartyProvided: z.boolean().optional(),
   critical: z.boolean().optional(),
-  cashMovement: z.boolean().optional(),
-  contingencyPlan: z.boolean().optional(),
-  taxOperations: z.boolean().optional(),
   affectsAccounting: z.boolean().optional(),
   personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
   responsibleId: z.string().cuid().nullable().optional(),
   companyId: z.string().cuid().optional(),
-})
+}).refine(
+  (value) => processTypeForCategory[value.category] === value.type,
+  { path: ['category'], message: 'Process type does not match selected category' },
+)
 
 /** La edición no mueve el proceso de empresa: cambiar de compañía no está soportado. */
 export const processUpdateSchema = z.object({
   name: z.string().trim().min(3).max(120).optional(),
-  type: processTypeSchema.optional(),
   objective: z.string().trim().min(3).max(2000).optional(),
   description: z.string().trim().max(5000).nullable().optional(),
-  code: z.string().trim().max(40).nullable().optional(),
   version: processReferenceFieldSchema.nullable().optional(),
   frequency: processReferenceFieldSchema.nullable().optional(),
   organizationalArea: processReferenceFieldSchema.nullable().optional(),
@@ -124,9 +124,6 @@ export const processUpdateSchema = z.object({
   executionType: processReferenceFieldSchema.nullable().optional(),
   thirdPartyProvided: z.boolean().optional(),
   critical: z.boolean().optional(),
-  cashMovement: z.boolean().optional(),
-  contingencyPlan: z.boolean().optional(),
-  taxOperations: z.boolean().optional(),
   affectsAccounting: z.boolean().optional(),
   personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
@@ -169,7 +166,7 @@ export const kpiQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
 })
 
-export const sipocKindSchema = z.enum(['suppliers', 'inputs', 'outputs', 'customers'])
+export const sipocKindSchema = z.enum(['suppliers', 'inputs', 'processes', 'outputs', 'customers'])
 export const sipocItemCreateSchema = z.object({
   description: z.string().trim().min(1).max(500),
 })

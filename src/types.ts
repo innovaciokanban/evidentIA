@@ -283,9 +283,6 @@ export type Process = {
   status: ProcessState
   thirdPartyProvided: boolean
   critical: boolean
-  cashMovement: boolean
-  contingencyPlan: boolean
-  taxOperations: boolean
   affectsAccounting: boolean
   personalData: boolean
   responsible: Pick<User, 'id' | 'name'> | null
@@ -324,6 +321,7 @@ export type ProcessSipocItem = {
 export type ProcessSipoc = {
   suppliers: ProcessSipocItem[]
   inputs: ProcessSipocItem[]
+  processes: ProcessSipocItem[]
   outputs: ProcessSipocItem[]
   customers: ProcessSipocItem[]
 }

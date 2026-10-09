@@ -337,15 +337,61 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   status: process.status,
   thirdPartyProvided: process.thirdPartyProvided,
   critical: process.critical,
-  cashMovement: process.cashMovement,
-  contingencyPlan: process.contingencyPlan,
-  taxOperations: process.taxOperations,
   affectsAccounting: process.affectsAccounting,
   personalData: process.personalData,
   responsible: process.responsible,
   createdAt: process.createdAt,
   updatedAt: process.updatedAt,
 })
+
+const processCodePattern = /^PROC-(\d{3,})$/
+const processCodeLocks = new Map<string, Promise<void>>()
+
+export const nextProcessCode = (codes: readonly (string | null | undefined)[]): string => {
+  const usedNumbers = new Set(
+    codes.flatMap((code) => {
+      const match = code?.match(processCodePattern)
+      return match ? [Number(match[1])] : []
+    }),
+  )
+  let nextNumber = 1
+  while (usedNumbers.has(nextNumber)) nextNumber += 1
+  return `PROC-${String(nextNumber).padStart(3, '0')}`
+}
+
+async function withProcessCodeLock<T>(companyId: string, work: () => Promise<T>): Promise<T> {
+  const previous = processCodeLocks.get(companyId) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  processCodeLocks.set(companyId, current)
+  await previous
+  try {
+    return await work()
+  } finally {
+    release()
+    if (processCodeLocks.get(companyId) === current) processCodeLocks.delete(companyId)
+  }
+}
+
+async function createProcessWithCode(db: PrismaClient, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>) {
+  return withProcessCodeLock(companyId, async () => {
+    const create = async (transaction: Prisma.TransactionClient | PrismaClient) => {
+      if (typeof transaction.$queryRaw === 'function') {
+        await transaction.$queryRaw`
+          WITH advisory_lock AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(hashtext(${companyId}))
+          )
+          SELECT true AS locked
+          FROM advisory_lock
+        `
+      }
+      const existing = await transaction.process.findMany({ where: { companyId }, select: { code: true } })
+      const code = nextProcessCode(existing.map((process) => process.code))
+      return transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
+    }
+    return typeof db.$transaction === 'function' ? db.$transaction((transaction) => create(transaction)) : create(db)
+  })
+}
 /** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
 const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
 
@@ -1007,30 +1053,23 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'A process with that name already exists in this company' })
       return
     }
-    const process = await db.process.create({
-      data: {
-        companyId,
-        name: parsed.data.name,
-        type: parsed.data.type,
-        version: parsed.data.version || null,
-        frequency: parsed.data.frequency || null,
-        organizationalArea: parsed.data.organizationalArea || null,
-        supervision: parsed.data.supervision || null,
-        executionType: parsed.data.executionType || null,
-        objective: parsed.data.objective,
-        description: parsed.data.description || null,
-        code: parsed.data.code || null,
-        status: parsed.data.status ?? 'ACTIVE',
-        thirdPartyProvided: parsed.data.thirdPartyProvided ?? false,
-        critical: parsed.data.critical ?? false,
-        cashMovement: parsed.data.cashMovement ?? false,
-        contingencyPlan: parsed.data.contingencyPlan ?? false,
-        taxOperations: parsed.data.taxOperations ?? false,
-        affectsAccounting: parsed.data.affectsAccounting ?? false,
-        personalData: parsed.data.personalData ?? false,
-        responsibleId: responsible.responsibleId,
-      },
-      include: processInclude,
+    const process = await createProcessWithCode(db, companyId, {
+      companyId,
+      name: parsed.data.name,
+      type: parsed.data.type,
+      version: parsed.data.version || null,
+      frequency: parsed.data.frequency || null,
+      organizationalArea: parsed.data.organizationalArea || null,
+      supervision: parsed.data.supervision || null,
+      executionType: parsed.data.executionType || null,
+      objective: parsed.data.objective,
+      description: parsed.data.description || null,
+      status: parsed.data.status ?? 'ACTIVE',
+      thirdPartyProvided: parsed.data.thirdPartyProvided ?? false,
+      critical: parsed.data.critical ?? false,
+      affectsAccounting: parsed.data.affectsAccounting ?? false,
+      personalData: parsed.data.personalData ?? false,
+      responsibleId: responsible.responsibleId,
     })
     response.status(201).json({ process: processView(process) })
   }))
@@ -1068,10 +1107,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const data: Prisma.ProcessUncheckedUpdateInput = {}
     if (parsed.data.name !== undefined) data.name = parsed.data.name
-    if (parsed.data.type !== undefined) data.type = parsed.data.type
     if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
     if (parsed.data.description !== undefined) data.description = parsed.data.description || null
-    if (parsed.data.code !== undefined) data.code = parsed.data.code || null
     if (parsed.data.version !== undefined) data.version = parsed.data.version || null
     if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency || null
     if (parsed.data.organizationalArea !== undefined) data.organizationalArea = parsed.data.organizationalArea || null
@@ -1081,9 +1118,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.responsibleId !== undefined) data.responsibleId = parsed.data.responsibleId
     if (parsed.data.thirdPartyProvided !== undefined) data.thirdPartyProvided = parsed.data.thirdPartyProvided
     if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
-    if (parsed.data.cashMovement !== undefined) data.cashMovement = parsed.data.cashMovement
-    if (parsed.data.contingencyPlan !== undefined) data.contingencyPlan = parsed.data.contingencyPlan
-    if (parsed.data.taxOperations !== undefined) data.taxOperations = parsed.data.taxOperations
     if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
     if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
     const process = await db.process.update({ where: { id: existing.id }, data, include: processInclude })
@@ -1105,9 +1139,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     return process && canAccessCompany(request, process.company) ? process : null
   }
 
-  const sipocDelegates: Record<'suppliers' | 'inputs' | 'outputs' | 'customers', SipocDelegate> = {
+  const sipocDelegates: Record<'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers', SipocDelegate> = {
     suppliers: db.sipocSupplier as unknown as SipocDelegate,
     inputs: db.sipocInput as unknown as SipocDelegate,
+    processes: db.sipocProcess as unknown as SipocDelegate,
     outputs: db.sipocOutput as unknown as SipocDelegate,
     customers: db.sipocCustomer as unknown as SipocDelegate,
   }
@@ -1118,10 +1153,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const [suppliers, inputs, outputs, customers] = await Promise.all(
+    const [suppliers, inputs, processes, outputs, customers] = await Promise.all(
       (Object.keys(sipocDelegates) as Array<keyof typeof sipocDelegates>).map(async (kind) => [kind, await sipocDelegates[kind].findMany({ where: { processId: process.id }, orderBy: { createdAt: 'asc' } })] as const),
     )
-    response.json(Object.fromEntries([suppliers, inputs, outputs, customers].map(([kind, items]) => [kind, items.map(sipocItemView)])))
+    response.json(Object.fromEntries([suppliers, inputs, processes, outputs, customers].map(([kind, items]) => [kind, items.map(sipocItemView)])))
   }))
 
   app.post('/api/processes/:processId/sipoc/:kind', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {

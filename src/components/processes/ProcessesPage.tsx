@@ -52,9 +52,6 @@ const emptyProcessDraft: ProcessDraft = {
   updatedAt: null,
   thirdPartyProvided: false,
   critical: false,
-  cashMovement: false,
-  contingencyPlan: false,
-  taxOperations: false,
   affectsAccounting: false,
   personalData: false,
 }
@@ -76,9 +73,6 @@ const draftFromProcess = (process: Process): ProcessDraft => ({
   updatedAt: process.updatedAt,
   thirdPartyProvided: process.thirdPartyProvided,
   critical: process.critical,
-  cashMovement: process.cashMovement,
-  contingencyPlan: process.contingencyPlan,
-  taxOperations: process.taxOperations,
   affectsAccounting: process.affectsAccounting,
   personalData: process.personalData,
 })
@@ -145,7 +139,7 @@ export function ProcessesPage({ user }: { user: User }) {
     }
   }
 
-  function startCreate(type: ProcessType = 'MISSIONAL') {
+  function startCreate(type: ProcessType) {
     if (!canCreate) return
     setFormError('')
     setNotice('')
@@ -229,10 +223,8 @@ export function ProcessesPage({ user }: { user: User }) {
     try {
       const payload = {
         name: draft.name,
-        type: draft.type,
         objective: draft.objective,
         description: draft.description.trim() || null,
-        code: draft.code.trim() || null,
         responsibleId: draft.responsibleId || null,
         version: draft.version.trim() || null,
         frequency: draft.frequency.trim() || null,
@@ -242,9 +234,6 @@ export function ProcessesPage({ user }: { user: User }) {
         status: draft.status,
         thirdPartyProvided: draft.thirdPartyProvided,
         critical: draft.critical,
-        cashMovement: draft.cashMovement,
-        contingencyPlan: draft.contingencyPlan,
-        taxOperations: draft.taxOperations,
         affectsAccounting: draft.affectsAccounting,
         personalData: draft.personalData,
       }
@@ -254,7 +243,7 @@ export function ProcessesPage({ user }: { user: User }) {
         const result = await api<{ process: Process }>(`/processes/${editing.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
         savedProcess = result.process
       } else {
-        const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, companyId: draft.companyId }) })
+        const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }) })
         savedProcess = result.process
       }
       if (wasEditing) {
@@ -308,17 +297,6 @@ export function ProcessesPage({ user }: { user: User }) {
            <h1>Gestión por procesos</h1>
            <p className="muted">Gestiona, caracteriza y mejora los procesos de tu organización.</p>
          </div>
-        {!showForm && <div className="page-actions">
-           <button
-             type="button"
-             className="button primary"
-             disabled={!canCreate}
-             onClick={() => startCreate()}
-             title={canCreate ? undefined : 'Solo administradores pueden crear procesos.'}
-           >
-             + Nuevo proceso
-           </button>
-          </div>}
         </div>}
 
         {notice && !showForm && !showKpis && !showRisks && <div className="form-success page-alert" role="status">{notice}</div>}
