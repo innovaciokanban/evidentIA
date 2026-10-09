@@ -4,6 +4,14 @@ export const roleSchema = z.enum(['SUPERUSER', 'COMPANY_ADMIN', 'COMPANY_USER'])
 export const statusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'])
 export const prioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
 
+/**
+ * Referencia a Company o User por id. Prisma los declaran con cuid(), pero prisma/seed.ts los
+ * inserta con gen_random_uuid(): la base real (incluida UAT) contiene ambos formatos, así que se
+ * aceptan los dos y sigue rechazando cualquier cadena que no sea un id de verdad. Las entidades que
+ * solo nacen desde Prisma (Recommendation, SWOTItem, StrategicCross, ...) se quedan en cuid().
+ */
+export const idReference = z.union([z.string().cuid(), z.string().uuid()])
+
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(128),
@@ -14,7 +22,7 @@ export const ticketCreateSchema = z.object({
   description: z.string().trim().min(3).max(5000),
   status: statusSchema.optional(),
   priority: prioritySchema.optional(),
-  assignedToId: z.string().cuid().nullable().optional(),
+  assignedToId: idReference.nullable().optional(),
 })
 
 export const ticketUpdateSchema = ticketCreateSchema.partial().refine(
@@ -33,7 +41,7 @@ export const userCreateSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(128),
   role: roleSchema,
-  companyId: z.union([z.string().cuid(), z.string().uuid()]).nullable().optional(),
+  companyId: idReference.nullable().optional(),
 })
 
 export const userUpdateSchema = z.object({
@@ -41,7 +49,7 @@ export const userUpdateSchema = z.object({
   email: z.string().trim().toLowerCase().email().optional(),
   password: z.string().min(8).max(128).optional(),
   role: roleSchema.optional(),
-  companyId: z.string().cuid().nullable().optional(),
+  companyId: idReference.nullable().optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
@@ -105,8 +113,8 @@ export const processCreateSchema = z.object({
   affectsAccounting: z.boolean().optional(),
   personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
-  responsibleId: z.string().cuid().nullable().optional(),
-  companyId: z.string().cuid().optional(),
+  responsibleId: idReference.nullable().optional(),
+  companyId: idReference.optional(),
 }).refine(
   (value) => processTypeForCategory[value.category] === value.type,
   { path: ['category'], message: 'Process type does not match selected category' },
@@ -127,14 +135,14 @@ export const processUpdateSchema = z.object({
   affectsAccounting: z.boolean().optional(),
   personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
-  responsibleId: z.string().cuid().nullable().optional(),
+  responsibleId: idReference.nullable().optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
 )
 
 export const processQuerySchema = z.object({
-  companyId: z.string().cuid().optional(),
+  companyId: idReference.optional(),
 })
 
 const kpiText = (max: number) => z.string().trim().min(1).max(max)
@@ -277,8 +285,10 @@ export const actionItemCreateSchema = z.object({
   description: z.string().trim().min(3).max(5000),
   priority: priorityLevelSchema,
   status: actionItemStatusSchema.optional(),
+  // Recommendation solo nacen desde Prisma (cuid); el endpoint comprueba además que la
+  // recomendación pertenezca a este diagnóstico. El responsable sí es un User, con cuid o uuid.
   recommendationId: z.string().cuid().nullable().optional(),
-  responsibleId: z.string().cuid().nullable().optional(),
+  responsibleId: idReference.nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
 })
 
@@ -288,7 +298,7 @@ export const actionItemUpdateSchema = z.object({
   priority: priorityLevelSchema.optional(),
   status: actionItemStatusSchema.optional(),
   recommendationId: z.string().cuid().nullable().optional(),
-  responsibleId: z.string().cuid().nullable().optional(),
+  responsibleId: idReference.nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,
@@ -312,6 +322,8 @@ export const crossTypeSchema = z.enum(['FO', 'DO', 'FA', 'DA'])
 export const crossOriginSchema = z.enum(['USER', 'AI', 'BOTH'])
 
 export const crossCreateSchema = z.object({
+  // Los factores DOFA son SWOTItem: solo nacen desde Prisma, nunca desde el seed, así que sus ids
+  // son cuid. El endpoint exige además que ambos pertenezcan a la matriz del diagnóstico.
   factor1Id: z.string().cuid(),
   factor2Id: z.string().cuid(),
   strategy: z.string().trim().min(3).max(3000).optional(),

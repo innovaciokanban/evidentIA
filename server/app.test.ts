@@ -8,14 +8,20 @@ import { AIService, AIServiceError, resolveWeightingBand, type CheckyContext } f
 import { dashboardScopesFor } from './dashboard-service.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { strategySourceRef } from './strategy-weighting-service.js'
-import { aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema, userCreateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossCreateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
+/** Empresas con id UUID, como las que deja el seed con gen_random_uuid() sobre UAT. */
+const uuidCompanyId = '550e8400-e29b-41d4-a716-446655440000'
+const uuidOtherCompanyId = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
 const admin = { id: 'cmadmin000000000000000001', email: 'admin@test.local', name: 'Admin Test', role: 'SUPERUSER' as Role, companyId: null }
 const member = { id: 'cmmember00000000000000001', email: 'member@test.local', name: 'Member Test', role: 'COMPANY_ADMIN' as Role, companyId }
 const companyUser = { id: 'cmcompanyuser0000000000001', email: 'company@test.local', name: 'Company User', role: 'COMPANY_USER' as Role, companyId }
 const otherCompanyUser = { id: 'cmotheruser00000000000001', email: 'other@test.local', name: 'Other User', role: 'COMPANY_USER' as Role, companyId: otherCompanyId }
+/** Usuarios creados por el seed: id UUID, no cuid. */
+const uuidMember = { id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479', email: 'uuid@test.local', name: 'UUID Member', role: 'COMPANY_USER' as Role, companyId }
+const uuidOtherCompanyUser = { id: 'e9924d67-6b79-4f4c-9a4d-3d6b0f1c2a88', email: 'uuidother@test.local', name: 'UUID Other User', role: 'COMPANY_USER' as Role, companyId: otherCompanyId }
 const ticket = {
   id: 'cmticket00000000000000001', title: 'Revisar propuesta', description: 'Validar la propuesta comercial', status: 'OPEN' as const, priority: 'HIGH' as const,
   createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-02'), createdBy: member, assignedTo: null,
@@ -158,7 +164,7 @@ const checkyInsufficientResult = {
 function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssigneeId: string | null = null, userCompanyId: string | null = company.id, existingRecommendations: typeof recommendation[] = [], seededCrosses: SeededCross[] = []) {
   const currentUser = role === 'SUPERUSER' ? admin : { ...member, role, companyId: userCompanyId }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
-  const users = [admin, member, companyUser, otherCompanyUser]
+  const users = [admin, member, companyUser, otherCompanyUser, uuidMember, uuidOtherCompanyUser]
   let sessionActive = false
   let storedRecommendations: typeof recommendation[] = existingRecommendations
   type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; createdById: string; assignedToId: string | null; actionItemId: string | null; dueDate: Date | null }
@@ -499,6 +505,57 @@ describe('validation schemas', () => {
     expect(userCreateSchema.safeParse({ ...baseUser, companyId: 'not-an-id' }).success).toBe(false)
     expect(userCreateSchema.safeParse({ ...baseUser, companyId: '' }).success).toBe(false)
   })
+
+  it('accepts cuid and uuid references when creating a process, rejecting anything else', () => {
+    const baseProcess = { name: 'Proceso válido', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo válido' } as const
+    // Company y User del seed se insertan con gen_random_uuid(), así que el payload de UAT trae UUIDs.
+    expect(processCreateSchema.safeParse({ ...baseProcess, companyId: uuidCompanyId }).success).toBe(true)
+    expect(processCreateSchema.safeParse({ ...baseProcess, companyId }).success).toBe(true)
+    expect(processCreateSchema.safeParse({ ...baseProcess, responsibleId: uuidCompanyId }).success).toBe(true)
+    expect(processCreateSchema.safeParse({ ...baseProcess, responsibleId: companyId }).success).toBe(true)
+    expect(processCreateSchema.safeParse({ ...baseProcess, companyId: 'not-an-id' }).success).toBe(false)
+    expect(processCreateSchema.safeParse({ ...baseProcess, responsibleId: '' }).success).toBe(false)
+    expect(processUpdateSchema.safeParse({ responsibleId: uuidCompanyId }).success).toBe(true)
+    expect(processUpdateSchema.safeParse({ responsibleId: 'not-an-id' }).success).toBe(false)
+    expect(processQuerySchema.safeParse({ companyId: uuidCompanyId }).success).toBe(true)
+    expect(processQuerySchema.safeParse({ companyId: 'not-an-id' }).success).toBe(false)
+  })
+
+  it('accepts cuid and uuid user references in tickets, users and action items', () => {
+    const baseTicket = { title: 'Ticket válido', description: 'Descripción del ticket' }
+    // Ticket.assignedToId → User
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: uuidMember.id }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: companyUser.id }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: null }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: 'not-an-id' }).success).toBe(false)
+    expect(ticketUpdateSchema.safeParse({ assignedToId: uuidMember.id }).success).toBe(true)
+    expect(ticketUpdateSchema.safeParse({ assignedToId: 'not-an-id' }).success).toBe(false)
+    // userUpdateSchema.companyId → Company
+    expect(userUpdateSchema.safeParse({ companyId: uuidCompanyId }).success).toBe(true)
+    expect(userUpdateSchema.safeParse({ companyId }).success).toBe(true)
+    expect(userUpdateSchema.safeParse({ companyId: null }).success).toBe(true)
+    expect(userUpdateSchema.safeParse({ companyId: 'not-an-id' }).success).toBe(false)
+    // ActionItem.responsibleId → User
+    const baseItem = { title: 'Tarea válida', description: 'Descripción de la tarea', priority: 'HIGH' as const }
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, responsibleId: uuidMember.id }).success).toBe(true)
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, responsibleId: companyUser.id }).success).toBe(true)
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, responsibleId: 'not-an-id' }).success).toBe(false)
+    expect(actionItemUpdateSchema.safeParse({ responsibleId: uuidMember.id }).success).toBe(true)
+    expect(actionItemUpdateSchema.safeParse({ responsibleId: 'not-an-id' }).success).toBe(false)
+  })
+
+  it('keeps recommendation and swot factor references as cuid, because only Prisma creates them', () => {
+    const baseItem = { title: 'Tarea válida', description: 'Descripción de la tarea', priority: 'HIGH' as const }
+    // Recommendation y SWOTItem nunca se insertan con gen_random_uuid(), solo con cuid de Prisma.
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, recommendationId: recommendation.id }).success).toBe(true)
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, recommendationId: uuidMember.id }).success).toBe(false)
+    expect(actionItemCreateSchema.safeParse({ ...baseItem, recommendationId: 'not-an-id' }).success).toBe(false)
+    expect(actionItemUpdateSchema.safeParse({ recommendationId: recommendation.id }).success).toBe(true)
+    expect(actionItemUpdateSchema.safeParse({ recommendationId: uuidMember.id }).success).toBe(false)
+    expect(crossCreateSchema.safeParse({ factor1Id: swotItem.id, factor2Id: checkySwotItemFixtures.opportunity.id }).success).toBe(true)
+    expect(crossCreateSchema.safeParse({ factor1Id: uuidMember.id, factor2Id: swotItem.id }).success).toBe(false)
+    expect(crossCreateSchema.safeParse({ factor1Id: 'not-an-id', factor2Id: swotItem.id }).success).toBe(false)
+  })
 })
 
 describe('environment validation', () => {
@@ -689,6 +746,29 @@ describe('users API', () => {
     expect(blocked.status).toBe(403)
     expect((await agent.delete(`/api/users/${admin.id}`)).status).toBe(403)
   })
+
+  it('moves a user to a UUID company and blocks a UUID company of another tenant', async () => {
+    const superAgent = request.agent(createApp(makeDb()))
+    await superAgent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const moved = await superAgent.patch(`/api/users/${companyUser.id}`).send({ companyId: uuidCompanyId })
+    expect(moved.status).toBe(200)
+    expect(moved.body.user.companyId).toBe(uuidCompanyId)
+
+    const malformed = await superAgent.patch(`/api/users/${companyUser.id}`).send({ companyId: 'not-an-id' })
+    expect(malformed.status).toBe(400)
+
+    const companyAgent = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, company.id)))
+    await companyAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    // Una empresa UUID de otro tenant sigue rechazada por la regla de autorización, no por formato.
+    const foreign = await companyAgent.patch(`/api/users/${companyUser.id}`).send({ companyId: uuidOtherCompanyId })
+    expect(foreign.status).toBe(403)
+
+    const own = await companyAgent.patch(`/api/users/${companyUser.id}`).send({ companyId })
+    expect(own.status).toBe(200)
+    expect(own.body.user.companyId).toBe(companyId)
+  })
 })
 
 describe('tickets API', () => {
@@ -728,6 +808,24 @@ describe('tickets API', () => {
 
     const patched = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: otherCompanyUser.id })
     expect(patched.status).toBe(403)
+  })
+
+  it('assigns tickets to seeded UUID users and keeps company isolation', async () => {
+    const agent = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, company.id)))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    const created = await agent.post('/api/tickets').send({ title: ticket.title, description: ticket.description, assignedToId: uuidMember.id })
+    expect(created.status).toBe(201)
+    expect(created.body.ticket.assignedToId).toBe(uuidMember.id)
+
+    const patched = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: uuidMember.id })
+    expect(patched.status).toBe(200)
+
+    const foreign = await agent.post('/api/tickets').send({ title: ticket.title, description: ticket.description, assignedToId: uuidOtherCompanyUser.id })
+    expect(foreign.status).toBe(403)
+
+    const malformed = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: 'not-an-id' })
+    expect(malformed.status).toBe(400)
   })
 
   it('lets a superuser manage a ticket created by another user', async () => {
@@ -840,6 +938,51 @@ describe('processes API', () => {
     expect(responses.map((response) => response.status)).toEqual([201, 201, 201, 201])
     expect(responses.map((response) => response.body.process.code).sort()).toEqual(['PROC-001', 'PROC-002', 'PROC-003', 'PROC-004'])
     expect((db as unknown as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw).toHaveBeenCalledTimes(4)
+  })
+
+  it('creates a process from the real frontend payload when the company id is a UUID (UAT seed)', async () => {
+    // Reproduce ProcessesPage.createProcessPayload: la empresa viene del seed con
+    // gen_random_uuid(), por lo que su id es un UUID y no un cuid.
+    const db = makeDb('COMPANY_ADMIN', member.id, null, uuidCompanyId)
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    const response = await agent.post('/api/processes').send({
+      name: 'Gestión de proveedores',
+      objective: 'Asegurar proveedores adecuados',
+      description: null,
+      responsibleId: null,
+      version: '1.0',
+      frequency: null,
+      organizationalArea: null,
+      supervision: null,
+      executionType: null,
+      status: 'ACTIVE',
+      thirdPartyProvided: false,
+      critical: false,
+      affectsAccounting: false,
+      personalData: false,
+      type: 'SUPPORT',
+      category: 'apoyo',
+      companyId: uuidCompanyId,
+    })
+
+    expect(response.status).toBe(201)
+    expect(response.body.process).toMatchObject({ companyId: uuidCompanyId, type: 'SUPPORT', code: 'PROC-001' })
+    expect((await agent.get('/api/processes')).body.processes).toHaveLength(1)
+  })
+
+  it('blocks creating a process for a foreign company even when its id is a valid UUID', async () => {
+    const agent = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, company.id)))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const response = await agent.post('/api/processes').send({
+      name: 'Proceso ajeno',
+      type: 'SUPPORT',
+      category: 'apoyo',
+      objective: 'Objetivo de otra empresa',
+      companyId: uuidOtherCompanyId,
+    })
+    expect(response.status).toBe(403)
   })
 
   it('keeps existing process rows readable with safe default attributes', async () => {
@@ -1594,6 +1737,26 @@ describe('recommendations and action plans API', () => {
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     const response = await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: otherCompanyUser.id })
     expect(response.status).toBe(403)
+  })
+
+  it('assigns a seeded UUID responsible user and keeps company isolation', async () => {
+    const db = makeDb('COMPANY_ADMIN')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    const created = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: actionItem.title, description: actionItem.description, priority: 'HIGH', responsibleId: uuidMember.id, dueDate: '2026-03-01' })
+    expect(created.status).toBe(201)
+    const data = (db.actionItem.create as unknown as { mock: { calls: Array<[{ data: { responsibleId?: string | null } }]> } }).mock.calls[0][0].data
+    expect(data.responsibleId).toBe(uuidMember.id)
+
+    const updated = await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: uuidMember.id })
+    expect(updated.status).toBe(200)
+
+    const foreign = await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: uuidOtherCompanyUser.id })
+    expect(foreign.status).toBe(403)
+
+    const malformed = await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: 'not-an-id' })
+    expect(malformed.status).toBe(400)
   })
 
   it('validates action plan and action item payloads', async () => {

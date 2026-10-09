@@ -77,6 +77,34 @@ const draftFromProcess = (process: Process): ProcessDraft => ({
   personalData: process.personalData,
 })
 
+/**
+ * Payload de edición/común: no incluye `code` (lo genera el backend con bloqueo) ni tipo ni
+ * empresa, porque la edición no mueve el proceso de compañía.
+ */
+export function processDraftPayload(draft: ProcessDraft) {
+  return {
+    name: draft.name,
+    objective: draft.objective,
+    description: draft.description.trim() || null,
+    responsibleId: draft.responsibleId || null,
+    version: draft.version.trim() || null,
+    frequency: draft.frequency.trim() || null,
+    organizationalArea: draft.organizationalArea.trim() || null,
+    supervision: draft.supervision.trim() || null,
+    executionType: draft.executionType.trim() || null,
+    status: draft.status,
+    thirdPartyProvided: draft.thirdPartyProvided,
+    critical: draft.critical,
+    affectsAccounting: draft.affectsAccounting,
+    personalData: draft.personalData,
+  }
+}
+
+/** El alta añade el tipo derivado de la categoría elegida y la empresa seleccionada. */
+export function createProcessPayload(draft: ProcessDraft) {
+  return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
+}
+
 export function ProcessesPage({ user }: { user: User }) {
   const canCreate = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
   const [processes, setProcesses] = useState<Process[]>([])
@@ -221,29 +249,14 @@ export function ProcessesPage({ user }: { user: User }) {
     }
     setSaving(true)
     try {
-      const payload = {
-        name: draft.name,
-        objective: draft.objective,
-        description: draft.description.trim() || null,
-        responsibleId: draft.responsibleId || null,
-        version: draft.version.trim() || null,
-        frequency: draft.frequency.trim() || null,
-        organizationalArea: draft.organizationalArea.trim() || null,
-        supervision: draft.supervision.trim() || null,
-        executionType: draft.executionType.trim() || null,
-        status: draft.status,
-        thirdPartyProvided: draft.thirdPartyProvided,
-        critical: draft.critical,
-        affectsAccounting: draft.affectsAccounting,
-        personalData: draft.personalData,
-      }
+      const payload = processDraftPayload(draft)
       const wasEditing = Boolean(editing)
       let savedProcess: Process
       if (editing) {
         const result = await api<{ process: Process }>(`/processes/${editing.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
         savedProcess = result.process
       } else {
-        const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify({ ...payload, type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }) })
+        const result = await api<{ process: Process }>('/processes', { method: 'POST', body: JSON.stringify(createProcessPayload(draft)) })
         savedProcess = result.process
       }
       if (wasEditing) {
