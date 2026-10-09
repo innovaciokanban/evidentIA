@@ -10,5 +10,6 @@ COPY . .
 RUN npm run build
 
 ENV NODE_ENV=production
+ENV PATH="/app/node_modules/.bin:$PATH"
 
 CMD ["node", "dist-server/index.js"]
