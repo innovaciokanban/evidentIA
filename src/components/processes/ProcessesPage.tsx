@@ -13,6 +13,7 @@ import { askConfirm } from '../ui/useConfirm'
 
 export const categoryOf: Record<ProcessType, ProcessCategory> = { STRATEGIC: 'estrategico', MISSIONAL: 'misional', SUPPORT: 'apoyo' }
 const visualStatusOf: Record<Process['status'], ProcessStatus> = { ACTIVE: 'active', INACTIVE: 'paused' }
+export const canManageProcesses = (role: User['role']) => role === 'SUPERUSER' || role === 'COMPANY_ADMIN'
 
 export function groupProcesses(processes: Process[]): Record<ProcessCategory, Process[]> {
   const grouped: Record<ProcessCategory, Process[]> = { estrategico: [], misional: [], apoyo: [] }
@@ -87,7 +88,6 @@ export function processDraftPayload(draft: ProcessDraft) {
     objective: draft.objective,
     description: draft.description.trim() || null,
     responsibleId: draft.responsibleId || null,
-    version: draft.version.trim() || null,
     frequency: draft.frequency.trim() || null,
     organizationalArea: draft.organizationalArea.trim() || null,
     supervision: draft.supervision.trim() || null,
@@ -106,7 +106,7 @@ export function createProcessPayload(draft: ProcessDraft) {
 }
 
 export function ProcessesPage({ user }: { user: User }) {
-  const canCreate = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
+  const canCreate = canManageProcesses(user.role)
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
   const [users, setUsers] = useState<ProcessUser[]>([])

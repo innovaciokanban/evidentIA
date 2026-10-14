@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs'
 import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
-import { createApp, nextProcessCode, swotFingerprint } from './app.js'
+import { createApp, nextProcessCode, nextProcessVersion, swotFingerprint } from './app.js'
 import { envSchema } from './env.js'
 import { AIService, AIServiceError, resolveWeightingBand, type CheckyContext } from './ai-service.js'
 import { dashboardScopesFor } from './dashboard-service.js'
@@ -481,12 +481,20 @@ describe('validation schemas', () => {
     expect(diagnosticUpdateSchema.safeParse({}).success).toBe(false)
     expect(swotItemCreateSchema.safeParse({ type: 'UNKNOWN', description: '' }).success).toBe(false)
     expect(swotItemUpdateSchema.safeParse({}).success).toBe(false)
-    expect(processCreateSchema.safeParse({ name: 'Proceso válido', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo válido', version: '1.0', critical: true }).success).toBe(true)
+    const processWithClientVersion = processCreateSchema.safeParse({ name: 'Proceso válido', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo válido', version: '1.0', critical: true })
+    expect(processWithClientVersion.success).toBe(true)
+    if (processWithClientVersion.success) expect(processWithClientVersion.data).not.toHaveProperty('version')
     expect(processCreateSchema.safeParse({ name: 'Proceso inválido', type: 'SUPPORT', category: 'estrategico', objective: 'Objetivo válido' }).success).toBe(false)
     expect(processCreateSchema.safeParse({ name: 'Proceso sin categoría', type: 'MISSIONAL', objective: 'Objetivo válido' }).success).toBe(false)
     expect(nextProcessCode([null, 'PROC-01', 'OTRO'])).toBe('PROC-001')
     expect(nextProcessCode(['PROC-001', 'PROC-003'])).toBe('PROC-002')
+    expect(nextProcessVersion('1.0')).toBe('2.0')
+    expect(nextProcessVersion('2.1')).toBe('3.1')
+    expect(nextProcessVersion(null)).toBe('1.0')
     expect(processUpdateSchema.safeParse({ frequency: null, personalData: true }).success).toBe(true)
+    const updateWithClientVersion = processUpdateSchema.safeParse({ version: '99.0', personalData: true })
+    expect(updateWithClientVersion.success).toBe(true)
+    if (updateWithClientVersion.success) expect(updateWithClientVersion.data).not.toHaveProperty('version')
     expect(processUpdateSchema.safeParse({}).success).toBe(false)
     expect(aiAnalysisSchema.safeParse(aiResult).success).toBe(true)
     expect(aiAnalysisSchema.safeParse({ ...aiResult, recommendations: [{ title: 'invalid' }] }).success).toBe(false)
@@ -894,7 +902,7 @@ describe('processes API', () => {
       critical: true, personalData: true,
     })
     expect(created.status).toBe(201)
-    expect(created.body.process).toMatchObject({ version: '2.1', frequency: 'Mensual', critical: true, personalData: true })
+    expect(created.body.process).toMatchObject({ version: '1.0', frequency: 'Mensual', critical: true, personalData: true })
     expect(created.body.process).not.toHaveProperty('deliveryMethod')
     expect(created.body.process).not.toHaveProperty('cashMovement')
     expect(created.body.process).not.toHaveProperty('contingencyPlan')
@@ -906,10 +914,20 @@ describe('processes API', () => {
     expect(listed.body.processes).toHaveLength(2)
     expect(listed.body.processes.some((item: { name: string }) => item.name === 'Gestión de proveedores')).toBe(true)
 
-    const updated = await agent.patch(`/api/processes/${created.body.process.id}`).send({ type: 'STRATEGIC', code: 'PROC-999', frequency: 'Semanal', critical: false })
+    const updated = await agent.patch(`/api/processes/${created.body.process.id}`).send({ type: 'STRATEGIC', code: 'PROC-999', version: '99.0', frequency: 'Semanal', critical: false })
     expect(updated.status).toBe(200)
-    expect(updated.body.process).toMatchObject({ type: 'SUPPORT', code: 'PROC-001', frequency: 'Semanal', critical: false, personalData: true })
-    expect((await agent.patch(`/api/processes/${created.body.process.id}`).send({ code: 'PROC-999' })).status).toBe(400)
+    expect(updated.body.process).toMatchObject({ type: 'SUPPORT', code: 'PROC-001', version: '2.0', frequency: 'Semanal', critical: false, personalData: true })
+    const persistedAfterFirstUpdate = await agent.get(`/api/processes/${created.body.process.id}`)
+    expect(persistedAfterFirstUpdate.status).toBe(200)
+    expect(persistedAfterFirstUpdate.body.process.version).toBe('2.0')
+    const unchanged = await agent.patch(`/api/processes/${created.body.process.id}`).send({ frequency: 'Semanal', critical: false })
+    expect(unchanged.status).toBe(200)
+    expect(unchanged.body.process).toMatchObject({ version: '2.0', updatedAt: updated.body.process.updatedAt })
+    const secondUpdate = await agent.patch(`/api/processes/${created.body.process.id}`).send({ status: 'INACTIVE' })
+    expect(secondUpdate.status).toBe(200)
+    expect(secondUpdate.body.process.version).toBe('3.0')
+    expect((await agent.patch(`/api/processes/${created.body.process.id}`).send({ version: '99.0' })).status).toBe(400)
+    expect((await agent.get(`/api/processes/${created.body.process.id}`)).body.process.version).toBe('3.0')
 
     const second = await agent.post('/api/processes').send({ name: 'Gestión de clientes', type: 'SUPPORT', category: 'apoyo', objective: 'Atender clientes', companyId: company.id })
     expect(second.status).toBe(201)
@@ -997,6 +1015,8 @@ describe('processes API', () => {
     const companyAdmin = request.agent(createApp(makeDb('COMPANY_ADMIN')))
     await companyAdmin.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     expect((await companyAdmin.post('/api/processes').send({ name: 'Proceso propio', type: 'SUPPORT', category: 'apoyo', objective: 'Objetivo propio' })).status).toBe(201)
+    expect((await companyAdmin.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(200)
+    expect((await companyAdmin.delete(`/api/processes/${processFixture.id}`)).status).toBe(204)
 
     const companyUser = request.agent(createApp(makeDb('COMPANY_USER')))
     await companyUser.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })

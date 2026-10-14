@@ -124,7 +124,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
       <section className="characterization-section">
         <div className="characterization-grid">
           <div className="characterization-field"><span>Fecha actualización</span><strong>{dateLabel(draft.updatedAt)}</strong></div>
-          <label>Versión<input value={draft.version} onChange={(event) => update('version', event.target.value)} placeholder="Ej. 1.0" maxLength={120} /></label>
+          <div className="characterization-field"><span>Versión</span><strong>{draft.version || 'Sin versión'}</strong></div>
           {companies.length > 1 ? (
             <label>Empresa<select value={draft.companyId} onChange={(event) => setDraft({ ...draft, companyId: event.target.value, responsibleId: '' })} required>
               <option value="">Selecciona una entidad</option>
@@ -143,7 +143,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <label>Tipo de ejecución<select value={draft.executionType} onChange={(event) => update('executionType', event.target.value)}><option value="">Selecciona un tipo</option>{executionTypeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
 
           <label>Nombre del proceso<input value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Gestión Comercial" minLength={3} required /></label>
-          <label>Código<input value={draft.code} readOnly placeholder="Se asignará automáticamente" maxLength={40} /></label>
+          <div className="characterization-field"><span>Código</span><strong>{draft.code || 'Se asignará automáticamente'}</strong></div>
           <label>Estado<select value={draft.status} onChange={(event) => update('status', event.target.value as ProcessState)}><option value="ACTIVE">Activo</option><option value="INACTIVE">Inactivo</option></select></label>
         </div>
       </section>

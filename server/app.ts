@@ -359,6 +359,16 @@ export const nextProcessCode = (codes: readonly (string | null | undefined)[]): 
   return `PROC-${String(nextNumber).padStart(3, '0')}`
 }
 
+const processVersionPattern = /^(\d+)(\.\d+)?$/
+
+export const nextProcessVersion = (version: string | null | undefined): string => {
+  const current = version?.trim()
+  if (!current) return '1.0'
+  const match = current.match(processVersionPattern)
+  if (!match) return '1.0'
+  return `${Number(match[1]) + 1}${match[2] ?? '.0'}`
+}
+
 async function withProcessCodeLock<T>(companyId: string, work: () => Promise<T>): Promise<T> {
   const previous = processCodeLocks.get(companyId) ?? Promise.resolve()
   let release!: () => void
@@ -391,6 +401,26 @@ async function createProcessWithCode(db: PrismaClient, companyId: string, data: 
     }
     return typeof db.$transaction === 'function' ? db.$transaction((transaction) => create(transaction)) : create(db)
   })
+}
+
+type ProcessWithInclude = Prisma.ProcessGetPayload<{ include: typeof processInclude }>
+const versionedProcessFields = ['name', 'objective', 'description', 'frequency', 'organizationalArea', 'supervision', 'executionType', 'status', 'responsibleId', 'thirdPartyProvided', 'critical', 'affectsAccounting', 'personalData'] as const
+
+const processHasChanges = (current: ProcessWithInclude, data: Prisma.ProcessUncheckedUpdateInput) =>
+  versionedProcessFields.some((field) => data[field] !== undefined && current[field] !== data[field])
+
+async function updateProcessWithVersion(db: PrismaClient, processId: string, data: Prisma.ProcessUncheckedUpdateInput): Promise<ProcessWithInclude | null> {
+  const update = async (transaction: Prisma.TransactionClient | PrismaClient) => {
+    if (typeof transaction.$queryRaw === 'function') {
+      await transaction.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${processId} FOR UPDATE`
+    }
+    const current = await transaction.process.findUnique({ where: { id: processId }, include: processInclude })
+    if (!current) return null
+    if (!processHasChanges(current, data)) return current
+    return transaction.process.update({ where: { id: processId }, data: { ...data, version: nextProcessVersion(current.version) }, include: processInclude })
+  }
+
+  return typeof db.$transaction === 'function' ? db.$transaction((transaction) => update(transaction)) : update(db)
 }
 /** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
 const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
@@ -1057,7 +1087,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       companyId,
       name: parsed.data.name,
       type: parsed.data.type,
-      version: parsed.data.version || null,
+      version: '1.0',
       frequency: parsed.data.frequency || null,
       organizationalArea: parsed.data.organizationalArea || null,
       supervision: parsed.data.supervision || null,
@@ -1109,7 +1139,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.name !== undefined) data.name = parsed.data.name
     if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
     if (parsed.data.description !== undefined) data.description = parsed.data.description || null
-    if (parsed.data.version !== undefined) data.version = parsed.data.version || null
     if (parsed.data.frequency !== undefined) data.frequency = parsed.data.frequency || null
     if (parsed.data.organizationalArea !== undefined) data.organizationalArea = parsed.data.organizationalArea || null
     if (parsed.data.supervision !== undefined) data.supervision = parsed.data.supervision || null
@@ -1120,7 +1149,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
     if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
     if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
-    const process = await db.process.update({ where: { id: existing.id }, data, include: processInclude })
+    const process = await updateProcessWithVersion(db, existing.id, data)
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
     response.json({ process: processView(process) })
   }))
 

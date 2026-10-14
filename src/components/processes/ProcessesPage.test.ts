@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Process } from '../../types'
 import type { ProcessDraft } from './ProcessForm'
-import { categoryOf, createProcessPayload, groupProcesses } from './ProcessesPage'
+import { canManageProcesses, categoryOf, createProcessPayload, groupProcesses } from './ProcessesPage'
 
 const processOf = (type: Process['type'], name: string): Process => ({ type, name } as Process)
 
@@ -49,6 +49,14 @@ describe('organización del mapa de procesos', () => {
   })
 })
 
+describe('permisos del mapa de procesos', () => {
+  it('permite gestionar a superusuarios y administradores, pero no a usuarios de empresa', () => {
+    expect(canManageProcesses('SUPERUSER')).toBe(true)
+    expect(canManageProcesses('COMPANY_ADMIN')).toBe(true)
+    expect(canManageProcesses('COMPANY_USER')).toBe(false)
+  })
+})
+
 describe('payload de creación de procesos', () => {
   it('hereda el tipo de la categoría y no envía el código ni campos eliminados', () => {
     const payload = createProcessPayload(draft)
@@ -62,8 +70,9 @@ describe('payload de creación de procesos', () => {
     })
     expect(payload.responsibleId).toBeNull()
     expect(payload.description).toBeNull()
-    // El código lo genera el backend con bloqueo; los campos de control ya no existen.
+    // El código y la versión los asigna el backend; los campos de control ya no existen.
     expect(payload).not.toHaveProperty('code')
+    expect(payload).not.toHaveProperty('version')
     expect(payload).not.toHaveProperty('cashMovement')
     expect(payload).not.toHaveProperty('contingencyPlan')
     expect(payload).not.toHaveProperty('taxOperations')
