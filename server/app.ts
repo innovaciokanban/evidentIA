@@ -15,7 +15,7 @@ import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiS
 import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -343,6 +343,19 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   createdAt: process.createdAt,
   updatedAt: process.updatedAt,
 })
+const processChangeInclude = { changedBy: { select: { id: true, name: true } } } as const
+const processChangeView = (change: Prisma.ProcessChangeGetPayload<{ include: typeof processChangeInclude }>) => ({
+  id: change.id,
+  processId: change.processId,
+  processName: change.processName,
+  version: change.version,
+  action: change.action,
+  changedBy: change.changedBy,
+  changedByName: change.changedByName,
+  changedByEmail: change.changedByEmail,
+  changedAt: change.changedAt,
+  changes: Array.isArray(change.changes) ? change.changes : [],
+})
 
 const processCodePrefixes: Record<ProcessType, string> = {
   STRATEGIC: 'PRO-EST',
@@ -390,7 +403,57 @@ async function withProcessCodeLock<T>(companyId: string, work: () => Promise<T>)
   }
 }
 
-async function createProcessWithCode(db: PrismaClient, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>) {
+const processChangeFields = [
+  'name', 'objective', 'description', 'frequency', 'organizationalArea', 'supervision', 'executionType',
+  'status', 'responsibleId', 'thirdPartyProvided', 'critical', 'affectsAccounting', 'personalData',
+] as const
+const processCreationFields = ['code', 'type', ...processChangeFields] as const
+const processChangeLabels: Record<(typeof processCreationFields)[number], string> = {
+  code: 'Código',
+  type: 'Tipo de proceso',
+  name: 'Nombre',
+  objective: 'Objetivo',
+  description: 'Descripción',
+  frequency: 'Frecuencia',
+  organizationalArea: 'Área organizacional',
+  supervision: 'Supervisión',
+  executionType: 'Tipo de ejecución',
+  status: 'Estado',
+  responsibleId: 'Responsable',
+  thirdPartyProvided: 'Provisto por tercero',
+  critical: 'Proceso crítico',
+  affectsAccounting: 'Afecta contabilidad',
+  personalData: 'Datos personales',
+}
+type ProcessChangeValue = string | boolean | number | null
+type ProcessChangeItem = { field: string; label: string; previousValue: ProcessChangeValue; newValue: ProcessChangeValue }
+type ProcessChangeActor = { id: string; name: string; email: string }
+type ProcessWithInclude = Prisma.ProcessGetPayload<{ include: typeof processInclude }>
+
+const processChangeValue = (value: unknown): ProcessChangeValue => {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value
+  return String(value)
+}
+
+const initialProcessChanges = (process: ProcessWithInclude): ProcessChangeItem[] => processCreationFields.map((field) => ({
+  field,
+  label: processChangeLabels[field],
+  previousValue: null,
+  newValue: processChangeValue(process[field]),
+}))
+
+const updatedProcessChanges = (current: ProcessWithInclude, data: Prisma.ProcessUncheckedUpdateInput): ProcessChangeItem[] => processChangeFields.flatMap((field) => {
+  if (data[field] === undefined || current[field] === data[field]) return []
+  return [{
+    field,
+    label: processChangeLabels[field],
+    previousValue: processChangeValue(current[field]),
+    newValue: processChangeValue(data[field]),
+  }]
+})
+
+async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>) {
   return withProcessCodeLock(companyId, async () => {
     const create = async (transaction: Prisma.TransactionClient | PrismaClient) => {
       if (typeof transaction.$queryRaw === 'function') {
@@ -404,19 +467,31 @@ async function createProcessWithCode(db: PrismaClient, companyId: string, data: 
       }
       const existing = await transaction.process.findMany({ where: { companyId }, select: { code: true } })
       const code = nextProcessCode(data.type, existing.map((process) => process.code))
-      return transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
+      const process = await transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
+      await transaction.processChange.create({
+        data: {
+          processId: process.id,
+          processName: process.name,
+          version: process.version ?? '1.0',
+          action: 'CREATED',
+          changedById: actor.id,
+          changedByName: actor.name || null,
+          changedByEmail: actor.email || null,
+          changes: initialProcessChanges(process),
+        },
+      })
+      return process
     }
     return typeof db.$transaction === 'function' ? db.$transaction((transaction) => create(transaction)) : create(db)
   })
 }
 
-type ProcessWithInclude = Prisma.ProcessGetPayload<{ include: typeof processInclude }>
 const versionedProcessFields = ['name', 'objective', 'description', 'frequency', 'organizationalArea', 'supervision', 'executionType', 'status', 'responsibleId', 'thirdPartyProvided', 'critical', 'affectsAccounting', 'personalData'] as const
 
 const processHasChanges = (current: ProcessWithInclude, data: Prisma.ProcessUncheckedUpdateInput) =>
   versionedProcessFields.some((field) => data[field] !== undefined && current[field] !== data[field])
 
-async function updateProcessWithVersion(db: PrismaClient, processId: string, data: Prisma.ProcessUncheckedUpdateInput): Promise<ProcessWithInclude | null> {
+async function updateProcessWithVersion(db: PrismaClient, processId: string, actor: ProcessChangeActor, data: Prisma.ProcessUncheckedUpdateInput): Promise<ProcessWithInclude | null> {
   const update = async (transaction: Prisma.TransactionClient | PrismaClient) => {
     if (typeof transaction.$queryRaw === 'function') {
       await transaction.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${processId} FOR UPDATE`
@@ -424,7 +499,21 @@ async function updateProcessWithVersion(db: PrismaClient, processId: string, dat
     const current = await transaction.process.findUnique({ where: { id: processId }, include: processInclude })
     if (!current) return null
     if (!processHasChanges(current, data)) return current
-    return transaction.process.update({ where: { id: processId }, data: { ...data, version: nextProcessVersion(current.version) }, include: processInclude })
+    const version = nextProcessVersion(current.version)
+    const process = await transaction.process.update({ where: { id: processId }, data: { ...data, version }, include: processInclude })
+    await transaction.processChange.create({
+      data: {
+        processId: process.id,
+        processName: process.name,
+        version,
+        action: 'UPDATED',
+        changedById: actor.id,
+        changedByName: actor.name || null,
+        changedByEmail: actor.email || null,
+        changes: updatedProcessChanges(current, data),
+      },
+    })
+    return process
   }
 
   return typeof db.$transaction === 'function' ? db.$transaction((transaction) => update(transaction)) : update(db)
@@ -1090,7 +1179,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'A process with that name already exists in this company' })
       return
     }
-    const process = await createProcessWithCode(db, companyId, {
+    const process = await createProcessWithCode(db, request.user!, companyId, {
       companyId,
       name: parsed.data.name,
       type: parsed.data.type,
@@ -1156,7 +1245,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
     if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
     if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
-    const process = await updateProcessWithVersion(db, existing.id, data)
+    const process = await updateProcessWithVersion(db, existing.id, request.user!, data)
     if (!process) {
       response.status(404).json({ error: 'Process not found' })
       return
@@ -1170,7 +1259,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    await db.process.delete({ where: { id: existing.id } })
+    const history = await db.processChange.findFirst({ where: { processId: existing.id }, select: { id: true } })
+    if (history) {
+      response.status(409).json({ error: 'Process cannot be deleted because it has change history' })
+      return
+    }
+    try {
+      await db.process.delete({ where: { id: existing.id } })
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === 'P2003') {
+        response.status(409).json({ error: 'Process cannot be deleted because it has change history' })
+        return
+      }
+      throw error
+    }
     response.status(204).send()
   }))
 
@@ -1178,6 +1280,25 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const process = await db.process.findUnique({ where: { id: processId }, include: { company: { select: { id: true } } } })
     return process && canAccessCompany(request, process.company) ? process : null
   }
+
+  app.get('/api/processes/:processId/change-history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsedProcessId = idReference.safeParse(String(request.params.processId))
+    if (!parsedProcessId.success) {
+      response.status(400).json({ error: 'Invalid process id' })
+      return
+    }
+    const process = await findAccessibleProcess(request, parsedProcessId.data)
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const history = await db.processChange.findMany({
+      where: { processId: process.id },
+      include: processChangeInclude,
+      orderBy: { changedAt: 'desc' },
+    })
+    response.json({ history: history.map(processChangeView) })
+  }))
 
   const sipocDelegates: Record<'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers', SipocDelegate> = {
     suppliers: db.sipocSupplier as unknown as SipocDelegate,

@@ -138,6 +138,11 @@ enum ProcessStatus {
   INACTIVE
 }
 
+enum ProcessChangeAction {
+  CREATED
+  UPDATED
+}
+
 enum RiskControlEvaluation {
   PENDING
   WEAK
@@ -164,6 +169,7 @@ model User {
   createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
   createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
   responsibleProcesses Process[] @relation("ResponsibleProcesses")
+  processChanges  ProcessChange[] @relation("ProcessChangeActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
   createdAt      DateTime  @default(now())
@@ -495,6 +501,7 @@ model Process {
   personalData  Boolean       @default(false)
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
+  changeHistory ProcessChange[]
   kpis          Kpi[]
   sipocSuppliers SipocSupplier[]
   sipocInputs    SipocInput[]
@@ -509,6 +516,24 @@ model Process {
   @@index([companyId])
   @@index([type])
   @@index([responsibleId])
+}
+
+model ProcessChange {
+  id          String             @id @default(cuid())
+  processId   String
+  processName String
+  version     String
+  action      ProcessChangeAction
+  changedById String?
+  changes     Json
+  changedAt   DateTime           @default(now())
+  changedByName  String?
+  changedByEmail String?
+  process     Process            @relation(fields: [processId], references: [id], onDelete: Restrict)
+  changedBy   User?              @relation("ProcessChangeActors", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([processId, changedAt])
+  @@index([changedById])
 }
 
 /**

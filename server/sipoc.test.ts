@@ -36,6 +36,7 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   let sessionActive = false
   let storedProcesses: TestProcess[] = [makeProcess(processId, companyId, 'Proceso principal'), makeProcess(otherProcessId, companyId, 'Otro proceso')]
   const storedItems: Record<SipocKind, SipocRecord[]> = { suppliers: [], inputs: [], processes: [], outputs: [], customers: [] }
+  const storedProcessChanges: string[] = []
   let nextProcess = 3
   let nextItem = 1
 
@@ -84,6 +85,11 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       }),
     },
   } as Record<string, unknown>
+
+  db.processChange = {
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { storedProcessChanges.push(String(data.processId)); return { id: 'cmprocesschange', ...data } }),
+    findFirst: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.includes(where.processId) ? { id: 'cmprocesschange' } : null),
+  }
 
   // Keep the delegate names explicit because Prisma uses singular model properties.
   const delegates: Record<SipocKind, string> = { suppliers: 'sipocSupplier', inputs: 'sipocInput', processes: 'sipocProcess', outputs: 'sipocOutput', customers: 'sipocCustomer' }
@@ -172,7 +178,7 @@ describe('process SIPOC API', () => {
     expect((await readOnlyAgent.post(`/api/processes/${processId}/sipoc/processes`).send({ description: 'No permitido' })).status).toBe(403)
   })
 
-  it('creates a process before SIPOC, updates the process, and cascades on deletion', async () => {
+  it('protects a process with SIPOC history from physical deletion', async () => {
     const { db, storedItems } = makeSipocDb()
     const agent = await loggedIn(db, admin.email)
     const created = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo nuevo', companyId })
@@ -182,8 +188,8 @@ describe('process SIPOC API', () => {
     const item = await agent.post(`/api/processes/${createdProcessId}/sipoc/outputs`).send({ description: 'Resultado del proceso nuevo' })
     expect(item.status).toBe(201)
     expect(item.body.item.processId).toBe(createdProcessId)
-    expect((await agent.delete(`/api/processes/${createdProcessId}`)).status).toBe(204)
-    expect(storedItems.outputs).toHaveLength(0)
-    expect((await agent.get(`/api/processes/${createdProcessId}/sipoc`)).status).toBe(404)
+    expect((await agent.delete(`/api/processes/${createdProcessId}`)).status).toBe(409)
+    expect(storedItems.outputs).toHaveLength(1)
+    expect((await agent.get(`/api/processes/${createdProcessId}/sipoc`)).status).toBe(200)
   })
 })

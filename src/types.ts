@@ -290,6 +290,26 @@ export type Process = {
   updatedAt: string
 }
 
+export type ProcessChangeValue = string | boolean | number | null
+export type ProcessChangeItem = {
+  field: string
+  label: string
+  previousValue: ProcessChangeValue
+  newValue: ProcessChangeValue
+}
+export type ProcessChange = {
+  id: string
+  processId: string
+  processName: string
+  version: string
+  action: 'CREATED' | 'UPDATED'
+  changedBy: Pick<User, 'id' | 'name'> | null
+  changedByName: string | null
+  changedByEmail: string | null
+  changedAt: string
+  changes: ProcessChangeItem[]
+}
+
 export type ProcessKpi = {
   id: string
   processId: string

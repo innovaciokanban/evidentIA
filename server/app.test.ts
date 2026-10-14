@@ -175,6 +175,8 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   let storedCrossWeightings: typeof crossWeightingFixture[] = []
   let storedStrategyWeightings: typeof strategyWeightingFixture[] = []
   let storedProcesses: typeof processFixture[] = [processFixture]
+  type StoredProcessChange = { id: string; processId: string; processName: string; version: string; action: 'CREATED' | 'UPDATED'; changedById: string | null; changedByName: string | null; changedByEmail: string | null; changes: unknown; changedAt: Date }
+  let storedProcessChanges: StoredProcessChange[] = []
   const ownSwotItem = (item: { id: string; type: string; description: string }) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04'), swot: { diagnosticId: diagnostic.id } })
   const storedSwotItems = [
     ownSwotItem(checkySwotItemFixtures.strength),
@@ -295,6 +297,18 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
         return { ...updated, company: { id: updated.companyId }, responsible: updated.responsibleId === member.id ? { id: member.id, name: member.name } : null }
       }),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => { storedProcesses = storedProcesses.filter((item) => item.id !== where.id); return { id: where.id } }),
+    },
+    processChange: {
+      create: vi.fn(async ({ data }: { data: Omit<StoredProcessChange, 'id' | 'changedAt'> }) => {
+        const created = { ...data, id: `cmprocesschange${String(storedProcessChanges.length + 1).padStart(10, '0')}`, changedAt: new Date(`2026-02-${String(storedProcessChanges.length + 1).padStart(2, '0')}`) }
+        storedProcessChanges = [...storedProcessChanges, created]
+        return { ...created, changedBy: users.find((user) => user.id === created.changedById) ? { id: created.changedById!, name: users.find((user) => user.id === created.changedById)!.name } : null }
+      }),
+      findFirst: vi.fn(async ({ where }: { where: { processId: string } }) => {
+        const change = storedProcessChanges.find((item) => item.processId === where.processId)
+        return change ? { id: change.id } : null
+      }),
+      findMany: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.filter((change) => change.processId === where.processId).sort((left, right) => right.changedAt.getTime() - left.changedAt.getTime()).map((change) => ({ ...change, changedBy: users.find((user) => user.id === change.changedById) ? { id: change.changedById!, name: users.find((user) => user.id === change.changedById)!.name } : null }))),
     },
     qualityDiagnostic: {
       create: vi.fn(async () => ({ ...diagnostic, company: { ...diagnostic.company }, swotAnalysis: { ...diagnostic.swotAnalysis, items: [] } })),
@@ -456,10 +470,14 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   // rolled back when the callback throws so atomicity is actually observable in tests.
   ;(db as unknown as { $transaction: unknown }).$transaction = async (callback: (tx: unknown) => unknown) => {
     const messagesBefore = storedCheckyMessages
+    const processChangesBefore = storedProcessChanges
+    const processesBefore = storedProcesses
     try {
       return await callback(db as never)
     } catch (error) {
       storedCheckyMessages = messagesBefore
+      storedProcessChanges = processChangesBefore
+      storedProcesses = processesBefore
       throw error
     }
   }
@@ -927,6 +945,16 @@ describe('processes API', () => {
     const secondUpdate = await agent.patch(`/api/processes/${created.body.process.id}`).send({ status: 'INACTIVE' })
     expect(secondUpdate.status).toBe(200)
     expect(secondUpdate.body.process.version).toBe('3.0')
+    const history = await agent.get(`/api/processes/${created.body.process.id}/change-history`)
+    expect(history.status).toBe(200)
+    expect(history.body.history).toHaveLength(3)
+    expect(history.body.history.map((entry: { version: string }) => entry.version)).toEqual(['3.0', '2.0', '1.0'])
+    expect(history.body.history[0]).toMatchObject({ action: 'UPDATED', changedBy: { id: admin.id, name: admin.name }, changedByName: admin.name, changedByEmail: admin.email })
+    expect(history.body.history[0].changes).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'status', label: 'Estado', previousValue: 'ACTIVE', newValue: 'INACTIVE' })]))
+    expect(history.body.history[2].changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'code', label: 'Código', previousValue: null, newValue: 'PRO-APO-001' }),
+      expect.objectContaining({ field: 'type', label: 'Tipo de proceso', previousValue: null, newValue: 'SUPPORT' }),
+    ]))
     expect((await agent.patch(`/api/processes/${created.body.process.id}`).send({ version: '99.0' })).status).toBe(400)
     expect((await agent.get(`/api/processes/${created.body.process.id}`)).body.process.version).toBe('3.0')
 
@@ -937,9 +965,9 @@ describe('processes API', () => {
     expect(second.status).toBe(201)
     expect(second.body.process.code).toBe('PRO-APO-002')
 
-    expect((await agent.delete(`/api/processes/${created.body.process.id}`)).status).toBe(204)
+    expect((await agent.delete(`/api/processes/${created.body.process.id}`)).status).toBe(409)
     const afterDelete = await agent.get('/api/processes')
-    expect(afterDelete.body.processes.some((item: { id: string }) => item.id === created.body.process.id)).toBe(false)
+    expect(afterDelete.body.processes.some((item: { id: string }) => item.id === created.body.process.id)).toBe(true)
   })
 
   it('rejects a category mismatch and serializes concurrent code generation per company', async () => {
@@ -960,6 +988,54 @@ describe('processes API', () => {
     expect(responses.map((response) => response.status)).toEqual([201, 201, 201, 201])
     expect(responses.map((response) => response.body.process.code).sort()).toEqual(['PRO-MIS-001', 'PRO-MIS-002', 'PRO-MIS-003', 'PRO-MIS-004'])
     expect((db as unknown as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw).toHaveBeenCalledTimes(4)
+  })
+
+  it('rolls back the process update and version when history persistence fails', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const created = await agent.post('/api/processes').send({ name: 'Proceso transaccional', type: 'SUPPORT', category: 'apoyo', objective: 'Validar atomicidad', companyId: company.id })
+    expect(created.status).toBe(201)
+    const processChange = (db as unknown as { processChange: { create: ReturnType<typeof vi.fn> } }).processChange
+    processChange.create.mockRejectedValueOnce(new Error('History unavailable'))
+
+    const failed = await agent.patch(`/api/processes/${created.body.process.id}`).send({ critical: true })
+    expect(failed.status).toBe(500)
+    const persisted = await agent.get(`/api/processes/${created.body.process.id}`)
+    expect(persisted.body.process).toMatchObject({ version: '1.0', critical: false })
+    expect((await agent.get(`/api/processes/${created.body.process.id}/change-history`)).body.history).toHaveLength(1)
+  })
+
+  it('records null and boolean transitions as actual changes', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const first = await agent.patch(`/api/processes/${processFixture.id}`).send({ description: null, critical: true })
+    expect(first.status).toBe(200)
+    expect(first.body.process.version).toBe('1.0')
+    const second = await agent.patch(`/api/processes/${processFixture.id}`).send({ description: 'Descripción restaurada', critical: false })
+    expect(second.status).toBe(200)
+    expect(second.body.process.version).toBe('2.0')
+
+    const history = await agent.get(`/api/processes/${processFixture.id}/change-history`)
+    expect(history.body.history).toHaveLength(2)
+    expect(history.body.history[1].changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'description', previousValue: 'Proceso existente', newValue: null }),
+      expect.objectContaining({ field: 'critical', previousValue: false, newValue: true }),
+    ]))
+    expect(history.body.history[0].changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'description', previousValue: null, newValue: 'Descripción restaurada' }),
+      expect.objectContaining({ field: 'critical', previousValue: true, newValue: false }),
+    ]))
+  })
+
+  it('rejects malformed process ids before querying change history', async () => {
+    const agent = request.agent(createApp(makeDb()))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const response = await agent.get('/api/processes/not-a-valid-id/change-history')
+    expect(response.status).toBe(400)
+    expect(response.body).toEqual({ error: 'Invalid process id' })
   })
 
   it('creates a process from the real frontend payload when the company id is a UUID (UAT seed)', async () => {
@@ -1020,10 +1096,12 @@ describe('processes API', () => {
     await companyAdmin.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     expect((await companyAdmin.post('/api/processes').send({ name: 'Proceso propio', type: 'SUPPORT', category: 'apoyo', objective: 'Objetivo propio' })).status).toBe(201)
     expect((await companyAdmin.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(200)
-    expect((await companyAdmin.delete(`/api/processes/${processFixture.id}`)).status).toBe(204)
+    expect((await companyAdmin.get(`/api/processes/${processFixture.id}/change-history`)).status).toBe(200)
+    expect((await companyAdmin.delete(`/api/processes/${processFixture.id}`)).status).toBe(409)
 
     const companyUser = request.agent(createApp(makeDb('COMPANY_USER')))
     await companyUser.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await companyUser.get(`/api/processes/${processFixture.id}/change-history`)).status).toBe(200)
     expect((await companyUser.post('/api/processes').send({ name: 'No permitido', type: 'SUPPORT', objective: 'Objetivo' })).status).toBe(403)
     expect((await companyUser.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(403)
     expect((await companyUser.delete(`/api/processes/${processFixture.id}`)).status).toBe(403)
@@ -1031,6 +1109,7 @@ describe('processes API', () => {
     const foreignAdmin = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, otherCompanyId)))
     await foreignAdmin.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     expect((await foreignAdmin.get('/api/processes')).body.processes).toHaveLength(0)
+    expect((await foreignAdmin.get(`/api/processes/${processFixture.id}/change-history`)).status).toBe(404)
     expect((await foreignAdmin.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(404)
   })
 })

@@ -6,6 +6,7 @@ import { AddProcessCard, ProcessCard, type ProcessCategory, type ProcessStatus }
 import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
 import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ProcessRiskPanel } from './ProcessRiskPanel'
+import { ProcessChangeHistory } from './ProcessChangeHistory'
 import { ArrowDownIcon, ArrowRightIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
@@ -118,6 +119,7 @@ export function ProcessesPage({ user }: { user: User }) {
   const [showForm, setShowForm] = useState(false)
   const [showKpis, setShowKpis] = useState(false)
   const [showRisks, setShowRisks] = useState(false)
+  const [showChangeHistory, setShowChangeHistory] = useState(false)
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
@@ -175,6 +177,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setReadOnly(false)
     setShowKpis(false)
     setShowRisks(false)
+    setShowChangeHistory(false)
     setDraft({ ...emptyProcessDraft, type, companyId: draft.companyId || user.companyId || companies[0]?.id || '' })
     setShowForm(true)
     void ensureUsers()
@@ -188,6 +191,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setReadOnly(false)
     setShowKpis(false)
     setShowRisks(false)
+    setShowChangeHistory(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
     void ensureUsers()
@@ -202,6 +206,9 @@ export function ProcessesPage({ user }: { user: User }) {
     setNotice('')
     setEditing(process)
     setReadOnly(true)
+    setShowKpis(false)
+    setShowRisks(false)
+    setShowChangeHistory(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
   }
@@ -213,6 +220,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setShowForm(false)
     setShowKpis(true)
     setShowRisks(false)
+    setShowChangeHistory(false)
   }
 
   function openRisks(process: Process) {
@@ -222,10 +230,23 @@ export function ProcessesPage({ user }: { user: User }) {
     setShowForm(false)
     setShowKpis(false)
     setShowRisks(true)
+    setShowChangeHistory(false)
+  }
+
+  function openChangeHistory(process: Process) {
+    setFormError('')
+    setNotice('')
+    setEditing(process)
+    setShowForm(false)
+    setShowKpis(false)
+    setShowRisks(false)
+    setShowChangeHistory(true)
   }
 
   function returnToCharacterization() {
     setShowKpis(false)
+    setShowRisks(false)
+    setShowChangeHistory(false)
     setShowForm(true)
   }
 
@@ -233,6 +254,7 @@ export function ProcessesPage({ user }: { user: User }) {
     setShowForm(false)
     setShowKpis(false)
     setShowRisks(false)
+    setShowChangeHistory(false)
     setEditing(null)
     setReadOnly(false)
     setFormError('')
@@ -304,7 +326,7 @@ export function ProcessesPage({ user }: { user: User }) {
 
   return (
     <div className="page processes-page">
-       {!showKpis && !showRisks && <div className="page-heading">
+       {!showKpis && !showRisks && !showChangeHistory && <div className="page-heading">
          <div>
            <p className="eyebrow">GESTIÓN DE CALIDAD</p>
            <h1>Gestión por procesos</h1>
@@ -312,8 +334,10 @@ export function ProcessesPage({ user }: { user: User }) {
          </div>
         </div>}
 
-        {notice && !showForm && !showKpis && !showRisks && <div className="form-success page-alert" role="status">{notice}</div>}
-        {showRisks && editing ? (
+        {notice && !showForm && !showKpis && !showRisks && !showChangeHistory && <div className="form-success page-alert" role="status">{notice}</div>}
+        {showChangeHistory && editing ? (
+           <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
+         ) : showRisks && editing ? (
           <ProcessRiskPanel process={editing} canWrite={canCreate} onBack={() => { setShowRisks(false); setShowForm(true) }} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
@@ -331,6 +355,7 @@ export function ProcessesPage({ user }: { user: User }) {
             onClose={closeForm}
             onOpenKpis={editing ? () => openKpis(editing) : undefined}
             onOpenRisks={editing ? () => openRisks(editing) : undefined}
+            onOpenChangeHistory={editing ? () => openChangeHistory(editing) : undefined}
             processId={editing?.id}
          />
        ) : <>

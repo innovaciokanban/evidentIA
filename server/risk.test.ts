@@ -31,6 +31,7 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   let sessionActive = false
   let storedProcesses: TestProcess[] = [makeProcess(processId, companyId, 'Proceso principal'), makeProcess(otherProcessId, companyId, 'Otro proceso')]
   const storedRisks: StoredRisk[] = []
+  const storedProcessChanges: string[] = []
   let nextProcess = 3
   let nextRisk = 1
   let nextControl = 1
@@ -73,6 +74,10 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         for (let index = storedRisks.length - 1; index >= 0; index -= 1) if (storedRisks[index].processId === where.id) storedRisks.splice(index, 1)
         return { id: where.id }
       }),
+    },
+    processChange: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { storedProcessChanges.push(String(data.processId)); return { id: 'cmprocesschange', ...data } }),
+      findFirst: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.includes(where.processId) ? { id: 'cmprocesschange' } : null),
     },
     risk: {
       findMany: vi.fn(async ({ where }: { where: { processId: string } }) => storedRisks.filter((item) => item.processId === where.processId)),
@@ -168,7 +173,7 @@ describe('process risk API', () => {
     expect((await readOnlyAgent.post(`/api/processes/${processId}/risks`).send(riskPayload)).status).toBe(403)
   })
 
-  it('creates a process before its risk and cascades risks when the process is deleted', async () => {
+  it('protects a process with risk history from physical deletion', async () => {
     const { db, storedRisks } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
     const process = await agent.post('/api/processes').send({ name: 'Proceso nuevo', type: 'MISSIONAL', category: 'misional', objective: 'Objetivo nuevo', companyId })
@@ -177,7 +182,7 @@ describe('process risk API', () => {
     expect((await agent.post(`/api/processes/${createdProcessId}/risks`).send(riskPayload)).status).toBe(201)
     expect((await agent.patch(`/api/processes/${createdProcessId}`).send({ description: 'Proceso actualizado' })).status).toBe(200)
     expect(storedRisks.some((risk) => risk.processId === createdProcessId)).toBe(true)
-    expect((await agent.delete(`/api/processes/${createdProcessId}`)).status).toBe(204)
-    expect(storedRisks.some((risk) => risk.processId === createdProcessId)).toBe(false)
+    expect((await agent.delete(`/api/processes/${createdProcessId}`)).status).toBe(409)
+    expect(storedRisks.some((risk) => risk.processId === createdProcessId)).toBe(true)
   })
 })
