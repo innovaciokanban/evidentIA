@@ -4,7 +4,7 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, Role, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, Role, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
@@ -344,19 +344,26 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   updatedAt: process.updatedAt,
 })
 
-const processCodePattern = /^PROC-(\d{3,})$/
+const processCodePrefixes: Record<ProcessType, string> = {
+  STRATEGIC: 'PRO-EST',
+  MISSIONAL: 'PRO-MIS',
+  SUPPORT: 'PRO-APO',
+}
+const processCodePattern = /^PRO-(EST|MIS|APO)-(\d{3,})$/
 const processCodeLocks = new Map<string, Promise<void>>()
 
-export const nextProcessCode = (codes: readonly (string | null | undefined)[]): string => {
+export const nextProcessCode = (type: ProcessType, codes: readonly (string | null | undefined)[]): string => {
+  const prefix = processCodePrefixes[type]
+  const typeCode = prefix.slice(4)
   const usedNumbers = new Set(
     codes.flatMap((code) => {
       const match = code?.match(processCodePattern)
-      return match ? [Number(match[1])] : []
+      return match?.[1] === typeCode ? [Number(match[2])] : []
     }),
   )
   let nextNumber = 1
   while (usedNumbers.has(nextNumber)) nextNumber += 1
-  return `PROC-${String(nextNumber).padStart(3, '0')}`
+  return `${prefix}-${String(nextNumber).padStart(3, '0')}`
 }
 
 const processVersionPattern = /^(\d+)(\.\d+)?$/
@@ -396,7 +403,7 @@ async function createProcessWithCode(db: PrismaClient, companyId: string, data: 
         `
       }
       const existing = await transaction.process.findMany({ where: { companyId }, select: { code: true } })
-      const code = nextProcessCode(existing.map((process) => process.code))
+      const code = nextProcessCode(data.type, existing.map((process) => process.code))
       return transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
     }
     return typeof db.$transaction === 'function' ? db.$transaction((transaction) => create(transaction)) : create(db)

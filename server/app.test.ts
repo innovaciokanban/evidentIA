@@ -486,8 +486,9 @@ describe('validation schemas', () => {
     if (processWithClientVersion.success) expect(processWithClientVersion.data).not.toHaveProperty('version')
     expect(processCreateSchema.safeParse({ name: 'Proceso inválido', type: 'SUPPORT', category: 'estrategico', objective: 'Objetivo válido' }).success).toBe(false)
     expect(processCreateSchema.safeParse({ name: 'Proceso sin categoría', type: 'MISSIONAL', objective: 'Objetivo válido' }).success).toBe(false)
-    expect(nextProcessCode([null, 'PROC-01', 'OTRO'])).toBe('PROC-001')
-    expect(nextProcessCode(['PROC-001', 'PROC-003'])).toBe('PROC-002')
+    expect(nextProcessCode('STRATEGIC', [null, 'PROC-01', 'PRO-EST-001', 'PRO-MIS-001'])).toBe('PRO-EST-002')
+    expect(nextProcessCode('MISSIONAL', ['PRO-MIS-001', 'PRO-MIS-003', 'PRO-EST-001'])).toBe('PRO-MIS-002')
+    expect(nextProcessCode('SUPPORT', ['PROC-001', 'PRO-EST-001'])).toBe('PRO-APO-001')
     expect(nextProcessVersion('1.0')).toBe('2.0')
     expect(nextProcessVersion('2.1')).toBe('3.1')
     expect(nextProcessVersion(null)).toBe('1.0')
@@ -907,7 +908,7 @@ describe('processes API', () => {
     expect(created.body.process).not.toHaveProperty('cashMovement')
     expect(created.body.process).not.toHaveProperty('contingencyPlan')
     expect(created.body.process).not.toHaveProperty('taxOperations')
-    expect(created.body.process.code).toBe('PROC-001')
+    expect(created.body.process.code).toBe('PRO-APO-001')
 
     const listed = await agent.get('/api/processes')
     expect(listed.status).toBe(200)
@@ -916,7 +917,7 @@ describe('processes API', () => {
 
     const updated = await agent.patch(`/api/processes/${created.body.process.id}`).send({ type: 'STRATEGIC', code: 'PROC-999', version: '99.0', frequency: 'Semanal', critical: false })
     expect(updated.status).toBe(200)
-    expect(updated.body.process).toMatchObject({ type: 'SUPPORT', code: 'PROC-001', version: '2.0', frequency: 'Semanal', critical: false, personalData: true })
+    expect(updated.body.process).toMatchObject({ type: 'SUPPORT', code: 'PRO-APO-001', version: '2.0', frequency: 'Semanal', critical: false, personalData: true })
     const persistedAfterFirstUpdate = await agent.get(`/api/processes/${created.body.process.id}`)
     expect(persistedAfterFirstUpdate.status).toBe(200)
     expect(persistedAfterFirstUpdate.body.process.version).toBe('2.0')
@@ -929,9 +930,12 @@ describe('processes API', () => {
     expect((await agent.patch(`/api/processes/${created.body.process.id}`).send({ version: '99.0' })).status).toBe(400)
     expect((await agent.get(`/api/processes/${created.body.process.id}`)).body.process.version).toBe('3.0')
 
+    const strategic = await agent.post('/api/processes').send({ name: 'Dirección estratégica', type: 'STRATEGIC', category: 'estrategico', objective: 'Orientar la organización', companyId: company.id })
+    expect(strategic.status).toBe(201)
+    expect(strategic.body.process.code).toBe('PRO-EST-001')
     const second = await agent.post('/api/processes').send({ name: 'Gestión de clientes', type: 'SUPPORT', category: 'apoyo', objective: 'Atender clientes', companyId: company.id })
     expect(second.status).toBe(201)
-    expect(second.body.process.code).toBe('PROC-002')
+    expect(second.body.process.code).toBe('PRO-APO-002')
 
     expect((await agent.delete(`/api/processes/${created.body.process.id}`)).status).toBe(204)
     const afterDelete = await agent.get('/api/processes')
@@ -954,7 +958,7 @@ describe('processes API', () => {
       companyId: company.id,
     })))
     expect(responses.map((response) => response.status)).toEqual([201, 201, 201, 201])
-    expect(responses.map((response) => response.body.process.code).sort()).toEqual(['PROC-001', 'PROC-002', 'PROC-003', 'PROC-004'])
+    expect(responses.map((response) => response.body.process.code).sort()).toEqual(['PRO-MIS-001', 'PRO-MIS-002', 'PRO-MIS-003', 'PRO-MIS-004'])
     expect((db as unknown as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw).toHaveBeenCalledTimes(4)
   })
 
@@ -986,7 +990,7 @@ describe('processes API', () => {
     })
 
     expect(response.status).toBe(201)
-    expect(response.body.process).toMatchObject({ companyId: uuidCompanyId, type: 'SUPPORT', code: 'PROC-001' })
+    expect(response.body.process).toMatchObject({ companyId: uuidCompanyId, type: 'SUPPORT', code: 'PRO-APO-001' })
     expect((await agent.get('/api/processes')).body.processes).toHaveLength(1)
   })
 
