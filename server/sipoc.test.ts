@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs'
 import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
-import { createApp } from './app.js'
+import { createApp, updateProcessWithVersion } from './app.js'
 
 type SipocKind = 'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers'
 type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
@@ -36,7 +36,8 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   let sessionActive = false
   let storedProcesses: TestProcess[] = [makeProcess(processId, companyId, 'Proceso principal'), makeProcess(otherProcessId, companyId, 'Otro proceso')]
   const storedItems: Record<SipocKind, SipocRecord[]> = { suppliers: [], inputs: [], processes: [], outputs: [], customers: [] }
-  const storedProcessChanges: string[] = []
+  type StoredProcessChange = { id: string; processId: string; processName: string; version: string; action: 'CREATED' | 'UPDATED'; changedById: string | null; changedByName: string | null; changedByEmail: string | null; changes: unknown; changedAt: Date }
+  let storedProcessChanges: StoredProcessChange[] = []
   let nextProcess = 3
   let nextItem = 1
 
@@ -87,8 +88,13 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   } as Record<string, unknown>
 
   db.processChange = {
-    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { storedProcessChanges.push(String(data.processId)); return { id: 'cmprocesschange', ...data } }),
-    findFirst: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.includes(where.processId) ? { id: 'cmprocesschange' } : null),
+    create: vi.fn(async ({ data }: { data: Omit<StoredProcessChange, 'id' | 'changedAt'> }) => {
+      const created = { ...data, id: `cmprocesschange${String(storedProcessChanges.length + 1).padStart(10, '0')}`, changedAt: new Date(`2026-02-${String(storedProcessChanges.length + 1).padStart(2, '0')}`) }
+      storedProcessChanges = [...storedProcessChanges, created]
+      return { ...created, changedBy: { id: admin.id, name: admin.name } }
+    }),
+    findFirst: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.find((change) => change.processId === where.processId) ?? null),
+    findMany: vi.fn(async ({ where }: { where: { processId: string } }) => storedProcessChanges.filter((change) => change.processId === where.processId).sort((left, right) => right.changedAt.getTime() - left.changedAt.getTime()).map((change) => ({ ...change, changedBy: { id: admin.id, name: admin.name } }))),
   }
 
   // Keep the delegate names explicit because Prisma uses singular model properties.
@@ -112,6 +118,20 @@ function makeSipocDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         const [removed] = storedItems[kind].splice(index, 1)
         return removed
       }),
+    }
+  }
+
+  ;(db as { $transaction?: (callback: (transaction: unknown) => unknown) => Promise<unknown> }).$transaction = async (callback) => {
+    const processesBefore = storedProcesses
+    const processChangesBefore = storedProcessChanges
+    const itemsBefore = Object.fromEntries((Object.keys(storedItems) as SipocKind[]).map((kind) => [kind, [...storedItems[kind]]])) as Record<SipocKind, SipocRecord[]>
+    try {
+      return await callback(db)
+    } catch (error) {
+      storedProcesses = processesBefore
+      storedProcessChanges = processChangesBefore
+      for (const kind of Object.keys(storedItems) as SipocKind[]) storedItems[kind].splice(0, storedItems[kind].length, ...itemsBefore[kind])
+      throw error
     }
   }
 
@@ -153,6 +173,116 @@ describe('process SIPOC API', () => {
     }
     const emptyItems = (await agent.get(`/api/processes/${processId}/sipoc`)).body as Record<SipocKind, unknown[]>
     expect(Object.values(emptyItems).every((items) => items.length === 0)).toBe(true)
+  })
+
+  it('does not version new SIPOC items and versions real edits once', async () => {
+    const { db } = makeSipocDb()
+    const agent = await loggedIn(db, admin.email)
+
+    const created = await agent.post(`/api/processes/${processId}/sipoc/suppliers`).send({ description: 'Proveedor principal' })
+    expect(created.status).toBe(201)
+    const input = await agent.post(`/api/processes/${processId}/sipoc/inputs`).send({ description: 'Entrada principal' })
+    expect(input.status).toBe(201)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('1.0')
+
+    const noOp = await agent.patch(`/api/processes/${processId}/sipoc/suppliers/${created.body.item.id}`).send({ description: 'Proveedor principal' })
+    expect(noOp.status).toBe(200)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('1.0')
+
+    const changed = await agent.patch(`/api/processes/${processId}/sipoc/suppliers/${created.body.item.id}`).send({ description: 'Proveedor actualizado' })
+    expect(changed.status).toBe(200)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('2.0')
+
+    const changedInput = await agent.patch(`/api/processes/${processId}/sipoc/inputs/${input.body.item.id}`).send({ description: 'Entrada actualizada' })
+    expect(changedInput.status).toBe(200)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('3.0')
+
+    const history = await agent.get(`/api/processes/${processId}/change-history`)
+    expect(history.body.history).toHaveLength(2)
+    expect(history.body.history.map((entry: { version: string }) => entry.version)).toEqual(['3.0', '2.0'])
+    expect(history.body.history[0].changes).toEqual([
+      expect.objectContaining({ field: 'sipoc.inputs', previousValue: 'Entrada principal', newValue: 'Entrada actualizada' }),
+    ])
+    expect(history.body.history[1].changes).toEqual([
+      expect.objectContaining({ field: 'sipoc.suppliers', previousValue: 'Proveedor principal', newValue: 'Proveedor actualizado' }),
+    ])
+  })
+
+  it('does not version several new SIPOC items in one transaction', async () => {
+    const { db } = makeSipocDb()
+    const agent = await loggedIn(db, admin.email)
+    const result = await updateProcessWithVersion(db, processId, admin, {}, async (transaction) => {
+      const tx = transaction as unknown as PrismaClient
+      await tx.sipocSupplier.create({ data: { processId, description: 'Proveedor nuevo' } })
+      await tx.sipocInput.create({ data: { processId, description: 'Entrada nueva' } })
+      return { result: null, changes: [] }
+    })
+
+    expect(result?.process.version).toBe('1.0')
+    expect((await agent.get(`/api/processes/${processId}/sipoc`)).body.suppliers).toHaveLength(1)
+    expect((await agent.get(`/api/processes/${processId}/sipoc`)).body.inputs).toHaveLength(1)
+    expect((await agent.get(`/api/processes/${processId}/change-history`)).body.history).toHaveLength(0)
+  })
+
+  it('versions several existing SIPOC edits and a general change once in one transaction', async () => {
+    const { db } = makeSipocDb()
+    const agent = await loggedIn(db, admin.email)
+    const supplier = await agent.post(`/api/processes/${processId}/sipoc/suppliers`).send({ description: 'Proveedor original' })
+    const input = await agent.post(`/api/processes/${processId}/sipoc/inputs`).send({ description: 'Entrada original' })
+
+    const result = await updateProcessWithVersion(db, processId, admin, { critical: true }, async (transaction) => {
+      const tx = transaction as unknown as PrismaClient
+      const supplierBefore = await tx.sipocSupplier.findUnique({ where: { id: supplier.body.item.id } })
+      const inputBefore = await tx.sipocInput.findUnique({ where: { id: input.body.item.id } })
+      if (!supplierBefore || !inputBefore) throw new Error('SIPOC fixtures were not created')
+      await tx.sipocSupplier.update({ where: { id: supplierBefore.id }, data: { description: 'Proveedor actualizado' } })
+      await tx.sipocInput.update({ where: { id: inputBefore.id }, data: { description: 'Entrada actualizada' } })
+      return {
+        result: null,
+        changes: [
+          { field: 'sipoc.suppliers', label: 'Proveedores SIPOC', previousValue: supplierBefore.description, newValue: 'Proveedor actualizado' },
+          { field: 'sipoc.inputs', label: 'Entradas SIPOC', previousValue: inputBefore.description, newValue: 'Entrada actualizada' },
+        ],
+      }
+    })
+
+    expect(result?.process.version).toBe('2.0')
+    const history = await agent.get(`/api/processes/${processId}/change-history`)
+    expect(history.body.history).toHaveLength(1)
+    expect(history.body.history[0]).toMatchObject({ version: '2.0', action: 'UPDATED' })
+    expect(history.body.history[0].changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'critical', previousValue: false, newValue: true }),
+      expect.objectContaining({ field: 'sipoc.suppliers', previousValue: 'Proveedor original', newValue: 'Proveedor actualizado' }),
+      expect.objectContaining({ field: 'sipoc.inputs', previousValue: 'Entrada original', newValue: 'Entrada actualizada' }),
+    ]))
+  })
+
+  it('does not version SIPOC deletion and rolls back an existing-item edit when history fails', async () => {
+    const { db, storedItems } = makeSipocDb()
+    const agent = await loggedIn(db, admin.email)
+    const created = await agent.post(`/api/processes/${processId}/sipoc/outputs`).send({ description: 'Salida publicada' })
+    expect(created.status).toBe(201)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('1.0')
+
+    const deleted = await agent.delete(`/api/processes/${processId}/sipoc/outputs/${created.body.item.id}`)
+    expect(deleted.status).toBe(204)
+    expect(storedItems.outputs).toHaveLength(0)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('1.0')
+
+    const editable = await agent.post(`/api/processes/${processId}/sipoc/outputs`).send({ description: 'Salida para editar' })
+    expect(editable.status).toBe(201)
+
+    const processChange = (db as unknown as { processChange: { create: ReturnType<typeof vi.fn> } }).processChange
+    processChange.create.mockRejectedValueOnce(new Error('History unavailable'))
+    const failed = await agent.patch(`/api/processes/${processId}/sipoc/outputs/${editable.body.item.id}`).send({ description: 'Edición fallida' })
+    expect(failed.status).toBe(500)
+    expect(storedItems.outputs).toHaveLength(1)
+    expect(storedItems.outputs[0].description).toBe('Salida para editar')
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('1.0')
+
+    const changed = await agent.patch(`/api/processes/${processId}/sipoc/outputs/${editable.body.item.id}`).send({ description: 'Salida editada' })
+    expect(changed.status).toBe(200)
+    expect((await agent.get(`/api/processes/${processId}`)).body.process.version).toBe('2.0')
   })
 
   it('keeps SIPOC attached to the requested process and does not mix sibling processes', async () => {

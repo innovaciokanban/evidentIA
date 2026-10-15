@@ -429,6 +429,7 @@ type ProcessChangeValue = string | boolean | number | null
 type ProcessChangeItem = { field: string; label: string; previousValue: ProcessChangeValue; newValue: ProcessChangeValue }
 type ProcessChangeActor = { id: string; name: string; email: string }
 type ProcessWithInclude = Prisma.ProcessGetPayload<{ include: typeof processInclude }>
+type ProcessTransaction = Prisma.TransactionClient | PrismaClient
 
 const processChangeValue = (value: unknown): ProcessChangeValue => {
   if (value === null || value === undefined) return null
@@ -486,19 +487,18 @@ async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor
   })
 }
 
-const versionedProcessFields = ['name', 'objective', 'description', 'frequency', 'organizationalArea', 'supervision', 'executionType', 'status', 'responsibleId', 'thirdPartyProvided', 'critical', 'affectsAccounting', 'personalData'] as const
+type ProcessVersionOperation<T> = (transaction: ProcessTransaction) => Promise<{ result: T; changes: ProcessChangeItem[] }>
 
-const processHasChanges = (current: ProcessWithInclude, data: Prisma.ProcessUncheckedUpdateInput) =>
-  versionedProcessFields.some((field) => data[field] !== undefined && current[field] !== data[field])
-
-async function updateProcessWithVersion(db: PrismaClient, processId: string, actor: ProcessChangeActor, data: Prisma.ProcessUncheckedUpdateInput): Promise<ProcessWithInclude | null> {
-  const update = async (transaction: Prisma.TransactionClient | PrismaClient) => {
+export async function updateProcessWithVersion<T = undefined>(db: PrismaClient, processId: string, actor: ProcessChangeActor, data: Prisma.ProcessUncheckedUpdateInput, operation?: ProcessVersionOperation<T>): Promise<{ process: ProcessWithInclude; result: T } | null> {
+  const update = async (transaction: ProcessTransaction) => {
     if (typeof transaction.$queryRaw === 'function') {
       await transaction.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${processId} FOR UPDATE`
     }
     const current = await transaction.process.findUnique({ where: { id: processId }, include: processInclude })
     if (!current) return null
-    if (!processHasChanges(current, data)) return current
+    const operationResult = operation ? await operation(transaction) : { result: undefined as T, changes: [] }
+    const changes = [...updatedProcessChanges(current, data), ...operationResult.changes]
+    if (changes.length === 0) return { process: current, result: operationResult.result }
     const version = nextProcessVersion(current.version)
     const process = await transaction.process.update({ where: { id: processId }, data: { ...data, version }, include: processInclude })
     await transaction.processChange.create({
@@ -510,10 +510,10 @@ async function updateProcessWithVersion(db: PrismaClient, processId: string, act
         changedById: actor.id,
         changedByName: actor.name || null,
         changedByEmail: actor.email || null,
-        changes: updatedProcessChanges(current, data),
+        changes,
       },
     })
-    return process
+    return { process, result: operationResult.result }
   }
 
   return typeof db.$transaction === 'function' ? db.$transaction((transaction) => update(transaction)) : update(db)
@@ -545,6 +545,7 @@ const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => (
   createdAt: kpi.createdAt,
   updatedAt: kpi.updatedAt,
 })
+type SipocKind = 'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers'
 type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
 type SipocDelegate = {
   findMany: (args: { where: { processId: string }; orderBy: { createdAt: 'asc' } }) => Promise<SipocRecord[]>
@@ -559,6 +560,19 @@ const sipocItemView = (item: SipocRecord) => ({
   description: item.description,
   createdAt: item.createdAt,
   updatedAt: item.updatedAt,
+})
+const sipocChangeLabels: Record<SipocKind, string> = {
+  suppliers: 'Proveedores SIPOC',
+  inputs: 'Entradas SIPOC',
+  processes: 'Procesos SIPOC',
+  outputs: 'Salidas SIPOC',
+  customers: 'Clientes SIPOC',
+}
+const sipocChange = (kind: SipocKind, previousValue: string | null, newValue: string | null): ProcessChangeItem => ({
+  field: `sipoc.${kind}`,
+  label: sipocChangeLabels[kind],
+  previousValue,
+  newValue,
 })
 const riskLevelFor = (impact: number, probability: number) => {
   const score = impact * probability
@@ -1245,12 +1259,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
     if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
     if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
-    const process = await updateProcessWithVersion(db, existing.id, request.user!, data)
-    if (!process) {
+    const update = await updateProcessWithVersion(db, existing.id, request.user!, data)
+    if (!update) {
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    response.json({ process: processView(process) })
+    response.json({ process: processView(update.process) })
   }))
 
   app.delete('/api/processes/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1300,13 +1314,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ history: history.map(processChangeView) })
   }))
 
-  const sipocDelegates: Record<'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers', SipocDelegate> = {
-    suppliers: db.sipocSupplier as unknown as SipocDelegate,
-    inputs: db.sipocInput as unknown as SipocDelegate,
-    processes: db.sipocProcess as unknown as SipocDelegate,
-    outputs: db.sipocOutput as unknown as SipocDelegate,
-    customers: db.sipocCustomer as unknown as SipocDelegate,
-  }
+  const sipocDelegatesFor = (client: ProcessTransaction): Record<SipocKind, SipocDelegate> => ({
+    suppliers: client.sipocSupplier as unknown as SipocDelegate,
+    inputs: client.sipocInput as unknown as SipocDelegate,
+    processes: client.sipocProcess as unknown as SipocDelegate,
+    outputs: client.sipocOutput as unknown as SipocDelegate,
+    customers: client.sipocCustomer as unknown as SipocDelegate,
+  })
+  const sipocDelegates = sipocDelegatesFor(db)
 
   app.get('/api/processes/:processId/sipoc', authMiddleware, asyncHandler(async (request, response) => {
     const process = await findAccessibleProcess(request, String(request.params.processId))
@@ -1336,8 +1351,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const item = await sipocDelegates[parsedKind.data].create({ data: { processId: process.id, description: parsed.data.description } })
-    response.status(201).json({ item: sipocItemView(item) })
+    const kind = parsedKind.data
+    const update = await updateProcessWithVersion(db, process.id, request.user!, {}, async (transaction) => {
+      const item = await sipocDelegatesFor(transaction)[kind].create({ data: { processId: process.id, description: parsed.data.description } })
+      return { result: item, changes: [] }
+    })
+    if (!update) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    response.status(201).json({ item: sipocItemView(update.result) })
   }))
 
   app.patch('/api/processes/:processId/sipoc/:kind/:itemId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1356,14 +1379,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const delegate = sipocDelegates[parsedKind.data]
-    const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
-    if (!existing || existing.processId !== process.id) {
+    const kind = parsedKind.data
+    const update = await updateProcessWithVersion(db, process.id, request.user!, {}, async (transaction) => {
+      const delegate = sipocDelegatesFor(transaction)[kind]
+      const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
+      if (!existing || existing.processId !== process.id) return { result: null, changes: [] }
+      if (existing.description === parsed.data.description) return { result: existing, changes: [] }
+      const item = await delegate.update({ where: { id: existing.id }, data: { description: parsed.data.description } })
+      return { result: item, changes: [sipocChange(kind, existing.description, item.description)] }
+    })
+    if (!update?.result) {
       response.status(404).json({ error: 'SIPOC item not found' })
       return
     }
-    const item = await delegate.update({ where: { id: existing.id }, data: { description: parsed.data.description } })
-    response.json({ item: sipocItemView(item) })
+    response.json({ item: sipocItemView(update.result) })
   }))
 
   app.delete('/api/processes/:processId/sipoc/:kind/:itemId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1377,13 +1406,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const delegate = sipocDelegates[parsedKind.data]
-    const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
-    if (!existing || existing.processId !== process.id) {
+    const kind = parsedKind.data
+    const update = await updateProcessWithVersion(db, process.id, request.user!, {}, async (transaction) => {
+      const delegate = sipocDelegatesFor(transaction)[kind]
+      const existing = await delegate.findUnique({ where: { id: String(request.params.itemId) } })
+      if (!existing || existing.processId !== process.id) return { result: false, changes: [] }
+      await delegate.delete({ where: { id: existing.id } })
+      return { result: true, changes: [] }
+    })
+    if (!update?.result) {
       response.status(404).json({ error: 'SIPOC item not found' })
       return
     }
-    await delegate.delete({ where: { id: existing.id } })
     response.status(204).send()
   }))
 
