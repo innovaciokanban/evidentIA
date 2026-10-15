@@ -15,6 +15,7 @@ import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiS
 import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, strategyWeightingUpsertData, strategyWeightingView } from './strategy-weighting-service.js'
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
+import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -574,13 +575,6 @@ const sipocChange = (kind: SipocKind, previousValue: string | null, newValue: st
   previousValue,
   newValue,
 })
-const riskLevelFor = (impact: number, probability: number) => {
-  const score = impact * probability
-  if (score <= 4) return 'LOW' as const
-  if (score <= 9) return 'MEDIUM' as const
-  if (score <= 16) return 'HIGH' as const
-  return 'CRITICAL' as const
-}
 const riskInclude = {
   controls: { orderBy: { createdAt: 'asc' as const } },
   riskOwner: { select: { id: true, name: true } },
@@ -596,11 +590,11 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
   riskOwner: risk.riskOwner,
   inherentImpact: risk.inherentImpact,
   inherentProbability: risk.inherentProbability,
-  inherentScore: risk.inherentImpact * risk.inherentProbability,
+  inherentScore: riskScoreFor(risk.inherentImpact, risk.inherentProbability),
   inherentLevel: riskLevelFor(risk.inherentImpact, risk.inherentProbability),
   residualImpact: risk.residualImpact,
   residualProbability: risk.residualProbability,
-  residualScore: risk.residualImpact * risk.residualProbability,
+  residualScore: riskScoreFor(risk.residualImpact, risk.residualProbability),
   residualLevel: riskLevelFor(risk.residualImpact, risk.residualProbability),
   controls: risk.controls,
   createdAt: risk.createdAt,

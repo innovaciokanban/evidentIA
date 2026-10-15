@@ -133,17 +133,63 @@ describe('process risk API', () => {
     const agent = await loggedIn(db, admin.email)
     const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
     expect(created.status).toBe(201)
-    expect(created.body.risk).toMatchObject({ processId, riskType: 'OPERACIONAL', riskOwner: null, inherentScore: 12, inherentLevel: 'HIGH', residualScore: 4, residualLevel: 'LOW' })
+    expect(created.body.risk).toMatchObject({ processId, riskType: 'OPERACIONAL', riskOwner: null, inherentScore: 12, inherentLevel: 'MEDIUM', residualScore: 4, residualLevel: 'LOW' })
     expect(created.body.risk).not.toHaveProperty('bpmnActivity')
     const second = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Información incompleta', processId: otherProcessId })
     expect(second.status).toBe(201)
     expect(second.body.risk.processId).toBe(processId)
     expect((await agent.get(`/api/processes/${processId}/risks`)).body.risks).toHaveLength(2)
     const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
-    expect(updated.body.risk.residualLevel).toBe('CRITICAL')
+    expect(updated.body.risk.residualLevel).toBe('HIGH')
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentImpact: 6 })).status).toBe(400)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentProbability: 0 })).status).toBe(400)
     expect((await agent.delete(`/api/processes/${processId}/risks/${created.body.risk.id}`)).status).toBe(204)
+  })
+
+  it('derives inherent and residual scores with the consultant matrix ranges', async () => {
+    const { db } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const boundaries: Array<{ impact: number; probability: number; score: number; level: string }> = [
+      { impact: 1, probability: 1, score: 1, level: 'LOW' },
+      { impact: 1, probability: 5, score: 5, level: 'LOW' },
+      { impact: 2, probability: 3, score: 6, level: 'MEDIUM' },
+      { impact: 3, probability: 5, score: 15, level: 'MEDIUM' },
+      { impact: 4, probability: 4, score: 16, level: 'HIGH' },
+      { impact: 5, probability: 5, score: 25, level: 'HIGH' },
+    ]
+    for (const entry of boundaries) {
+      const created = await agent.post(`/api/processes/${processId}/risks`).send({
+        ...riskPayload,
+        name: `Riesgo matriz ${entry.score}`,
+        inherentImpact: entry.impact,
+        inherentProbability: entry.probability,
+        residualImpact: entry.probability,
+        residualProbability: entry.impact,
+      })
+      expect(created.status).toBe(201)
+      expect(created.body.risk).toMatchObject({
+        inherentScore: entry.score,
+        inherentLevel: entry.level,
+        residualScore: entry.probability * entry.impact,
+        residualLevel: entry.level,
+      })
+      const listed = await agent.get(`/api/processes/${processId}/risks`)
+      const listedRisk = listed.body.risks.find((risk: { id: string }) => risk.id === created.body.risk.id)
+      expect(listedRisk).toMatchObject({ inherentScore: entry.score, inherentLevel: entry.level, residualScore: entry.probability * entry.impact, residualLevel: entry.level })
+      expect((await agent.delete(`/api/processes/${processId}/risks/${created.body.risk.id}`)).status).toBe(204)
+      expect((await agent.get(`/api/processes/${processId}/risks`)).body.risks).toHaveLength(0)
+    }
+  })
+
+  it('keeps inherent and residual levels independent when only one side changes', async () => {
+    const { db } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentImpact: 5, inherentProbability: 5, residualImpact: 1, residualProbability: 1 })
+    expect(created.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
+    const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 4, residualProbability: 4 })
+    expect(updated.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 16, residualLevel: 'HIGH' })
+    const updatedInherent = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ inherentImpact: 1, inherentProbability: 2 })
+    expect(updatedInherent.body.risk).toMatchObject({ inherentScore: 2, inherentLevel: 'LOW', residualScore: 16, residualLevel: 'HIGH' })
   })
 
   it('assigns, changes and clears a risk owner while enforcing company isolation', async () => {

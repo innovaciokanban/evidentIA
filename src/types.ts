@@ -346,7 +346,7 @@ export type ProcessSipoc = {
   customers: ProcessSipocItem[]
 }
 
-export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RiskControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
 export type RiskType = 'ESTRATEGICO' | 'TACTICO' | 'OPERACIONAL'
 export type ProcessRiskControl = {
