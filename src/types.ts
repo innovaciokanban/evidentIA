@@ -349,11 +349,22 @@ export type ProcessSipoc = {
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RiskControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
 export type RiskType = 'ESTRATEGICO' | 'TACTICO' | 'OPERACIONAL'
+export type RiskAcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
+export type RiskTreatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT'
 export type ProcessRiskControl = {
   id: string
   riskId: string
   description: string
   evaluation: RiskControlEvaluation
+  createdAt: string
+  updatedAt: string
+}
+export type ProcessRiskEvidence = {
+  id: string
+  riskId: string
+  name: string
+  description: string
+  url: string
   createdAt: string
   updatedAt: string
 }
@@ -364,6 +375,11 @@ export type ProcessRisk = {
   description: string
   riskType: string
   riskOwner: Pick<User, 'id' | 'name'> | null
+  acceptanceStatus: RiskAcceptanceStatus
+  treatment: RiskTreatment | null
+  mitigationOwner: Pick<User, 'id' | 'name'> | null
+  mitigationStartDate: string | null
+  mitigationDueDate: string | null
   inherentImpact: number
   inherentProbability: number
   inherentScore: number
@@ -373,6 +389,7 @@ export type ProcessRisk = {
   residualScore: number
   residualLevel: RiskLevel
   controls: ProcessRiskControl[]
+  evidences: ProcessRiskEvidence[]
   createdAt: string
   updatedAt: string
 }

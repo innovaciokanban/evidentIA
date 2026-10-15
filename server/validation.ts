@@ -180,6 +180,9 @@ export const sipocItemUpdateSchema = sipocItemCreateSchema
 
 const riskScaleValue = z.number().int().min(1).max(5)
 export const riskTypeSchema = z.enum(['ESTRATEGICO', 'TACTICO', 'OPERACIONAL'])
+export const riskAcceptanceStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED'])
+export const riskTreatmentTypeSchema = z.enum(['AVOID', 'MITIGATE', 'TRANSFER', 'ACCEPT'])
+const mitigationDate = z.coerce.date().nullable().optional()
 export const riskCreateSchema = z.object({
   name: z.string().trim().min(3).max(160),
   description: z.string().trim().min(3).max(5000),
@@ -187,6 +190,14 @@ export const riskCreateSchema = z.object({
   // Kept optional while Risk.bpmnActivity remains NOT NULL in PostgreSQL.
   bpmnActivity: z.string().trim().min(2).max(160).optional(),
   riskOwnerId: idReference.nullable().optional(),
+  // Estado inicial PENDING (sin decisión); la aceptación es un veredicto formal y no
+  // depende del tratamiento elegido para el riesgo.
+  acceptanceStatus: riskAcceptanceStatusSchema.optional(),
+  // Tratamiento escogido: Evitar, Mitigar, Transferir o Aceptar. Independiente de acceptanceStatus.
+  treatment: riskTreatmentTypeSchema.nullable().optional(),
+  mitigationOwnerId: idReference.nullable().optional(),
+  mitigationStartDate: mitigationDate,
+  mitigationDueDate: mitigationDate,
   inherentImpact: riskScaleValue,
   inherentProbability: riskScaleValue,
   residualImpact: riskScaleValue,
@@ -205,6 +216,21 @@ export const riskControlCreateSchema = z.object({
 export const riskControlUpdateSchema = riskControlCreateSchema.partial().refine(
   (value) => Object.keys(value).length > 0,
   'At least one control field is required',
+)
+
+// Solo enlaces http(s): no se guardan archivos ni rutas del servidor, solo la URL de la evidencia.
+const riskEvidenceUrl = z.string().trim().url('Evidence link must be a valid URL').refine(
+  (value) => /^https?:\/\//i.test(value),
+  'Evidence link must start with http:// or https://',
+)
+export const riskEvidenceCreateSchema = z.object({
+  name: z.string().trim().min(3).max(160),
+  description: z.string().trim().min(3).max(2000),
+  url: riskEvidenceUrl.max(500),
+})
+export const riskEvidenceUpdateSchema = riskEvidenceCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one evidence field is required',
 )
 
 export const diagnosticCreateSchema = z.object({

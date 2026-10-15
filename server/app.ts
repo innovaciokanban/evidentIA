@@ -16,7 +16,7 @@ import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, stra
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -577,7 +577,9 @@ const sipocChange = (kind: SipocKind, previousValue: string | null, newValue: st
 })
 const riskInclude = {
   controls: { orderBy: { createdAt: 'asc' as const } },
+  evidences: { orderBy: { createdAt: 'asc' as const } },
   riskOwner: { select: { id: true, name: true } },
+  mitigationOwner: { select: { id: true, name: true } },
 } as const
 // Temporary compatibility value until the NOT NULL BPMN column is removed by a migration.
 const legacyBpmnActivityValue = 'No especificada'
@@ -588,6 +590,11 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
   description: risk.description,
   riskType: risk.riskType,
   riskOwner: risk.riskOwner,
+  acceptanceStatus: risk.acceptanceStatus,
+  treatment: risk.treatment,
+  mitigationOwner: risk.mitigationOwner,
+  mitigationStartDate: risk.mitigationStartDate,
+  mitigationDueDate: risk.mitigationDueDate,
   inherentImpact: risk.inherentImpact,
   inherentProbability: risk.inherentProbability,
   inherentScore: riskScoreFor(risk.inherentImpact, risk.inherentProbability),
@@ -597,9 +604,19 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
   residualScore: riskScoreFor(risk.residualImpact, risk.residualProbability),
   residualLevel: riskLevelFor(risk.residualImpact, risk.residualProbability),
   controls: risk.controls,
+  evidences: risk.evidences,
   createdAt: risk.createdAt,
   updatedAt: risk.updatedAt,
 })
+
+/**
+ * El plan de mitigación no admite vencimiento anterior a la fecha de inicio. En PATCH solo viene
+ * una de las dos fechas, así que el cruce se valida contra el valor guardado del riesgo.
+ */
+const mitigationDatesError = (startDate: Date | null | undefined, dueDate: Date | null | undefined): string | null =>
+  startDate && dueDate && dueDate.getTime() < startDate.getTime()
+    ? 'Mitigation due date cannot be before the start date'
+    : null
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
   [ActionItemStatus.PENDING]: TicketStatus.OPEN,
@@ -1119,10 +1136,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
    * Any user assigned to a process resource must belong to the process company. The id comes from
    * the client, so the company check stays on the server even when the UI filters the directory.
    */
-  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
+  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
     if (!userId) return { ok: true, userId: null }
     const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, companyId: true } })
-    if (!user) return { ok: false, status: 400, error: `${roleLabel === 'risk owner' ? 'Risk owner' : 'Responsible'} user not found` }
+    if (!user) return { ok: false, status: 400, error: `${roleLabel === 'risk owner' ? 'Risk owner' : roleLabel === 'mitigation responsible' ? 'Mitigation responsible' : 'Responsible'} user not found` }
     if (user.companyId !== companyId) return { ok: false, status: 403, error: `You can only assign a ${roleLabel} from your own company` }
     return { ok: true, userId }
   }
@@ -1450,12 +1467,23 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(riskOwner.status).json({ error: riskOwner.error })
       return
     }
+    const mitigationOwner = await resolveUserInCompany(parsed.data.mitigationOwnerId, process.companyId, 'mitigation responsible')
+    if (!mitigationOwner.ok) {
+      response.status(mitigationOwner.status).json({ error: mitigationOwner.error })
+      return
+    }
+    const dateError = mitigationDatesError(parsed.data.mitigationStartDate, parsed.data.mitigationDueDate)
+    if (dateError) {
+      response.status(400).json({ error: dateError })
+      return
+    }
     const risk = await db.risk.create({
       data: {
         processId: process.id,
         ...parsed.data,
         bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
         riskOwnerId: riskOwner.userId,
+        mitigationOwnerId: mitigationOwner.userId,
       },
       include: riskInclude,
     })
@@ -1486,6 +1514,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         return
       }
       data.riskOwnerId = riskOwner.userId
+    }
+    if (parsed.data.mitigationOwnerId !== undefined) {
+      const mitigationOwner = await resolveUserInCompany(parsed.data.mitigationOwnerId, process.companyId, 'mitigation responsible')
+      if (!mitigationOwner.ok) {
+        response.status(mitigationOwner.status).json({ error: mitigationOwner.error })
+        return
+      }
+      data.mitigationOwnerId = mitigationOwner.userId
+    }
+    const nextStart = data.mitigationStartDate !== undefined ? data.mitigationStartDate : existing.mitigationStartDate
+    const nextDue = data.mitigationDueDate !== undefined ? data.mitigationDueDate : existing.mitigationDueDate
+    const dateError = mitigationDatesError(nextStart, nextDue)
+    if (dateError) {
+      response.status(400).json({ error: dateError })
+      return
     }
     const risk = await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
     response.json({ risk: riskView(risk) })
@@ -1568,6 +1611,71 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     await db.riskControl.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  app.post('/api/processes/:processId/risks/:riskId/evidences', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskEvidenceCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid evidence data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const evidence = await db.riskEvidence.create({ data: { riskId: risk.id, ...parsed.data } })
+    response.status(201).json({ evidence })
+  }))
+
+  app.patch('/api/processes/:processId/risks/:riskId/evidences/:evidenceId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = riskEvidenceUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid evidence data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const existing = await db.riskEvidence.findUnique({ where: { id: String(request.params.evidenceId) } })
+    if (!existing || existing.riskId !== risk.id) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    const evidence = await db.riskEvidence.update({ where: { id: existing.id }, data: parsed.data })
+    response.json({ evidence })
+  }))
+
+  app.delete('/api/processes/:processId/risks/:riskId/evidences/:evidenceId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const existing = await db.riskEvidence.findUnique({ where: { id: String(request.params.evidenceId) } })
+    if (!existing || existing.riskId !== risk.id) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    await db.riskEvidence.delete({ where: { id: existing.id } })
     response.status(204).send()
   }))
 

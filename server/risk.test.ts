@@ -6,7 +6,10 @@ import { createApp } from './app.js'
 
 type ControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
 type StoredControl = { id: string; riskId: string; description: string; evaluation: ControlEvaluation; createdAt: Date; updatedAt: Date }
-type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; bpmnActivity: string; riskOwnerId: string | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; createdAt: Date; updatedAt: Date }
+type StoredEvidence = { id: string; riskId: string; name: string; description: string; url: string; createdAt: Date; updatedAt: Date }
+type AcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
+type Treatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT' | null
+type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; bpmnActivity: string; riskOwnerId: string | null; acceptanceStatus: AcceptanceStatus; treatment: Treatment; mitigationOwnerId: string | null; mitigationStartDate: Date | null; mitigationDueDate: Date | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; evidences: StoredEvidence[]; createdAt: Date; updatedAt: Date }
 type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
 
 const companyId = 'cmcompany00000000000000001'
@@ -35,10 +38,12 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   let nextProcess = 3
   let nextRisk = 1
   let nextControl = 1
+  let nextEvidence = 1
   const processFor = (id: string) => storedProcesses.find((item) => item.id === id) ?? null
   const processView = (item: TestProcess) => ({ ...item, company: { id: item.companyId }, responsible: null })
   const riskFor = (id: string) => storedRisks.find((item) => item.id === id) ?? null
-  const riskView = (risk: StoredRisk) => ({ ...risk, riskOwner: users.find((user) => user.id === risk.riskOwnerId) ? { id: risk.riskOwnerId!, name: users.find((user) => user.id === risk.riskOwnerId)!.name } : null })
+  const ownerView = (userId: string | null) => { const user = users.find((item) => item.id === userId); return user ? { id: user.id, name: user.name } : null }
+  const riskView = (risk: StoredRisk) => ({ ...risk, riskOwner: ownerView(risk.riskOwnerId), mitigationOwner: ownerView(risk.mitigationOwnerId) })
 
   const db = {
     user: {
@@ -84,7 +89,7 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findMany: vi.fn(async ({ where }: { where: { processId: string } }) => storedRisks.filter((item) => item.processId === where.processId).map(riskView)),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const risk = riskFor(where.id); return risk ? riskView(risk) : null }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        const risk: StoredRisk = { id: `cmriskcreated${String(nextRisk++).padStart(10, '0')}`, processId: String(data.processId), name: String(data.name), description: String(data.description), riskType: String(data.riskType), bpmnActivity: String(data.bpmnActivity), riskOwnerId: data.riskOwnerId == null ? null : String(data.riskOwnerId), inherentImpact: Number(data.inherentImpact), inherentProbability: Number(data.inherentProbability), residualImpact: Number(data.residualImpact), residualProbability: Number(data.residualProbability), controls: [], createdAt: new Date(), updatedAt: new Date() }
+        const risk: StoredRisk = { id: `cmriskcreated${String(nextRisk++).padStart(10, '0')}`, processId: String(data.processId), name: String(data.name), description: String(data.description), riskType: String(data.riskType), bpmnActivity: String(data.bpmnActivity), riskOwnerId: data.riskOwnerId == null ? null : String(data.riskOwnerId), acceptanceStatus: (data.acceptanceStatus as AcceptanceStatus) ?? 'PENDING', treatment: (data.treatment as Treatment) ?? null, mitigationOwnerId: data.mitigationOwnerId == null ? null : String(data.mitigationOwnerId), mitigationStartDate: (data.mitigationStartDate as Date | null | undefined) ?? null, mitigationDueDate: (data.mitigationDueDate as Date | null | undefined) ?? null, inherentImpact: Number(data.inherentImpact), inherentProbability: Number(data.inherentProbability), residualImpact: Number(data.residualImpact), residualProbability: Number(data.residualProbability), controls: [], evidences: [], createdAt: new Date(), updatedAt: new Date() }
         storedRisks.push(risk)
         return riskView(risk)
       }),
@@ -109,6 +114,23 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       }),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         for (const risk of storedRisks) { const index = risk.controls.findIndex((item) => item.id === where.id); if (index >= 0) return risk.controls.splice(index, 1)[0] }
+        return null
+      }),
+    },
+    riskEvidence: {
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => storedRisks.flatMap((risk) => risk.evidences).find((evidence) => evidence.id === where.id) ?? null),
+      create: vi.fn(async ({ data }: { data: { riskId: string; name: string; description: string; url: string } }) => {
+        const evidence: StoredEvidence = { id: `cmevidence${String(nextEvidence++).padStart(10, '0')}`, ...data, createdAt: new Date(), updatedAt: new Date() }
+        ;(riskFor(data.riskId) as StoredRisk).evidences.push(evidence)
+        return evidence
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<StoredEvidence> }) => {
+        const evidence = storedRisks.flatMap((risk) => risk.evidences).find((item) => item.id === where.id) as StoredEvidence
+        Object.assign(evidence, data, { updatedAt: new Date() })
+        return evidence
+      }),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => {
+        for (const risk of storedRisks) { const index = risk.evidences.findIndex((item) => item.id === where.id); if (index >= 0) return risk.evidences.splice(index, 1)[0] }
         return null
       }),
     },
@@ -221,7 +243,7 @@ describe('process risk API', () => {
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo táctico', riskType: 'TACTICO' })).status).toBe(201)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo inválido', riskType: 'Operativo' })).status).toBe(400)
 
-    storedRisks.push({ id: 'cmrisklegacy0000000000001', processId, name: 'Riesgo legado', description: 'Riesgo guardado con un catálogo anterior.', riskType: 'Operativo', bpmnActivity: 'Actividad antigua', riskOwnerId: null, inherentImpact: 2, inherentProbability: 2, residualImpact: 1, residualProbability: 1, controls: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') })
+    storedRisks.push({ id: 'cmrisklegacy0000000000001', processId, name: 'Riesgo legado', description: 'Riesgo guardado con un catálogo anterior.', riskType: 'Operativo', bpmnActivity: 'Actividad antigua', riskOwnerId: null, acceptanceStatus: 'PENDING', treatment: null, mitigationOwnerId: null, mitigationStartDate: null, mitigationDueDate: null, inherentImpact: 2, inherentProbability: 2, residualImpact: 1, residualProbability: 1, controls: [], evidences: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') })
     const listed = await agent.get(`/api/processes/${processId}/risks`)
     expect(listed.body.risks.find((risk: { id: string }) => risk.id === 'cmrisklegacy0000000000001').riskType).toBe('Operativo')
     const edited = await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ name: 'Riesgo legado editado' })
@@ -269,5 +291,73 @@ describe('process risk API', () => {
     expect(storedRisks.some((risk) => risk.processId === createdProcessId)).toBe(true)
     expect((await agent.delete(`/api/processes/${createdProcessId}`)).status).toBe(409)
     expect(storedRisks.some((risk) => risk.processId === createdProcessId)).toBe(true)
+  })
+
+  it('validates treatment and acceptance options without touching matrix levels', async () => {
+    const { db } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', inherentImpact: 5, inherentProbability: 5, residualImpact: 1, residualProbability: 1 })
+    expect(created.status).toBe(201)
+    expect(created.body.risk).toMatchObject({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
+    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Tratamiento inválido', treatment: 'Remediar' })).status).toBe(400)
+    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Aceptación inválida', acceptanceStatus: 'UNKNOWN' })).status).toBe(400)
+    const defaults = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo sin tratamiento' })
+    expect(defaults.status).toBe(201)
+    expect(defaults.body.risk).toMatchObject({ acceptanceStatus: 'PENDING', treatment: null, mitigationOwner: null, mitigationStartDate: null, mitigationDueDate: null, evidences: [] })
+    const patched = await agent.patch(`/api/processes/${processId}/risks/${defaults.body.risk.id}`).send({ acceptanceStatus: 'REJECTED', treatment: null })
+    expect(patched.status).toBe(200)
+    expect(patched.body.risk).toMatchObject({ acceptanceStatus: 'REJECTED', treatment: null })
+    expect(patched.body.risk.inherentLevel).toBe(defaults.body.risk.inherentLevel)
+    expect(patched.body.risk.residualLevel).toBe(defaults.body.risk.residualLevel)
+  })
+
+  it('persists the mitigation plan and rejects inverted date ranges', async () => {
+    const { db } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, mitigationOwnerId: companyUser.id, mitigationStartDate: '2026-11-01', mitigationDueDate: '2026-11-30' })
+    expect(created.status).toBe(201)
+    expect(created.body.risk.mitigationOwner).toEqual({ id: companyUser.id, name: companyUser.name })
+    expect(created.body.risk.mitigationStartDate).not.toBeNull()
+    expect(created.body.risk.mitigationDueDate).not.toBeNull()
+    const inverted = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Fechas invertidas', mitigationStartDate: '2026-11-30', mitigationDueDate: '2026-11-01' })
+    expect(inverted.status).toBe(400)
+    const riskId = created.body.risk.id as string
+    const overlappingPatch = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: '2026-10-01' })
+    expect(overlappingPatch.status).toBe(400)
+    const cleared = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationStartDate: null, mitigationDueDate: null, mitigationOwnerId: null })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.risk.mitigationOwner).toBeNull()
+    expect(cleared.body.risk.mitigationStartDate).toBeNull()
+    expect(cleared.body.risk.mitigationDueDate).toBeNull()
+    const crossCompanyOwner = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Plan con dueño ajeno', mitigationOwnerId: foreignAdmin.id })
+    expect(crossCompanyOwner.status).toBe(403)
+    const readOnly = makeRiskDb('COMPANY_USER')
+    const readOnlyAgent = await loggedIn(readOnly.db, companyUser.email)
+    expect((await readOnlyAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, mitigationStartDate: '2026-11-01', mitigationDueDate: '2026-11-30' })).status).toBe(403)
+  })
+
+  it('creates, edits and deletes evidence attached to the correct risk', async () => {
+    const { db } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const risk = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    const created = await agent.post(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences`).send({ name: 'Acta de aprobación', description: 'Documento que demuestra la aprobación del plan de mitigación.', url: 'https://evidentia.test/acta.pdf' })
+    expect(created.status).toBe(201)
+    expect(created.body.evidence.riskId).toBe(risk.body.risk.id)
+    const listed = await agent.get(`/api/processes/${processId}/risks`)
+    expect(listed.body.risks.find((item: { id: string }) => item.id === risk.body.risk.id).evidences).toHaveLength(1)
+    const updated = await agent.patch(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences/${created.body.evidence.id}`).send({ name: 'Acta final' })
+    expect(updated.status).toBe(200)
+    expect(updated.body.evidence.name).toBe('Acta final')
+    expect((await agent.post(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences`).send({ name: 'Enlace inválido', description: 'La URL debe usar un protocolo web.', url: 'ftp://archivo.test/doc' })).status).toBe(400)
+    expect((await agent.post(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences`).send({ name: 'XY', description: 'Nombre demasiado corto para la evidencia.', url: 'https://evidentia.test/doc.pdf' })).status).toBe(400)
+    const other = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Otro riesgo' })
+    expect((await agent.patch(`/api/processes/${processId}/risks/${other.body.risk.id}/evidences/${created.body.evidence.id}`).send({ name: 'No existe' })).status).toBe(404)
+    expect((await agent.delete(`/api/processes/${processId}/risks/${other.body.risk.id}/evidences/${created.body.evidence.id}`)).status).toBe(404)
+    const readOnly = makeRiskDb('COMPANY_USER')
+    const readOnlyAgent = await loggedIn(readOnly.db, companyUser.email)
+    expect((await readOnlyAgent.post(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences`).send({ name: 'Sin permiso', description: 'El usuario solo tiene lectura.', url: 'https://evidentia.test/doc.pdf' })).status).toBe(403)
+    expect((await agent.delete(`/api/processes/${processId}/risks/${risk.body.risk.id}/evidences/${created.body.evidence.id}`)).status).toBe(204)
+    const afterDelete = await agent.get(`/api/processes/${processId}/risks`)
+    expect(afterDelete.body.risks.find((item: { id: string }) => item.id === risk.body.risk.id).evidences).toHaveLength(0)
   })
 })

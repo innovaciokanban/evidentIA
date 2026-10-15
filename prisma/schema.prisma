@@ -150,6 +150,19 @@ enum RiskControlEvaluation {
   EFFECTIVE
 }
 
+enum RiskAcceptanceStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum RiskTreatmentType {
+  AVOID
+  MITIGATE
+  TRANSFER
+  ACCEPT
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -170,6 +183,7 @@ model User {
   createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
   responsibleProcesses Process[] @relation("ResponsibleProcesses")
   riskOwnerRisks Risk[] @relation("RiskOwners")
+  mitigationOwnerRisks Risk[] @relation("RiskMitigationOwners")
   processChanges  ProcessChange[] @relation("ProcessChangeActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
@@ -630,18 +644,26 @@ model Risk {
   riskType             String
   bpmnActivity         String
   riskOwnerId          String?
+  acceptanceStatus     RiskAcceptanceStatus @default(PENDING)
+  treatment            RiskTreatmentType?
+  mitigationOwnerId    String?
+  mitigationStartDate  DateTime?
+  mitigationDueDate    DateTime?
   inherentImpact       Int
   inherentProbability  Int
   residualImpact       Int
   residualProbability  Int
   process              Process       @relation(fields: [processId], references: [id], onDelete: Cascade)
   riskOwner            User?         @relation("RiskOwners", fields: [riskOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  mitigationOwner      User?         @relation("RiskMitigationOwners", fields: [mitigationOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   controls             RiskControl[]
+  evidences            RiskEvidence[]
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
   @@index([processId])
   @@index([riskOwnerId])
+  @@index([mitigationOwnerId])
 }
 
 model RiskControl {
@@ -652,6 +674,19 @@ model RiskControl {
   risk        Risk                   @relation(fields: [riskId], references: [id], onDelete: Cascade)
   createdAt   DateTime               @default(now())
   updatedAt   DateTime               @updatedAt
+
+  @@index([riskId])
+}
+
+model RiskEvidence {
+  id          String   @id @default(cuid())
+  riskId      String
+  name        String
+  description String
+  url         String
+  risk        Risk     @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([riskId])
 }
