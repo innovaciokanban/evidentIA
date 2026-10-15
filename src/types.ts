@@ -348,6 +348,7 @@ export type ProcessSipoc = {
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 export type RiskControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
+export type RiskType = 'ESTRATEGICO' | 'TACTICO' | 'OPERACIONAL'
 export type ProcessRiskControl = {
   id: string
   riskId: string
@@ -362,7 +363,7 @@ export type ProcessRisk = {
   name: string
   description: string
   riskType: string
-  bpmnActivity: string
+  riskOwner: Pick<User, 'id' | 'name'> | null
   inherentImpact: number
   inherentProbability: number
   inherentScore: number

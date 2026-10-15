@@ -581,14 +581,19 @@ const riskLevelFor = (impact: number, probability: number) => {
   if (score <= 16) return 'HIGH' as const
   return 'CRITICAL' as const
 }
-const riskInclude = { controls: { orderBy: { createdAt: 'asc' as const } } } as const
+const riskInclude = {
+  controls: { orderBy: { createdAt: 'asc' as const } },
+  riskOwner: { select: { id: true, name: true } },
+} as const
+// Temporary compatibility value until the NOT NULL BPMN column is removed by a migration.
+const legacyBpmnActivityValue = 'No especificada'
 const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) => ({
   id: risk.id,
   processId: risk.processId,
   name: risk.name,
   description: risk.description,
   riskType: risk.riskType,
-  bpmnActivity: risk.bpmnActivity,
+  riskOwner: risk.riskOwner,
   inherentImpact: risk.inherentImpact,
   inherentProbability: risk.inherentProbability,
   inherentScore: risk.inherentImpact * risk.inherentProbability,
@@ -1117,16 +1122,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   /**
-   * El responsable tiene que ser un usuario de la misma empresa que el proceso: el id viene del
-   * cliente, así que se resuelve contra la base y se compara con la empresa que ya se decidió en el
-   * servidor. Un id de otra empresa nunca se guarda.
+   * Any user assigned to a process resource must belong to the process company. The id comes from
+   * the client, so the company check stays on the server even when the UI filters the directory.
    */
-  const resolveResponsible = async (responsibleId: string | null | undefined, companyId: string): Promise<{ ok: true; responsibleId: string | null } | { ok: false; status: number; error: string }> => {
-    if (!responsibleId) return { ok: true, responsibleId: null }
-    const responsible = await db.user.findUnique({ where: { id: responsibleId }, select: { id: true, companyId: true } })
-    if (!responsible) return { ok: false, status: 400, error: 'Responsible user not found' }
-    if (responsible.companyId !== companyId) return { ok: false, status: 403, error: 'You can only assign a responsible from your own company' }
-    return { ok: true, responsibleId }
+  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
+    if (!userId) return { ok: true, userId: null }
+    const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, companyId: true } })
+    if (!user) return { ok: false, status: 400, error: `${roleLabel === 'risk owner' ? 'Risk owner' : 'Responsible'} user not found` }
+    if (user.companyId !== companyId) return { ok: false, status: 403, error: `You can only assign a ${roleLabel} from your own company` }
+    return { ok: true, userId }
+  }
+
+  const resolveResponsible = async (responsibleId: string | null | undefined, companyId: string) => {
+    const resolved = await resolveUserInCompany(responsibleId, companyId, 'responsible')
+    return resolved.ok ? { ok: true as const, responsibleId: resolved.userId } : resolved
   }
 
   /** El nombre identifica el proceso dentro de la empresa, y solo dentro de ella. */
@@ -1442,7 +1451,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const risk = await db.risk.create({ data: { processId: process.id, ...parsed.data }, include: riskInclude })
+    const riskOwner = await resolveUserInCompany(parsed.data.riskOwnerId, process.companyId, 'risk owner')
+    if (!riskOwner.ok) {
+      response.status(riskOwner.status).json({ error: riskOwner.error })
+      return
+    }
+    const risk = await db.risk.create({
+      data: {
+        processId: process.id,
+        ...parsed.data,
+        bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
+        riskOwnerId: riskOwner.userId,
+      },
+      include: riskInclude,
+    })
     response.status(201).json({ risk: riskView(risk) })
   }))
 
@@ -1462,7 +1484,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Risk not found' })
       return
     }
-    const risk = await db.risk.update({ where: { id: existing.id }, data: parsed.data, include: riskInclude })
+    const data = { ...parsed.data }
+    if (parsed.data.riskOwnerId !== undefined) {
+      const riskOwner = await resolveUserInCompany(parsed.data.riskOwnerId, process.companyId, 'risk owner')
+      if (!riskOwner.ok) {
+        response.status(riskOwner.status).json({ error: riskOwner.error })
+        return
+      }
+      data.riskOwnerId = riskOwner.userId
+    }
+    const risk = await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
     response.json({ risk: riskView(risk) })
   }))
 

@@ -1817,7 +1817,7 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   .risk-list-main > span:nth-child(5) { grid-column: 2; grid-row: 3; }
   .risk-list-main > span:nth-child(6) { grid-column: 2; grid-row: 1; }
   .risk-list-main > span:nth-child(2)::before { content: 'Tipo: '; color: var(--muted-light); font-weight: 700; }
-  .risk-list-main > span:nth-child(3)::before { content: 'Actividad: '; color: var(--muted-light); font-weight: 700; }
+  .risk-list-main > span:nth-child(3)::before { content: 'Dueño: '; color: var(--muted-light); font-weight: 700; }
   .risk-list-main > span:nth-child(4)::before { content: 'Inherente: '; color: var(--muted-light); font-weight: 700; }
   .risk-list-main > span:nth-child(5)::before { content: 'Residual: '; color: var(--muted-light); font-weight: 700; }
   .risk-detail-toolbar, .risk-detail-footer { padding-right: 18px; padding-left: 18px; }

@@ -179,11 +179,14 @@ export const sipocItemCreateSchema = z.object({
 export const sipocItemUpdateSchema = sipocItemCreateSchema
 
 const riskScaleValue = z.number().int().min(1).max(5)
+export const riskTypeSchema = z.enum(['ESTRATEGICO', 'TACTICO', 'OPERACIONAL'])
 export const riskCreateSchema = z.object({
   name: z.string().trim().min(3).max(160),
   description: z.string().trim().min(3).max(5000),
-  riskType: z.string().trim().min(2).max(120),
-  bpmnActivity: z.string().trim().min(2).max(160),
+  riskType: riskTypeSchema,
+  // Kept optional while Risk.bpmnActivity remains NOT NULL in PostgreSQL.
+  bpmnActivity: z.string().trim().min(2).max(160).optional(),
+  riskOwnerId: idReference.nullable().optional(),
   inherentImpact: riskScaleValue,
   inherentProbability: riskScaleValue,
   residualImpact: riskScaleValue,

@@ -169,6 +169,7 @@ model User {
   createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
   createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
   responsibleProcesses Process[] @relation("ResponsibleProcesses")
+  riskOwnerRisks Risk[] @relation("RiskOwners")
   processChanges  ProcessChange[] @relation("ProcessChangeActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
@@ -628,16 +629,19 @@ model Risk {
   description          String
   riskType             String
   bpmnActivity         String
+  riskOwnerId          String?
   inherentImpact       Int
   inherentProbability  Int
   residualImpact       Int
   residualProbability  Int
   process              Process       @relation(fields: [processId], references: [id], onDelete: Cascade)
+  riskOwner            User?         @relation("RiskOwners", fields: [riskOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   controls             RiskControl[]
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
   @@index([processId])
+  @@index([riskOwnerId])
 }
 
 model RiskControl {

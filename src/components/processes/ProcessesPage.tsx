@@ -338,7 +338,7 @@ export function ProcessesPage({ user }: { user: User }) {
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
-          <ProcessRiskPanel process={editing} canWrite={canCreate} onBack={() => { setShowRisks(false); setShowForm(true) }} />
+          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} onBack={() => { setShowRisks(false); setShowForm(true) }} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (

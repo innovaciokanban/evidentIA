@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api, ApiError } from '../../api'
-import type { Process, ProcessRisk, ProcessRiskControl, RiskControlEvaluation, RiskLevel } from '../../types'
+import type { Process, ProcessRisk, ProcessRiskControl, RiskControlEvaluation, RiskLevel, RiskType, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
 
 type RiskDraft = {
   name: string
   description: string
   riskType: string
-  bpmnActivity: string
+  riskOwnerId: string
   inherentImpact: string
   inherentProbability: string
   residualImpact: string
@@ -18,11 +18,13 @@ type RiskDraft = {
 type ControlDraft = { description: string; evaluation: RiskControlEvaluation }
 
 const emptyRiskDraft: RiskDraft = {
-  name: '', description: '', riskType: '', bpmnActivity: '', inherentImpact: '3', inherentProbability: '3', residualImpact: '1', residualProbability: '1',
+  name: '', description: '', riskType: '', riskOwnerId: '', inherentImpact: '3', inherentProbability: '3', residualImpact: '1', residualProbability: '1',
 }
 const emptyControlDraft: ControlDraft = { description: '', evaluation: 'PENDING' }
 const impactOptions = [['1', '1 - Insignificante'], ['2', '2 - Menor'], ['3', '3 - Moderado'], ['4', '4 - Mayor'], ['5', '5 - Catastrófico']]
 const probabilityOptions = [['1', '1 - Raro'], ['2', '2 - Improbable'], ['3', '3 - Posible'], ['4', '4 - Probable'], ['5', '5 - Casi seguro']]
+const riskTypeOptions: Array<[RiskType, string]> = [['ESTRATEGICO', 'Estratégico'], ['TACTICO', 'Táctico'], ['OPERACIONAL', 'Operacional']]
+const riskTypeLabelFor = (value: string): string => riskTypeOptions.find(([option]) => option === value)?.[1] ?? value
 const controlEvaluationOptions: Array<[RiskControlEvaluation, string]> = [['PENDING', 'Pendiente'], ['WEAK', 'Débil'], ['PARTIAL', 'Parcial'], ['EFFECTIVE', 'Efectivo']]
 const levelLabel: Record<RiskLevel, string> = { LOW: 'Bajo', MEDIUM: 'Medio', HIGH: 'Alto', CRITICAL: 'Crítico' }
 const levelFor = (impact: number, probability: number): RiskLevel => {
@@ -37,12 +39,17 @@ const draftFromRisk = (risk: ProcessRisk): RiskDraft => ({
   name: risk.name,
   description: risk.description,
   riskType: risk.riskType,
-  bpmnActivity: risk.bpmnActivity,
+  riskOwnerId: risk.riskOwner?.id ?? '',
   inherentImpact: String(risk.inherentImpact),
   inherentProbability: String(risk.inherentProbability),
   residualImpact: String(risk.residualImpact),
   residualProbability: String(risk.residualProbability),
 })
+
+const isCurrentRiskType = (value: string): value is RiskType => riskTypeOptions.some(([option]) => option === value)
+const riskTypeOptionsFor = (value: string): Array<[string, string]> => isCurrentRiskType(value) || !value
+  ? riskTypeOptions
+  : [[value, `${value} (legado)`], ...riskTypeOptions]
 
 function LevelBadge({ level, score }: { level: RiskLevel; score: number }) {
   return <span className={`risk-level-badge ${level.toLowerCase()}`}><span className="risk-level-dot" />{levelLabel[level]} <small>{score}</small></span>
@@ -86,7 +93,7 @@ function ControlEditor({ control, draft, saving, error, onDraftChange, onSave, o
   )
 }
 
-export function ProcessRiskPanel({ process, canWrite, onBack }: { process: Process; canWrite: boolean; onBack: () => void }) {
+export function ProcessRiskPanel({ process, users, canWrite, onBack }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; onBack: () => void }) {
   const [risks, setRisks] = useState<ProcessRisk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -146,16 +153,17 @@ export function ProcessRiskPanel({ process, canWrite, onBack }: { process: Proce
     setSaving(true)
     setError('')
     setNotice('')
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: draft.name,
       description: draft.description,
       riskType: draft.riskType,
-      bpmnActivity: draft.bpmnActivity,
+      riskOwnerId: draft.riskOwnerId || null,
       inherentImpact: Number(draft.inherentImpact),
       inherentProbability: Number(draft.inherentProbability),
       residualImpact: Number(draft.residualImpact),
       residualProbability: Number(draft.residualProbability),
     }
+    if (selected && !isCurrentRiskType(draft.riskType)) delete payload.riskType
     try {
       const result = selected
         ? await api<{ risk: ProcessRisk }>(`/processes/${process.id}/risks/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
@@ -219,6 +227,7 @@ export function ProcessRiskPanel({ process, canWrite, onBack }: { process: Proce
   }
 
   const isDetail = showDetail
+  const availableRiskOwners = users.filter((user) => user.companyId === process.companyId)
   const renderLevel = (impact: number, probability: number) => <LevelBadge level={levelFor(impact, probability)} score={impact * probability} />
 
   return (
@@ -236,14 +245,14 @@ export function ProcessRiskPanel({ process, canWrite, onBack }: { process: Proce
         <form className="panel risk-detail-panel" onSubmit={(event) => void saveRisk(event)}>
           <div className="risk-detail-toolbar"><button type="button" className="text-button" onClick={closeDetail}>← Volver a riesgos</button>{selected && canWrite && <button type="button" className="button danger small-button" onClick={() => void removeRisk(selected)}>Eliminar riesgo</button>}</div>
           <fieldset disabled={!canWrite} className="risk-detail-fields">
-            <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><label>Tipo de riesgo<input value={draft.riskType} onChange={(event) => setDraft({ ...draft, riskType: event.target.value })} placeholder="Ej. Operativo" maxLength={120} required /></label><label>Actividad BPMN<input value={draft.bpmnActivity} onChange={(event) => setDraft({ ...draft, bpmnActivity: event.target.value })} placeholder="Ej. Validar solicitud" maxLength={160} required /></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
+             <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><label>Tipo de riesgo<select value={draft.riskType} onChange={(event) => setDraft({ ...draft, riskType: event.target.value })} required><option value="">Selecciona un tipo</option>{riskTypeOptionsFor(draft.riskType).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>Dueño del riesgo<select value={draft.riskOwnerId} onChange={(event) => setDraft({ ...draft, riskOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
             <section className="risk-detail-section risk-evaluation-section"><div className="risk-section-heading"><div><p className="detail-label">VALORACIÓN</p><h2>EVALUACIÓN DE RIESGOS</h2></div><span className="risk-method-note">Matriz 5 × 5 · impacto × probabilidad</span></div><div className="risk-evaluation-layout"><EvaluationCard title="RIESGO INHERENTE" impact={draft.inherentImpact} probability={draft.inherentProbability} onImpact={(value) => setDraft({ ...draft, inherentImpact: value })} onProbability={(value) => setDraft({ ...draft, inherentProbability: value })} disabled={!canWrite} /><section className="risk-controls-card"><div className="risk-controls-heading"><div><p className="detail-label">MITIGACIÓN</p><h3>CONTROLES</h3></div>{canWrite && selected && !controlEditor && <button type="button" className="button secondary small-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para agregar controles.</div> : selected.controls.length === 0 && !controlEditor ? <div className="risk-controls-empty">Sin controles registrados{canWrite && <button type="button" className="text-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div> : <div className="risk-control-list">{selected.controls.map((control) => <div className="risk-control-item" key={control.id}><span className="risk-control-mark">✓</span><div><strong>{control.description}</strong><span className={`control-evaluation ${control.evaluation.toLowerCase()}`}>{controlEvaluationOptions.find(([value]) => value === control.evaluation)?.[1]}</span></div>{canWrite && <span className="risk-control-actions"><button type="button" className="sipoc-icon-button" title="Editar control" aria-label="Editar control" onClick={() => setControlEditor({ control, draft: { description: control.description, evaluation: control.evaluation } })}>✎</button><button type="button" className="sipoc-icon-button danger" title="Eliminar control" aria-label="Eliminar control" onClick={() => void removeControl(control)}>×</button></span>}</div>)}</div>}{controlEditor && selected && <ControlEditor control={controlEditor.control} draft={controlEditor.draft} saving={saving} error={error} onDraftChange={(value) => setControlEditor({ ...controlEditor, draft: value })} onSave={() => void saveControl()} onCancel={() => setControlEditor(null)} />}</section><EvaluationCard title="RIESGO RESIDUAL" impact={draft.residualImpact} probability={draft.residualProbability} onImpact={(value) => setDraft({ ...draft, residualImpact: value })} onProbability={(value) => setDraft({ ...draft, residualProbability: value })} disabled={!canWrite} /></div></section>
           </fieldset>
           {error && !controlEditor && <div className="form-error risk-detail-error" role="alert">{error}</div>}
           <footer className="risk-detail-footer"><button type="button" className="button secondary" onClick={closeDetail}>Cancelar</button>{canWrite && <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : selected ? 'Guardar cambios' : 'Guardar riesgo'}</button>}</footer>
         </form>
       ) : (
-        <section className="panel risk-list-panel"><div className="panel-heading risk-list-heading"><div><p className="detail-label">MATRIZ DEL PROCESO</p><h2>Listado de riesgos</h2></div><span className="risk-list-note">Nivel residual</span></div>{loading ? <div className="inline-loading"><span className="loader" />Cargando riesgos...</div> : risks.length === 0 ? <div className="risk-empty"><span className="risk-empty-icon">!</span><h3>Aún no hay riesgos registrados</h3><p>Documenta el primer riesgo asociado a este proceso.</p>{canWrite && <button type="button" className="button secondary" onClick={openCreate}>Crear primer riesgo</button>}</div> : <div className="risk-list"><div className="risk-list-head"><span>Riesgo</span><span>Tipo</span><span>Actividad BPMN</span><span>Inherente</span><span>Residual</span><span /></div>{risks.map((risk) => <article className="risk-list-item" key={risk.id}><button type="button" className="risk-list-main" onClick={() => openEdit(risk)}><span className="risk-list-name"><strong>{risk.name}</strong><small>{risk.description}</small></span><span>{risk.riskType}</span><span>{risk.bpmnActivity}</span><span>{renderLevel(risk.inherentImpact, risk.inherentProbability)}</span><span>{renderLevel(risk.residualImpact, risk.residualProbability)}</span><span className="risk-list-arrow">→</span></button>{canWrite && <button type="button" className="risk-list-delete" aria-label={`Eliminar ${risk.name}`} onClick={() => void removeRisk(risk)}>×</button>}</article>)}</div>}</section>
+         <section className="panel risk-list-panel"><div className="panel-heading risk-list-heading"><div><p className="detail-label">MATRIZ DEL PROCESO</p><h2>Listado de riesgos</h2></div><span className="risk-list-note">Nivel residual</span></div>{loading ? <div className="inline-loading"><span className="loader" />Cargando riesgos...</div> : risks.length === 0 ? <div className="risk-empty"><span className="risk-empty-icon">!</span><h3>Aún no hay riesgos registrados</h3><p>Documenta el primer riesgo asociado a este proceso.</p>{canWrite && <button type="button" className="button secondary" onClick={openCreate}>Crear primer riesgo</button>}</div> : <div className="risk-list"><div className="risk-list-head"><span>Riesgo</span><span>Tipo</span><span>Dueño</span><span>Inherente</span><span>Residual</span><span /></div>{risks.map((risk) => <article className="risk-list-item" key={risk.id}><button type="button" className="risk-list-main" onClick={() => openEdit(risk)}><span className="risk-list-name"><strong>{risk.name}</strong><small>{risk.description}</small></span><span>{riskTypeLabelFor(risk.riskType)}</span><span>{risk.riskOwner?.name ?? 'Sin asignar'}</span><span>{renderLevel(risk.inherentImpact, risk.inherentProbability)}</span><span>{renderLevel(risk.residualImpact, risk.residualProbability)}</span><span className="risk-list-arrow">→</span></button>{canWrite && <button type="button" className="risk-list-delete" aria-label={`Eliminar ${risk.name}`} onClick={() => void removeRisk(risk)}>×</button>}</article>)}</div>}</section>
       )}
     </div>
   )
