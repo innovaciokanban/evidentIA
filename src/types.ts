@@ -348,7 +348,7 @@ export type ProcessSipoc = {
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 export type RiskControlEvaluation = 'PENDING' | 'WEAK' | 'PARTIAL' | 'EFFECTIVE'
-export type RiskType = 'ESTRATEGICO' | 'TACTICO' | 'OPERACIONAL'
+export type RiskType = 'ESTRATEGICO' | 'MISIONAL' | 'APOYO'
 export type RiskAcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 export type RiskTreatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT'
 export type ProcessRiskControl = {
@@ -374,6 +374,7 @@ export type ProcessRisk = {
   name: string
   description: string
   riskType: string
+  code: string | null
   riskOwner: Pick<User, 'id' | 'name'> | null
   acceptanceStatus: RiskAcceptanceStatus
   treatment: RiskTreatment | null

@@ -589,6 +589,7 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
   name: risk.name,
   description: risk.description,
   riskType: risk.riskType,
+  code: risk.code,
   riskOwner: risk.riskOwner,
   acceptanceStatus: risk.acceptanceStatus,
   treatment: risk.treatment,
@@ -617,6 +618,52 @@ const mitigationDatesError = (startDate: Date | null | undefined, dueDate: Date 
   startDate && dueDate && dueDate.getTime() < startDate.getTime()
     ? 'Mitigation due date cannot be before the start date'
     : null
+
+// Prefijos del código automático por categoría; la secuencia global es independiente por prefijo.
+const riskCodePrefix = { ESTRATEGICO: 'EST', MISIONAL: 'MIS', APOYO: 'APO' } as const
+type RiskCodeCategory = keyof typeof riskCodePrefix
+const isRiskCodeCategory = (value: unknown): value is RiskCodeCategory =>
+  typeof value === 'string' && Object.hasOwn(riskCodePrefix, value)
+const isUniqueConstraintError = (error: unknown): boolean =>
+  Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'P2002')
+
+/**
+ * Siguiente código de la categoría. El upsert es una sentencia atómica que se confirma en
+ * autocommit: serializa la concurrencia por categoría (bloqueo de fila sobre RiskCodeSequence)
+ * y, si el índice único de Risk.code detectara un conflicto, el contador ya quedó avanzado para
+ * que el reintento obtenga un número nuevo (la secuencia admite huecos, como cualquier contador).
+ */
+const nextRiskCodeFor = async (client: Prisma.TransactionClient, category: RiskCodeCategory): Promise<string> => {
+  const sequence = await client.riskCodeSequence.upsert({
+    where: { category },
+    create: { category, next: 1 },
+    update: { next: { increment: 1 } },
+  })
+  return `${riskCodePrefix[category]}-R${sequence.next}`
+}
+
+const withCodeRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
+  let lastConflict: unknown = null
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error
+      lastConflict = error
+    }
+  }
+  throw lastConflict
+}
+
+type RiskWithInclude = Prisma.RiskGetPayload<{ include: typeof riskInclude }>
+
+// Solo el backend genera el código: el cliente nunca envía ni modifica Risk.code.
+const persistRiskWithCode = (db: PrismaClient, data: Prisma.RiskUncheckedCreateInput): Promise<RiskWithInclude> =>
+  withCodeRetry(async () => {
+    if (!isRiskCodeCategory(data.riskType)) throw new Error(`No code prefix for risk type ${String(data.riskType)}`)
+    const code = await nextRiskCodeFor(db, data.riskType)
+    return db.risk.create({ data: { ...data, code }, include: riskInclude })
+  })
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
   [ActionItemStatus.PENDING]: TicketStatus.OPEN,
@@ -1477,15 +1524,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: dateError })
       return
     }
-    const risk = await db.risk.create({
-      data: {
-        processId: process.id,
-        ...parsed.data,
-        bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
-        riskOwnerId: riskOwner.userId,
-        mitigationOwnerId: mitigationOwner.userId,
-      },
-      include: riskInclude,
+    const risk = await persistRiskWithCode(db, {
+      processId: process.id,
+      ...parsed.data,
+      bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
+      riskOwnerId: riskOwner.userId,
+      mitigationOwnerId: mitigationOwner.userId,
     })
     response.status(201).json({ risk: riskView(risk) })
   }))
@@ -1530,7 +1574,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: dateError })
       return
     }
-    const risk = await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
+    // Los tipos legados no se pueden reasignar: solo se conservan si ya era el valor almacenado.
+    if (data.riskType !== undefined && data.riskType !== existing.riskType && !isRiskCodeCategory(data.riskType)) {
+      response.status(400).json({ error: 'Risk type can only be changed to ESTRATEGICO, MISIONAL or APOYO' })
+      return
+    }
+    // El código es inmutable: cambiar el tipo nunca renumera el identificador histórico. Solo se
+    // asigna cuando el riesgo aún no tiene código (dato legado) y su tipo efectivo es clasificable.
+    const effectiveRiskType = data.riskType ?? existing.riskType
+    const codeCategory: RiskCodeCategory | null = existing.code === null && isRiskCodeCategory(effectiveRiskType) ? effectiveRiskType : null
+    const risk = codeCategory
+      ? await withCodeRetry(async () => {
+          const code = await nextRiskCodeFor(db, codeCategory)
+          return db.risk.update({ where: { id: existing.id }, data: { ...data, code }, include: riskInclude })
+        })
+      : await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
     response.json({ risk: riskView(risk) })
   }))
 

@@ -179,7 +179,9 @@ export const sipocItemCreateSchema = z.object({
 export const sipocItemUpdateSchema = sipocItemCreateSchema
 
 const riskScaleValue = z.number().int().min(1).max(5)
-export const riskTypeSchema = z.enum(['ESTRATEGICO', 'TACTICO', 'OPERACIONAL'])
+// Categorías codificables: determinan el prefijo del código automático (EST/MIS/APO).
+// Los tipos legados (TACTICO, OPERACIONAL, textos históricos) ya no se pueden crear.
+export const riskTypeSchema = z.enum(['ESTRATEGICO', 'MISIONAL', 'APOYO'])
 export const riskAcceptanceStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED'])
 export const riskTreatmentTypeSchema = z.enum(['AVOID', 'MITIGATE', 'TRANSFER', 'ACCEPT'])
 const mitigationDate = z.coerce.date().nullable().optional()
@@ -203,7 +205,11 @@ export const riskCreateSchema = z.object({
   residualImpact: riskScaleValue,
   residualProbability: riskScaleValue,
 })
-export const riskUpdateSchema = riskCreateSchema.partial().refine(
+export const riskUpdateSchema = riskCreateSchema.omit({ riskType: true }).partial().extend({
+  // En edición se permite conservar el valor legado almacenado; la ruta de PATCH valida que
+  // solo se pueda cambiar a una categoría codificable (nunca reasignar un tipo legado).
+  riskType: z.string().trim().min(3).max(64).optional(),
+}).refine(
   (value) => Object.keys(value).length > 0,
   'At least one risk field is required',
 )
@@ -213,7 +219,11 @@ export const riskControlCreateSchema = z.object({
   description: z.string().trim().min(3).max(1000),
   evaluation: riskControlEvaluationSchema.default('PENDING'),
 })
-export const riskControlUpdateSchema = riskControlCreateSchema.partial().refine(
+// Sin heredar el default de creación: en PATCH solo debe persistir lo enviado y `{}` debe fallar.
+export const riskControlUpdateSchema = z.object({
+  description: z.string().trim().min(3).max(1000).optional(),
+  evaluation: riskControlEvaluationSchema.optional(),
+}).refine(
   (value) => Object.keys(value).length > 0,
   'At least one control field is required',
 )

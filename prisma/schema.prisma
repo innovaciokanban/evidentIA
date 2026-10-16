@@ -163,6 +163,12 @@ enum RiskTreatmentType {
   ACCEPT
 }
 
+enum RiskCodeCategory {
+  ESTRATEGICO
+  MISIONAL
+  APOYO
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -642,6 +648,7 @@ model Risk {
   name                 String
   description          String
   riskType             String
+  code                 String?       @unique
   bpmnActivity         String
   riskOwnerId          String?
   acceptanceStatus     RiskAcceptanceStatus @default(PENDING)
@@ -664,6 +671,13 @@ model Risk {
   @@index([processId])
   @@index([riskOwnerId])
   @@index([mitigationOwnerId])
+}
+
+// Contador del último código emitido por categoría (bloqueo de fila al incrementar).
+model RiskCodeSequence {
+  category  RiskCodeCategory @unique
+  next      Int              @default(0)
+  updatedAt DateTime         @updatedAt
 }
 
 model RiskControl {
