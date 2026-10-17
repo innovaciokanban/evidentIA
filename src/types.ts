@@ -373,6 +373,11 @@ export type ProcessRisk = {
   processId: string
   name: string
   description: string
+  /**
+   * Copia del tipo del proceso asociado, escrita solo por el backend. Es `string` (no RiskType)
+   * porque los riesgos antiguos pueden conservar textos legados como «Operativo»; el formulario
+   * no lo lee para pintar el campo, que muestra la categoría derivada del proceso.
+   */
   riskType: string
   code: string | null
   riskOwner: Pick<User, 'id' | 'name'> | null

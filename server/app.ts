@@ -624,6 +624,33 @@ const riskCodePrefix = { ESTRATEGICO: 'EST', MISIONAL: 'MIS', APOYO: 'APO' } as 
 type RiskCodeCategory = keyof typeof riskCodePrefix
 const isRiskCodeCategory = (value: unknown): value is RiskCodeCategory =>
   typeof value === 'string' && Object.hasOwn(riskCodePrefix, value)
+
+/**
+ * El tipo de riesgo no lo elige quien llena el formulario: es el tipo del proceso asociado.
+ * Process.type se fija en el alta y processUpdateSchema no lo admite, así que la categoría de un
+ * riesgo queda determinada de forma estable por su proceso (y el prefijo EST/MIS/APO del código
+ * automático sigue siendo coherente con esa categoría).
+ */
+const processTypeToRiskCategory: Record<ProcessType, RiskCodeCategory> = {
+  STRATEGIC: 'ESTRATEGICO',
+  MISSIONAL: 'MISIONAL',
+  SUPPORT: 'APOYO',
+}
+
+/**
+ * El riesgo residual solo se evalúa cuando el riesgo ya tiene al menos un control asociado.
+ * Cualquier control habilita la edición (independientemente de su evaluación, PENDING incluido);
+ * la "efectividad" del control es un concepto aparte y no decide este bloqueo.
+ *
+ * 1×1 es el valor neutro de un riesgo recién creado (aún sin controles). Si se elimina el último
+ * control, los valores residuales ya guardados se conservan tal cual (Risk.residualImpact y
+ * Risk.residualProbability son NOT NULL en el modelo): se bloquean para su edición, pero nunca se
+ * borran en silencio, y vuelven a ser editables cuando exista de nuevo al menos un control.
+ */
+const residualBaselineImpact = 1
+const residualBaselineProbability = 1
+const residualRequiresControlsError = 'Residual risk values require at least one control'
+
 const isUniqueConstraintError = (error: unknown): boolean =>
   Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'P2002')
 
@@ -1524,9 +1551,27 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: dateError })
       return
     }
+    // La categoría sale del proceso, nunca del cuerpo. El riskType del cliente se acepta solo como
+    // guarda de compatibilidad con clientes antiguos: si no coincide con la categoría del proceso,
+    // el alta se rechaza en lugar de guardar un riesgo con una categoría incompatible.
+    const riskCategory = processTypeToRiskCategory[process.type]
+    if (parsed.data.riskType !== undefined && parsed.data.riskType !== riskCategory) {
+      response.status(400).json({ error: `Risk type must match the process category (${riskCategory})` })
+      return
+    }
+    // Un riesgo nace sin controles, así que en el alta solo se admite el residual neutro (1×1).
+    // Cualquier otro valor se rechaza explícitamente para no poder eludir la regla desde una
+    // petición HTTP; la evaluación residual real comienza con el primer control.
+    if (parsed.data.residualImpact !== residualBaselineImpact || parsed.data.residualProbability !== residualBaselineProbability) {
+      response.status(400).json({ error: residualRequiresControlsError })
+      return
+    }
     const risk = await persistRiskWithCode(db, {
       processId: process.id,
       ...parsed.data,
+      // Se escribe después del spread para que la categoría derivada del proceso pase siempre por
+      // encima de cualquier riskType recibido.
+      riskType: riskCategory,
       bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
       riskOwnerId: riskOwner.userId,
       mitigationOwnerId: mitigationOwner.userId,
@@ -1574,19 +1619,34 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: dateError })
       return
     }
-    // Los tipos legados no se pueden reasignar: solo se conservan si ya era el valor almacenado.
-    if (data.riskType !== undefined && data.riskType !== existing.riskType && !isRiskCodeCategory(data.riskType)) {
-      response.status(400).json({ error: 'Risk type can only be changed to ESTRATEGICO, MISIONAL or APOYO' })
+    // El tipo de riesgo se deriva del proceso y no es editable. Si el cliente aún lo envía, solo se
+    // acepta cuando coincide con la categoría del proceso o con el valor ya almacenado (eco de un
+    // cliente antiguo); en ningún caso se persiste el valor recibido y una categoría incompatible
+    // con el proceso rechaza la edición.
+    const riskCategory = processTypeToRiskCategory[process.type]
+    if (data.riskType !== undefined && data.riskType !== riskCategory && data.riskType !== existing.riskType) {
+      response.status(400).json({ error: `Risk type is derived from the process and cannot be changed (${riskCategory})` })
       return
     }
-    // El código es inmutable: cambiar el tipo nunca renumera el identificador histórico. Solo se
-    // asigna cuando el riesgo aún no tiene código (dato legado) y su tipo efectivo es clasificable.
-    const effectiveRiskType = data.riskType ?? existing.riskType
-    const codeCategory: RiskCodeCategory | null = existing.code === null && isRiskCodeCategory(effectiveRiskType) ? effectiveRiskType : null
-    const risk = codeCategory
+    delete data.riskType
+    // El residual solo es editable con al menos un control asociado. Un eco del valor almacenado
+    // (clientes antiguos que envían el formulario completo) no cuenta como cambio y no bloquea la
+    // edición de otros campos. Al eliminar el último control los valores ya guardados se
+    // conservan (columnas NOT NULL): quedan bloqueados hasta que exista de nuevo un control.
+    const residualChanged = (data.residualImpact !== undefined && data.residualImpact !== existing.residualImpact)
+      || (data.residualProbability !== undefined && data.residualProbability !== existing.residualProbability)
+    if (residualChanged && existing.controls.length === 0) {
+      response.status(400).json({ error: residualRequiresControlsError })
+      return
+    }
+    // El código es inmutable: cambiar el proceso o el tipo nunca renumera el identificador histórico.
+    // Solo se asigna cuando el riesgo aún no tiene código (dato legado sin clasificar) y, en ese
+    // mismo momento, su riskType se completa con la categoría del proceso. Los riesgos que ya
+    // tienen código conservan su tipo almacenado aunque sea anterior a esta regla.
+    const risk = existing.code === null
       ? await withCodeRetry(async () => {
-          const code = await nextRiskCodeFor(db, codeCategory)
-          return db.risk.update({ where: { id: existing.id }, data: { ...data, code }, include: riskInclude })
+          const code = await nextRiskCodeFor(db, riskCategory)
+          return db.risk.update({ where: { id: existing.id }, data: { ...data, riskType: riskCategory, code }, include: riskInclude })
         })
       : await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
     response.json({ risk: riskView(risk) })

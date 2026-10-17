@@ -17,10 +17,10 @@ describe('RiskCodeInput', () => {
     expect(markup).toContain('value="EST-R4"')
   })
 
-  it('keeps legacy risks without a code read-only until their type is classified', () => {
+  it('keeps legacy risks without a code read-only until they are saved again', () => {
     const markup = renderToStaticMarkup(<RiskCodeInput code={null} creating={false} />)
     expect(markup).toContain('disabled=""')
-    expect(markup).toContain('placeholder="Se asignará al clasificar el tipo"')
+    expect(markup).toContain('placeholder="Se asignará al guardar el riesgo"')
     expect(markup).toContain('value=""')
   })
 })

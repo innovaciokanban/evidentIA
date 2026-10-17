@@ -188,7 +188,10 @@ const mitigationDate = z.coerce.date().nullable().optional()
 export const riskCreateSchema = z.object({
   name: z.string().trim().min(3).max(160),
   description: z.string().trim().min(3).max(5000),
-  riskType: riskTypeSchema,
+  // El tipo real lo determina el servidor a partir del proceso asociado; aquí solo se acepta como
+  // guarda de compatibilidad con clientes antiguos y la ruta de creación lo valida contra el
+  // proceso, de modo que un cuerpo con una categoría incompatible se rechaza en lugar de guardarse.
+  riskType: riskTypeSchema.optional(),
   // Kept optional while Risk.bpmnActivity remains NOT NULL in PostgreSQL.
   bpmnActivity: z.string().trim().min(2).max(160).optional(),
   riskOwnerId: idReference.nullable().optional(),
@@ -206,8 +209,8 @@ export const riskCreateSchema = z.object({
   residualProbability: riskScaleValue,
 })
 export const riskUpdateSchema = riskCreateSchema.omit({ riskType: true }).partial().extend({
-  // En edición se permite conservar el valor legado almacenado; la ruta de PATCH valida que
-  // solo se pueda cambiar a una categoría codificable (nunca reasignar un tipo legado).
+  // En edición el tipo no es editable: la ruta de PATCH lo compara con la categoría derivada del
+  // proceso y con el valor almacenado (para tolerar clientes antiguos) y nunca lo persiste.
   riskType: z.string().trim().min(3).max(64).optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,

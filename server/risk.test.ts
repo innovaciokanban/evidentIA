@@ -10,18 +10,21 @@ type StoredEvidence = { id: string; riskId: string; name: string; description: s
 type AcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 type Treatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT' | null
 type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; code: string | null; bpmnActivity: string; riskOwnerId: string | null; acceptanceStatus: AcceptanceStatus; treatment: Treatment; mitigationOwnerId: string | null; mitigationStartDate: Date | null; mitigationDueDate: Date | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; evidences: StoredEvidence[]; createdAt: Date; updatedAt: Date }
-type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL'; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
+type TestProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
+type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: TestProcessType; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
 const processId = 'cmprocess000000000000000001'
 const otherProcessId = 'cmprocess000000000000000002'
+const strategicProcessId = 'cmprocess000000000000000003'
+const supportProcessId = 'cmprocess000000000000000004'
 const admin = { id: 'cmadmin000000000000000001', email: 'admin@risk.test', name: 'Risk Admin', role: 'COMPANY_ADMIN' as Role, companyId }
 const companyUser = { id: 'cmuser0000000000000000001', email: 'user@risk.test', name: 'Risk User', role: 'COMPANY_USER' as Role, companyId }
 const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@risk.test', name: 'Foreign Admin', role: 'COMPANY_ADMIN' as Role, companyId: otherCompanyId }
 
-const makeProcess = (id: string, owningCompanyId: string, name: string): TestProcess => ({
-  id, companyId: owningCompanyId, name, code: 'PROC-01', type: 'MISSIONAL', version: '1.0', frequency: null, organizationalArea: null,
+const makeProcess = (id: string, owningCompanyId: string, name: string, type: TestProcessType = 'MISSIONAL'): TestProcess => ({
+  id, companyId: owningCompanyId, name, code: 'PROC-01', type, version: '1.0', frequency: null, organizationalArea: null,
   supervision: null, executionType: null, objective: 'Gestionar el proceso', description: null,
   responsibleId: null, status: 'ACTIVE', thirdPartyProvided: false, critical: false,
   affectsAccounting: false, personalData: false, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
@@ -32,7 +35,12 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const currentUser = users.find((user) => user.role === role && user.companyId === userCompanyId) ?? { ...admin, role, companyId: userCompanyId }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   let sessionActive = false
-  let storedProcesses: TestProcess[] = [makeProcess(processId, companyId, 'Proceso principal'), makeProcess(otherProcessId, companyId, 'Otro proceso')]
+  let storedProcesses: TestProcess[] = [
+    makeProcess(processId, companyId, 'Proceso principal'),
+    makeProcess(otherProcessId, companyId, 'Otro proceso'),
+    makeProcess(strategicProcessId, companyId, 'Proceso estratégico', 'STRATEGIC'),
+    makeProcess(supportProcessId, companyId, 'Proceso de apoyo', 'SUPPORT'),
+  ]
   const storedRisks: StoredRisk[] = []
   const storedProcessChanges: string[] = []
   let nextProcess = 3
@@ -155,12 +163,22 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       }),
     },
   }
-  return { db: db as unknown as PrismaClient, storedRisks }
+  return { db: db as unknown as PrismaClient, storedRisks, storedProcesses }
 }
 
+/** Fila de riesgo con datos anteriores al catálogo actual (tipo legado, sin código asignado). */
+const legacyRiskRow = (overrides: Partial<StoredRisk> & { id: string }): StoredRisk => ({
+  processId, name: 'Riesgo legado', description: 'Riesgo guardado con un catálogo anterior.', riskType: 'Operativo', code: null,
+  bpmnActivity: 'Actividad antigua', riskOwnerId: null, acceptanceStatus: 'PENDING', treatment: null, mitigationOwnerId: null,
+  mitigationStartDate: null, mitigationDueDate: null, inherentImpact: 2, inherentProbability: 2, residualImpact: 1,
+  residualProbability: 1, controls: [], evidences: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
+  ...overrides,
+})
+
 const riskPayload = {
-  name: 'Entrega tardía de información', description: 'La información puede llegar después del plazo y afectar la respuesta.', riskType: 'MISIONAL', bpmnActivity: 'Validar solicitud',
-  inherentImpact: 3, inherentProbability: 4, residualImpact: 2, residualProbability: 2,
+  name: 'Entrega tardía de información', description: 'La información puede llegar después del plazo y afectar la respuesta.', bpmnActivity: 'Validar solicitud',
+  // Un riesgo nace sin controles: el alta solo admite el residual neutro (1×1).
+  inherentImpact: 3, inherentProbability: 4, residualImpact: 1, residualProbability: 1,
 }
 
 async function loggedIn(db: PrismaClient, email: string) {
@@ -175,13 +193,20 @@ describe('process risk API', () => {
     const agent = await loggedIn(db, admin.email)
     const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
     expect(created.status).toBe(201)
-    expect(created.body.risk).toMatchObject({ processId, riskType: 'MISIONAL', code: 'MIS-R1', riskOwner: null, inherentScore: 12, inherentLevel: 'MEDIUM', residualScore: 4, residualLevel: 'LOW' })
+    expect(created.body.risk).toMatchObject({ processId, riskType: 'MISIONAL', code: 'MIS-R1', riskOwner: null, inherentScore: 12, inherentLevel: 'MEDIUM', residualScore: 1, residualLevel: 'LOW' })
     expect(created.body.risk).not.toHaveProperty('bpmnActivity')
     const second = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Información incompleta', processId: otherProcessId })
     expect(second.status).toBe(201)
     expect(second.body.risk.processId).toBe(processId)
     expect((await agent.get(`/api/processes/${processId}/risks`)).body.risks).toHaveLength(2)
+    // Sin controles el residual queda bloqueado, tanto en el alta como en la edición.
+    const blocked = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
+    expect(blocked.status).toBe(400)
+    expect(blocked.body.error).toBe('Residual risk values require at least one control')
+    // Con al menos un control (cualquiera sirve, su evaluación no importa) el residual se edita.
+    await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Revisión del plazo de entrega' })
     const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
+    expect(updated.status).toBe(200)
     expect(updated.body.risk.residualLevel).toBe('HIGH')
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentImpact: 6 })).status).toBe(400)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentProbability: 0 })).status).toBe(400)
@@ -205,13 +230,22 @@ describe('process risk API', () => {
         name: `Riesgo matriz ${entry.score}`,
         inherentImpact: entry.impact,
         inherentProbability: entry.probability,
-        residualImpact: entry.probability,
-        residualProbability: entry.impact,
       })
       expect(created.status).toBe(201)
       expect(created.body.risk).toMatchObject({
         inherentScore: entry.score,
         inherentLevel: entry.level,
+        residualScore: 1,
+        residualLevel: 'LOW',
+      })
+      // El residual se evalúa recién cuando el riesgo tiene al menos un control.
+      await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Control de la matriz de riesgo' })
+      const patched = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({
+        residualImpact: entry.probability,
+        residualProbability: entry.impact,
+      })
+      expect(patched.status).toBe(200)
+      expect(patched.body.risk).toMatchObject({
         residualScore: entry.probability * entry.impact,
         residualLevel: entry.level,
       })
@@ -228,6 +262,8 @@ describe('process risk API', () => {
     const agent = await loggedIn(db, admin.email)
     const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentImpact: 5, inherentProbability: 5, residualImpact: 1, residualProbability: 1 })
     expect(created.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
+    // El residual solo se toca con al menos un control asociado.
+    await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Control de independencia de niveles' })
     const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 4, residualProbability: 4 })
     expect(updated.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 16, residualLevel: 'HIGH' })
     const updatedInherent = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ inherentImpact: 1, inherentProbability: 2 })
@@ -254,83 +290,109 @@ describe('process risk API', () => {
     expect(crossCompanyOwner.status).toBe(403)
   })
 
-  it('creates only ESTRATEGICO, MISIONAL and APOYO risks and keeps a historical type visible without overwriting it', async () => {
-    const { db, storedRisks } = makeRiskDb()
+  it('derives the risk type from the process category and rejects incompatible client types', async () => {
+    const { db } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskType: 'ESTRATEGICO', bpmnActivity: undefined })
+    // Sin enviar el tipo, el proceso MISSIONAL determina MISIONAL y su prefijo de código.
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, bpmnActivity: undefined })
     expect(created.status).toBe(201)
-    expect(created.body.risk.riskType).toBe('ESTRATEGICO')
-    expect(created.body.risk.code).toBe('EST-R1')
-    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo misional', riskType: 'MISIONAL' })).status).toBe(201)
-    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo de apoyo', riskType: 'APOYO' })).status).toBe(201)
+    expect(created.body.risk.riskType).toBe('MISIONAL')
+    expect(created.body.risk.code).toBe('MIS-R1')
+    // Clientes antiguos que aún envían el tipo: se acepta solo si coincide con el proceso.
+    const echoed = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo misional con eco', riskType: 'MISIONAL' })
+    expect(echoed.status).toBe(201)
+    expect(echoed.body.risk.riskType).toBe('MISIONAL')
+    // Una categoría incompatible con el proceso se rechaza: no se asocia un tipo que el proceso no justifica.
+    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo estratégico forzado', riskType: 'ESTRATEGICO' })).status).toBe(400)
+    expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo de apoyo forzado', riskType: 'APOYO' })).status).toBe(400)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo táctico', riskType: 'TACTICO' })).status).toBe(400)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo operacional', riskType: 'OPERACIONAL' })).status).toBe(400)
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo inválido', riskType: 'Operativo' })).status).toBe(400)
+    // Cada tipo de proceso produce su propia categoría y su prefijo.
+    const strategic = await agent.post(`/api/processes/${strategicProcessId}/risks`).send({ ...riskPayload, name: 'Riesgo del proceso estratégico' })
+    expect(strategic.body.risk).toMatchObject({ riskType: 'ESTRATEGICO', code: 'EST-R1' })
+    const support = await agent.post(`/api/processes/${supportProcessId}/risks`).send({ ...riskPayload, name: 'Riesgo del proceso de apoyo' })
+    expect(support.body.risk).toMatchObject({ riskType: 'APOYO', code: 'APO-R1' })
+  })
 
-    storedRisks.push({ id: 'cmrisklegacy0000000000001', processId, name: 'Riesgo legado', description: 'Riesgo guardado con un catálogo anterior.', riskType: 'Operativo', code: null, bpmnActivity: 'Actividad antigua', riskOwnerId: null, acceptanceStatus: 'PENDING', treatment: null, mitigationOwnerId: null, mitigationStartDate: null, mitigationDueDate: null, inherentImpact: 2, inherentProbability: 2, residualImpact: 1, residualProbability: 1, controls: [], evidences: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') })
+  it('keeps historical types and codes visible and completes the classification only while the risk has no code', async () => {
+    const { db, storedRisks } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    storedRisks.push(legacyRiskRow({ id: 'cmrisklegacy0000000000001' }))
     const listed = await agent.get(`/api/processes/${processId}/risks`)
     const listedLegacy = listed.body.risks.find((risk: { id: string }) => risk.id === 'cmrisklegacy0000000000001')
     expect(listedLegacy.riskType).toBe('Operativo')
     expect(listedLegacy.code).toBeNull()
+    // Editar un riesgo legado sin código completa su clasificación con la categoría del proceso y
+    // le asigna el primer código disponible de esa categoría.
     const edited = await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ name: 'Riesgo legado editado' })
     expect(edited.status).toBe(200)
-    expect(edited.body.risk.riskType).toBe('Operativo')
-    expect(edited.body.risk.code).toBeNull()
+    expect(edited.body.risk).toMatchObject({ name: 'Riesgo legado editado', riskType: 'MISIONAL', code: 'MIS-R1' })
+    // En edición sigue rechazándose cualquier categoría incompatible con el proceso.
+    expect((await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ riskType: 'ESTRATEGICO' })).status).toBe(400)
     expect((await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ riskType: 'TACTICO' })).status).toBe(400)
-    const promoted = await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ riskType: 'MISIONAL' })
-    expect(promoted.status).toBe(200)
-    expect(promoted.body.risk.riskType).toBe('MISIONAL')
-    expect(promoted.body.risk.code).toBe('MIS-R2')
+    // El eco del tipo vigente (cliente antiguo) no cambia nada ni renumera el código.
+    const echoed = await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000001`).send({ riskType: 'MISIONAL', name: 'Riesgo legado con eco' })
+    expect(echoed.status).toBe(200)
+    expect(echoed.body.risk).toMatchObject({ riskType: 'MISIONAL', code: 'MIS-R1' })
+    // Un riesgo legado que ya tiene código conserva su tipo histórico aunque no coincida con el proceso.
+    storedRisks.push(legacyRiskRow({ id: 'cmrisklegacy0000000000002', name: 'Riesgo legado clasificado', riskType: 'ESTRATEGICO', code: 'EST-R7' }))
+    const historical = await agent.patch(`/api/processes/${processId}/risks/cmrisklegacy0000000000002`).send({ name: 'Riesgo legado clasificado renombrado' })
+    expect(historical.status).toBe(200)
+    expect(historical.body.risk).toMatchObject({ riskType: 'ESTRATEGICO', code: 'EST-R7' })
   })
 
   it('assigns an independent consecutive code per category and ignores any client-supplied code', async () => {
     const { db } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
     const codes = [] as string[]
-    const create = async (riskType: string, name: string, extra: Record<string, unknown> = {}) => {
-      const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskType, name, ...extra })
+    const create = async (targetProcessId: string, name: string, extra: Record<string, unknown> = {}) => {
+      const created = await agent.post(`/api/processes/${targetProcessId}/risks`).send({ ...riskPayload, name, ...extra })
       expect(created.status).toBe(201)
       codes.push(created.body.risk.code)
     }
-    await create('ESTRATEGICO', 'Riesgo estratégico 1')
-    await create('MISIONAL', 'Riesgo misional 1')
-    await create('ESTRATEGICO', 'Riesgo estratégico 2')
-    await create('APOYO', 'Riesgo de apoyo 1')
-    await create('MISIONAL', 'Riesgo misional 2')
+    await create(strategicProcessId, 'Riesgo estratégico 1')
+    await create(processId, 'Riesgo misional 1')
+    await create(strategicProcessId, 'Riesgo estratégico 2')
+    await create(supportProcessId, 'Riesgo de apoyo 1')
+    await create(processId, 'Riesgo misional 2')
     expect(codes).toEqual(['EST-R1', 'MIS-R1', 'EST-R2', 'APO-R1', 'MIS-R2'])
-    const spoofed = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo con código enviado', riskType: 'ESTRATEGICO', code: 'EST-R99' })
+    const spoofed = await agent.post(`/api/processes/${strategicProcessId}/risks`).send({ ...riskPayload, name: 'Riesgo con código enviado', code: 'EST-R99' })
     expect(spoofed.status).toBe(201)
     expect(spoofed.body.risk.code).toBe('EST-R3')
-    const listed = await agent.get(`/api/processes/${processId}/risks`)
+    const listed = await agent.get(`/api/processes/${strategicProcessId}/risks`)
     expect(listed.body.risks.some((risk: { code: string | null }) => risk.code === 'EST-R99')).toBe(false)
   })
 
-  it('keeps the generated code immutable when editing and never renumbers on type changes', async () => {
+  it('keeps the generated code immutable when editing and never renumbers it', async () => {
     const { db } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskType: 'MISIONAL' })
+    const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
     const riskId = created.body.risk.id as string
     expect(created.body.risk.code).toBe('MIS-R1')
     const renamed = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Riesgo misional renombrado' })
     expect(renamed.body.risk).toMatchObject({ riskType: 'MISIONAL', code: 'MIS-R1' })
+    // El tipo no es editable: cambiarlo a otra categoría que no sea la del proceso se rechaza.
     const retype = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ riskType: 'ESTRATEGICO' })
-    expect(retype.status).toBe(200)
-    expect(retype.body.risk).toMatchObject({ riskType: 'ESTRATEGICO', code: 'MIS-R1' })
+    expect(retype.status).toBe(400)
+    expect((await agent.get(`/api/processes/${processId}/risks`)).body.risks.find((risk: { id: string }) => risk.id === riskId)).toMatchObject({ riskType: 'MISIONAL', code: 'MIS-R1' })
+    const echoed = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ riskType: 'MISIONAL', name: 'Riesgo con eco de tipo' })
+    expect(echoed.body.risk).toMatchObject({ riskType: 'MISIONAL', code: 'MIS-R1' })
     expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ code: 'EST-R99' })).status).toBe(400)
     const spoofed = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Edición con código enviado', code: 'EST-R99' })
     expect(spoofed.status).toBe(200)
     expect(spoofed.body.risk).toMatchObject({ name: 'Edición con código enviado', code: 'MIS-R1' })
     const untouched = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Siguiente misional' })
     expect(untouched.body.risk.code).toBe('MIS-R2')
-    const untouchedStrategic = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Siguiente estratégico', riskType: 'ESTRATEGICO' })
+    const untouchedStrategic = await agent.post(`/api/processes/${strategicProcessId}/risks`).send({ ...riskPayload, name: 'Siguiente estratégico' })
     expect(untouchedStrategic.body.risk.code).toBe('EST-R1')
   })
 
   it('retries with a fresh number when the unique code is already taken', async () => {
     const { db, storedRisks } = makeRiskDb()
-    storedRisks.push({ id: 'cmriskestclash0000000001', processId, name: 'Riesgo con código heredado', description: 'Código backfill sin contador.', riskType: 'ESTRATEGICO', code: 'EST-R1', bpmnActivity: 'Actividad heredada', riskOwnerId: null, acceptanceStatus: 'PENDING', treatment: null, mitigationOwnerId: null, mitigationStartDate: null, mitigationDueDate: null, inherentImpact: 1, inherentProbability: 1, residualImpact: 1, residualProbability: 1, controls: [], evidences: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') })
+    storedRisks.push(legacyRiskRow({ id: 'cmriskestclash0000000001', processId: strategicProcessId, name: 'Riesgo con código heredado', description: 'Código backfill sin contador.', riskType: 'ESTRATEGICO', code: 'EST-R1', bpmnActivity: 'Actividad heredada', inherentImpact: 1, inherentProbability: 1, residualImpact: 1, residualProbability: 1 }))
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskType: 'ESTRATEGICO' })
+    const created = await agent.post(`/api/processes/${strategicProcessId}/risks`).send(riskPayload)
     expect(created.status).toBe(201)
     expect(created.body.risk.code).toBe('EST-R2')
   })
@@ -372,6 +434,39 @@ describe('process risk API', () => {
     const readOnly = makeRiskDb('COMPANY_USER')
     const readOnlyAgent = await loggedIn(readOnly.db, companyUser.email)
     expect((await readOnlyAgent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Sin permiso para editar', evaluation: 'WEAK' })).status).toBe(403)
+  })
+
+  it('locks residual risk values until the risk has at least one control', async () => {
+    const { db, storedRisks } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    // El alta rechaza un residual que no sea el neutro (1×1): un riesgo nace sin controles.
+    const rejected = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo con residual forzado', residualImpact: 5, residualProbability: 4 })
+    expect(rejected.status).toBe(400)
+    expect(rejected.body.error).toBe('Residual risk values require at least one control')
+    const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    expect(created.status).toBe(201)
+    const riskId = created.body.risk.id as string
+    expect(created.body.risk).toMatchObject({ residualImpact: 1, residualProbability: 1, residualScore: 1, residualLevel: 'LOW' })
+    // Sin controles el residual no cambia, pero el resto de los campos sí se puede editar.
+    expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 3 })).status).toBe(400)
+    const otherFields = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Riesgo renombrado sin controles', treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', residualImpact: 1, residualProbability: 1 })
+    expect(otherFields.status).toBe(200)
+    expect(otherFields.body.risk).toMatchObject({ name: 'Riesgo renombrado sin controles', treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', residualImpact: 1, residualProbability: 1 })
+    // El primer control habilita la edición residual, sin importar su evaluación (aquí, PENDING).
+    const control = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control inicial del riesgo', evaluation: 'PENDING' })
+    expect(control.status).toBe(201)
+    const unlocked = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 4, residualProbability: 3 })
+    expect(unlocked.status).toBe(200)
+    expect(unlocked.body.risk).toMatchObject({ residualImpact: 4, residualProbability: 3, residualScore: 12, residualLevel: 'MEDIUM' })
+    // Al eliminar el único control el residual se bloquea de nuevo pero sus valores se conservan.
+    expect((await agent.delete(`/api/processes/${processId}/risks/${riskId}/controls/${control.body.control.id}`)).status).toBe(204)
+    const listed = await agent.get(`/api/processes/${processId}/risks`)
+    const listedRisk = listed.body.risks.find((risk: { id: string }) => risk.id === riskId)
+    expect(listedRisk).toMatchObject({ residualImpact: 4, residualProbability: 3, residualScore: 12, residualLevel: 'MEDIUM', controls: [] })
+    expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 1 })).status).toBe(400)
+    // El resto de los campos sigue siendo editable sin controles y el residual no se borra.
+    expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Riesgo tras quitar el control' })).status).toBe(200)
+    expect((storedRisks.find((risk) => risk.id === riskId) as StoredRisk).residualImpact).toBe(4)
   })
 
   it('isolates risks by process and company and preserves read-only permissions', async () => {
