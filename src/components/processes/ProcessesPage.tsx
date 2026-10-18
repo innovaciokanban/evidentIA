@@ -106,7 +106,7 @@ export function createProcessPayload(draft: ProcessDraft) {
   return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
 }
 
-export function ProcessesPage({ user }: { user: User }) {
+export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent }: { user: User; riskIntent?: { processId: string; riskId: string } | null; onConsumeRiskIntent?: () => void }) {
   const canCreate = canManageProcesses(user.role)
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
@@ -123,6 +123,8 @@ export function ProcessesPage({ user }: { user: User }) {
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
+  // Riesgo a enfocar al entrar desde la bandeja de aprobaciones o desde un ticket de aprobación.
+  const [riskFocus, setRiskFocus] = useState<string | null>(null)
 
   const loadProcesses = useCallback(async (): Promise<boolean> => {
     setLoading(true)
@@ -157,6 +159,20 @@ export function ProcessesPage({ user }: { user: User }) {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [loadProcesses, loadCompanies])
+
+  // Entrada desde la bandeja de aprobaciones o desde un ticket: abre el panel de riesgos del
+  // proceso y deja el riesgo indicado listo para enfocarse una vez cargada su lista.
+  useEffect(() => {
+    if (!riskIntent || loading) return
+    const process = processes.find((item) => item.id === riskIntent.processId)
+    if (process) {
+      setRiskFocus(riskIntent.riskId)
+      openRisks(process)
+    }
+    onConsumeRiskIntent?.()
+    // openRisks solo compone estado interno; no hace falta declararla como dependencia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riskIntent, processes, loading])
 
   /** El directorio de usuarios solo hace falta al abrir el formulario. */
   async function ensureUsers() {
@@ -338,7 +354,7 @@ export function ProcessesPage({ user }: { user: User }) {
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
-          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} onBack={() => { setShowRisks(false); setShowForm(true) }} />
+          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (

@@ -261,6 +261,8 @@ export type Ticket = {
     id: string
     actionPlan: Pick<ActionPlan, 'id' | 'title' | 'strategySource' | 'strategySourceRef' | 'strategyTitle' | 'strategyDescription'>
   } | null
+  /** Ciclo de aprobación que originó este ticket (0 o 1, porque RiskApproval.ticketId es único). */
+  riskApprovals?: Array<{ id: string; riskId: string; risk: { id: string; code: string | null; name: string; processId: string } }>
 }
 
 export type ProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
@@ -368,6 +370,58 @@ export type ProcessRiskEvidence = {
   createdAt: string
   updatedAt: string
 }
+
+// Estado del ciclo de aprobación colaborativa (flujo del dueño). Es independiente del veredicto
+// formal acceptanceStatus: aquí se guarda quién pidió, quién decidió, cuándo y con qué comentario.
+export type RiskApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'OUTDATED'
+export type RiskApprovalSummary = {
+  id: string
+  status: RiskApprovalStatus
+  requestedAt: string
+  decidedBy: Pick<User, 'id' | 'name'> | null
+  decidedAt: string | null
+  comment: string | null
+  ticketId: string | null
+}
+export type RiskApproval = {
+  id: string
+  riskId: string
+  status: RiskApprovalStatus
+  requestedBy: Pick<User, 'id' | 'name'>
+  requestedAt: string
+  decidedBy: Pick<User, 'id' | 'name'> | null
+  decidedAt: string | null
+  comment: string | null
+  ticket: { id: string; title: string; status: TicketStatus } | null
+  risk: {
+    id: string
+    code: string | null
+    name: string
+    description: string
+    acceptanceStatus: RiskAcceptanceStatus
+    treatment: RiskTreatment | null
+    riskOwner: Pick<User, 'id' | 'name'> | null
+    inherentImpact: number
+    inherentProbability: number
+    inherentScore: number
+    inherentLevel: RiskLevel
+    residualImpact: number
+    residualProbability: number
+    residualScore: number
+    residualLevel: RiskLevel
+    controls: ProcessRiskControl[]
+    process: { id: string; name: string; code: string | null }
+  }
+}
+// Notificación in-app persistente: el link apunta a la sección que debe abrirse ("approvals/<id>").
+export type AppNotification = {
+  id: string
+  title: string
+  body: string
+  link: string
+  readAt: string | null
+  createdAt: string
+}
 export type ProcessRisk = {
   id: string
   processId: string
@@ -396,6 +450,8 @@ export type ProcessRisk = {
   residualLevel: RiskLevel
   controls: ProcessRiskControl[]
   evidences: ProcessRiskEvidence[]
+  /** Último ciclo de aprobación del riesgo (null si nunca se envió a revisión). */
+  approval: RiskApprovalSummary | null
   createdAt: string
   updatedAt: string
 }

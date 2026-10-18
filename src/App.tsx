@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -9,6 +9,8 @@ import { askConfirm, ConfirmHost } from './components/ui/useConfirm'
 import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart'
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
+import { ApprovalsInbox } from './components/approvals/ApprovalsInbox'
+import { NotificationsBell } from './components/approvals/NotificationsBell'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
 import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
@@ -17,7 +19,7 @@ import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
 
-type View = 'dashboard' | 'tickets' | 'companies' | 'diagnostics' | 'processes' | 'swot' | 'recommendations' | 'action-plans' | 'users'
+type View = 'dashboard' | 'tickets' | 'approvals' | 'companies' | 'diagnostics' | 'processes' | 'swot' | 'recommendations' | 'action-plans' | 'users'
 
 type DiagStage = 'diagnostico' | 'dofa' | 'recomendaciones' | 'planes'
 
@@ -242,6 +244,53 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const consumeCompaniesIntent = useCallback(() => setCompaniesIntent(null), [])
   const [diagnosticActive, setDiagnosticActive] = useState(false)
   const [diagStage, setDiagStage] = useState<DiagStage>('diagnostico')
+  // Notificaciones in-app + contador de aprobaciones pendientes del menú. Se cargan juntas en el
+  // mismo efecto para que el estado del usuario sea consistente tras cada decisión.
+  const [notifications, setNotifications] = useState<AppNotification[]>([])
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [pendingApprovals, setPendingApprovals] = useState(0)
+  const [riskIntent, setRiskIntent] = useState<{ processId: string; riskId: string } | null>(null)
+  const consumeRiskIntent = useCallback(() => setRiskIntent(null), [])
+  const [approvalFocusId, setApprovalFocusId] = useState<string | null>(null)
+  const consumeApprovalFocus = useCallback(() => setApprovalFocusId(null), [])
+  const refreshInbox = useCallback(async () => {
+    try {
+      const [inbox, pending] = await Promise.all([
+        api<{ notifications: AppNotification[]; unread: number }>('/notifications'),
+        api<{ approvals: RiskApproval[] }>('/approvals?status=PENDING'),
+      ])
+      setNotifications(inbox.notifications)
+      setUnreadNotifications(inbox.unread)
+      setPendingApprovals(pending.approvals.length)
+    } catch {
+      // Sin conexión se conserva el último estado conocido; la bandeja reporta su propio error.
+    }
+  }, [])
+  useEffect(() => { void refreshInbox() }, [refreshInbox])
+  // Abrir una notificación la marca como leída (optimista, con respaldo en el servidor) y navega
+  // a su destino; "approvals/<id>" lleva a la revisión concreta en la bandeja.
+  async function openNotification(notification: AppNotification) {
+    setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: item.readAt ?? new Date().toISOString() } : item))
+    if (!notification.readAt) setUnreadNotifications((count) => Math.max(0, count - 1))
+    void api(`/notifications/${notification.id}`, { method: 'PATCH' }).catch(() => undefined)
+    const [section, id] = notification.link.split('/')
+    if (section === 'approvals') {
+      setApprovalFocusId(id ?? null)
+      navigateToView('approvals')
+    }
+  }
+  function markAllNotificationsRead() {
+    if (unreadNotifications === 0) return
+    const now = new Date().toISOString()
+    setNotifications((current) => current.map((item) => item.readAt ? item : { ...item, readAt: now }))
+    setUnreadNotifications(0)
+    void api('/notifications/read-all', { method: 'POST' }).catch(() => undefined)
+  }
+  // Camino único para saltar de tickets o de la bandeja hasta el riesgo que originó la acción.
+  function openRisk(processId: string, riskId: string) {
+    setRiskIntent({ processId, riskId })
+    navigateToView('processes')
+  }
   async function logout() {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
     onLogout()
@@ -264,6 +313,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     recommendations: 'Recomendaciones',
     'action-plans': 'Planes de acción',
     tickets: 'Tickets',
+    approvals: 'Mis aprobaciones',
     users: 'Usuarios',
   }
   // El menu anuncia solo los dos puntos de entrada. Las cinco etapas viven en un unico indicador
@@ -312,6 +362,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <button className={`nav-item ${view === 'tickets' ? 'active' : ''}`} onClick={() => navigateToView('tickets')}>
             <span className="nav-icon">▤</span> Tickets
           </button>
+          <button className={`nav-item ${view === 'approvals' ? 'active' : ''}`} onClick={() => navigateToView('approvals')}>
+            <span className="nav-icon">✓</span> Mis aprobaciones
+            {pendingApprovals > 0 && <span className="nav-badge" aria-label={`${pendingApprovals} aprobaciones pendientes`}>{pendingApprovals}</span>}
+          </button>
           {(user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN') && (
             <>
               <p className="nav-heading">ADMINISTRACIÓN</p>
@@ -336,13 +390,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <div className="breadcrumb"><span>Operaciones</span><b>/</b><strong>{viewLabels[diagnosticActive ? 'diagnostics' : view]}</strong></div>
           <div className="topbar-actions">
             <span className="date-label">{new Intl.DateTimeFormat('es-CO', { dateStyle: 'long' }).format(new Date())}</span>
+            <NotificationsBell notifications={notifications} unread={unreadNotifications} onOpen={(notification) => void openNotification(notification)} onMarkAllRead={markAllNotificationsRead} />
             <div className="avatar top-avatar">{initials(user.name)}</div>
           </div>
         </header>
         {view === 'dashboard' && <Dashboard user={user} onNavigate={navigateToView} />}
-        {view === 'tickets' && <Tickets user={user} />}
+        {view === 'tickets' && <Tickets user={user} onOpenRisk={openRisk} />}
+        {view === 'approvals' && <ApprovalsInbox user={user} initialApprovalId={approvalFocusId} onConsumeInitialId={consumeApprovalFocus} onOpenRisk={openRisk} onChanged={() => void refreshInbox()} />}
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
-        {view === 'processes' && <ProcessesPage user={user} />}
+        {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} />}
         {(view === 'companies' || view === 'swot' || view === 'recommendations' || view === 'action-plans') && (
           <Companies user={user} intent={companiesIntent} onConsumeIntent={consumeCompaniesIntent} diagnosticActive={diagnosticActive} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />
         )}
@@ -1582,7 +1638,7 @@ export function StrategyWeightingScreen({ diagnostic, canValue, initialStrategie
 
 function SWOTItemForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: SWOTDraft; setDraft: React.Dispatch<React.SetStateAction<SWOTDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { const detected = swotTypes.find((item) => item.value === draft.type); const detectedSymbol = draft.type === 'STRENGTH' ? '+' : draft.type === 'WEAKNESS' ? '−' : draft.type === 'OPPORTUNITY' ? '↗' : '!'; return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className={`company-modal-icon factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>{isEdit ? 'Editar factor' : 'Agregar factor'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información del factor.' : 'Detectado automáticamente'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{!isEdit && <div className="factor-type-detect"><span className={`swot-symbol factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</span><div className="factor-type-copy"><p className="detail-label">Tipo detectado</p><strong>{detected?.label}</strong></div><span className="factor-type-badge">Detectado automáticamente</span></div>}{isEdit && <label>Tipo<input type="text" value={detected?.label ?? ''} readOnly /></label>}<label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el factor..." rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar factor' : 'Agregar factor'}</button></div></form></div> }
 
-function Tickets({ user }: { user: User }) {
+function Tickets({ user, onOpenRisk }: { user: User; onOpenRisk: (processId: string, riskId: string) => void }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [selected, setSelected] = useState<Ticket | null>(null)
@@ -1622,11 +1678,31 @@ function Tickets({ user }: { user: User }) {
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.') } finally { setSaving(false) }
   }
   async function removeTicket(ticket: Ticket) { const confirmed = await askConfirm({ title: 'Eliminar ticket', message: `Se eliminará «${ticket.title}». Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
-  return <div className="page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadTickets()} />}<section className="panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
+  return <div className="page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadTickets()} />}<section className="panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} onOpenRisk={onOpenRisk} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
 
 function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
 
-function TicketDetail({ ticket, user, onEdit, onDelete, onClose }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void }) { return <div className="drawer-backdrop"><aside className="drawer detail-drawer"><div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div><div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div><div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div>{ticket.actionItem?.actionPlan.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}<div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div><div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div></aside></div> }
+function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; onOpenRisk: (processId: string, riskId: string) => void }) {
+  // Los tickets generados por una aprobación traen el riesgo de origen para poder volver a él.
+  const originRisk = ticket.riskApprovals?.[0]?.risk
+  return (
+    <div className="drawer-backdrop"><aside className="drawer detail-drawer">
+      <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div>
+      <div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div>
+      <div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div>
+      {ticket.actionItem?.actionPlan.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}
+      {originRisk && (
+        <div className="detail-section ticket-origin-risk">
+          <p className="detail-label">RIESGO DE ORIGEN</p>
+          <strong>{originRisk.code ? `${originRisk.code} · ` : ''}{originRisk.name}</strong>
+          <button type="button" className="text-button" onClick={() => onOpenRisk(originRisk.processId, originRisk.id)}>Ver riesgo →</button>
+        </div>
+      )}
+      <div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{originRisk ? 'Aprobación de riesgo' : ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div>
+      <div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div>
+    </aside></div>
+  )
+}
 
 function PageError({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p>{onRetry && <button className="button primary" onClick={onRetry}>Reintentar</button>}</div></div> }
 

@@ -27,6 +27,7 @@ const makeRisk = ({ inherent, residual, code = 'MIS-R1', name = 'Riesgo de prueb
   residualLevel: riskLevelFor(residual[0], residual[1]),
   controls: [],
   evidences: [],
+  approval: null,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 })

@@ -169,6 +169,18 @@ enum RiskCodeCategory {
   APOYO
 }
 
+// Ciclo de aprobación colaborativa de un riesgo. Es un estado de flujo aparte de
+// RiskAcceptanceStatus (veredicto formal editable en el formulario): aquí se registra quién
+// solicitó, quién decidió, cuándo y con qué comentario, y cada reenvío abre un ciclo nuevo.
+// OUTDATED: el riesgo aprobado cambió en campos relevantes y requiere una nueva revisión; la
+// decisión anterior se conserva íntegra.
+enum RiskApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  OUTDATED
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -190,6 +202,9 @@ model User {
   responsibleProcesses Process[] @relation("ResponsibleProcesses")
   riskOwnerRisks Risk[] @relation("RiskOwners")
   mitigationOwnerRisks Risk[] @relation("RiskMitigationOwners")
+  riskApprovalRequests RiskApproval[] @relation("RiskApprovalRequesters")
+  riskApprovalDecisions RiskApproval[] @relation("RiskApprovalDeciders")
+  notifications Notification[]
   processChanges  ProcessChange[] @relation("ProcessChangeActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
@@ -224,6 +239,7 @@ model Ticket {
   createdBy   User           @relation("CreatedTickets", fields: [createdById], references: [id], onDelete: Restrict)
   assignedTo  User?          @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
   actionItem  ActionItem?    @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
+  riskApprovals RiskApproval[]
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -665,6 +681,7 @@ model Risk {
   mitigationOwner      User?         @relation("RiskMitigationOwners", fields: [mitigationOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   controls             RiskControl[]
   evidences            RiskEvidence[]
+  approvals            RiskApproval[]
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -703,4 +720,48 @@ model RiskEvidence {
   updatedAt   DateTime @updatedAt
 
   @@index([riskId])
+}
+
+// Ciclo de aprobación de un riesgo por su dueño (o por un autorizado de la empresa). Cada reenvío
+// crea una fila nueva, de modo que el historial de decisiones es la lista ordenada de ciclos.
+// `openKey` se pone en riskId solo mientras el ciclo está PENDING: la restricción única impide que
+// dos ciclos abiertos convivan (Postgres admite varios NULL en columnas únicas) y se limpia al
+// decidir para poder reenviar después. `ticketId` es único igual que Ticket.actionItemId: un ciclo
+// aprobado genera como mucho un ticket, y un reintento nunca duplica la conversión.
+model RiskApproval {
+  id            String             @id @default(cuid())
+  riskId        String
+  risk          Risk               @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  requestedById String
+  requestedBy   User               @relation("RiskApprovalRequesters", fields: [requestedById], references: [id], onDelete: Restrict)
+  status        RiskApprovalStatus @default(PENDING)
+  openKey       String?            @unique
+  decidedById   String?
+  decidedBy     User?              @relation("RiskApprovalDeciders", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt     DateTime?
+  comment       String?
+  ticketId      String?            @unique
+  ticket        Ticket?            @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([riskId])
+  @@index([requestedById])
+  @@index([status])
+}
+
+// Notificación in-app persistente (no hay canales externos): el `link` apunta a la sección de la
+// aplicación que debe abrirse (p. ej. "approvals/<id>") y `readAt` marca la lectura individual.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  link      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([readAt])
 }

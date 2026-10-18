@@ -9,7 +9,10 @@ type StoredControl = { id: string; riskId: string; description: string; evaluati
 type StoredEvidence = { id: string; riskId: string; name: string; description: string; url: string; createdAt: Date; updatedAt: Date }
 type AcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 type Treatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT' | null
-type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; code: string | null; bpmnActivity: string; riskOwnerId: string | null; acceptanceStatus: AcceptanceStatus; treatment: Treatment; mitigationOwnerId: string | null; mitigationStartDate: Date | null; mitigationDueDate: Date | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; evidences: StoredEvidence[]; createdAt: Date; updatedAt: Date }
+type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; code: string | null; bpmnActivity: string; riskOwnerId: string | null; acceptanceStatus: AcceptanceStatus; treatment: Treatment; mitigationOwnerId: string | null; mitigationStartDate: Date | null; mitigationDueDate: Date | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; evidences: StoredEvidence[]; approvals: StoredApproval[]; createdAt: Date; updatedAt: Date }
+type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'OUTDATED'
+type StoredApproval = { id: string; riskId: string; requestedById: string; status: ApprovalStatus; openKey: string | null; decidedById: string | null; decidedAt: Date | null; comment: string | null; ticketId: string | null; createdAt: Date; updatedAt: Date }
+type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
 type TestProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
 type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: TestProcessType; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
 
@@ -43,15 +46,35 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   ]
   const storedRisks: StoredRisk[] = []
   const storedProcessChanges: string[] = []
+  const storedNotifications: StoredNotification[] = []
   let nextProcess = 3
   let nextRisk = 1
   let nextControl = 1
   let nextEvidence = 1
+  let nextApproval = 1
+  let nextNotification = 1
   const processFor = (id: string) => storedProcesses.find((item) => item.id === id) ?? null
   const processView = (item: TestProcess) => ({ ...item, company: { id: item.companyId }, responsible: null })
   const riskFor = (id: string) => storedRisks.find((item) => item.id === id) ?? null
   const ownerView = (userId: string | null) => { const user = users.find((item) => item.id === userId); return user ? { id: user.id, name: user.name } : null }
-  const riskView = (risk: StoredRisk) => ({ ...risk, riskOwner: ownerView(risk.riskOwnerId), mitigationOwner: ownerView(risk.mitigationOwnerId) })
+  const approvalSummaryView = (approval: StoredApproval) => ({ ...approval, decidedBy: ownerView(approval.decidedById) })
+  const riskView = (risk: StoredRisk) => ({ ...risk, riskOwner: ownerView(risk.riskOwnerId), mitigationOwner: ownerView(risk.mitigationOwnerId), approvals: [...risk.approvals].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 1).map(approvalSummaryView) })
+  const approvalDetailView = (approval: StoredApproval) => {
+    const risk = riskFor(approval.riskId) as StoredRisk
+    const process = processFor(risk.processId) as TestProcess
+    return {
+      ...approval,
+      requestedBy: ownerView(approval.requestedById),
+      decidedBy: ownerView(approval.decidedById),
+      ticket: null,
+      risk: {
+        ...risk,
+        riskOwner: ownerView(risk.riskOwnerId),
+        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId },
+        controls: risk.controls,
+      },
+    }
+  }
   const codeSequences: Record<string, number> = {}
 
   const db = {
@@ -104,7 +127,7 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
           conflict.code = 'P2002'
           throw conflict
         }
-        const risk: StoredRisk = { id: `cmriskcreated${String(nextRisk++).padStart(10, '0')}`, processId: String(data.processId), name: String(data.name), description: String(data.description), riskType: String(data.riskType), code, bpmnActivity: String(data.bpmnActivity), riskOwnerId: data.riskOwnerId == null ? null : String(data.riskOwnerId), acceptanceStatus: (data.acceptanceStatus as AcceptanceStatus) ?? 'PENDING', treatment: (data.treatment as Treatment) ?? null, mitigationOwnerId: data.mitigationOwnerId == null ? null : String(data.mitigationOwnerId), mitigationStartDate: (data.mitigationStartDate as Date | null | undefined) ?? null, mitigationDueDate: (data.mitigationDueDate as Date | null | undefined) ?? null, inherentImpact: Number(data.inherentImpact), inherentProbability: Number(data.inherentProbability), residualImpact: Number(data.residualImpact), residualProbability: Number(data.residualProbability), controls: [], evidences: [], createdAt: new Date(), updatedAt: new Date() }
+        const risk: StoredRisk = { id: `cmriskcreated${String(nextRisk++).padStart(10, '0')}`, processId: String(data.processId), name: String(data.name), description: String(data.description), riskType: String(data.riskType), code, bpmnActivity: String(data.bpmnActivity), riskOwnerId: data.riskOwnerId == null ? null : String(data.riskOwnerId), acceptanceStatus: (data.acceptanceStatus as AcceptanceStatus) ?? 'PENDING', treatment: (data.treatment as Treatment) ?? null, mitigationOwnerId: data.mitigationOwnerId == null ? null : String(data.mitigationOwnerId), mitigationStartDate: (data.mitigationStartDate as Date | null | undefined) ?? null, mitigationDueDate: (data.mitigationDueDate as Date | null | undefined) ?? null, inherentImpact: Number(data.inherentImpact), inherentProbability: Number(data.inherentProbability), residualImpact: Number(data.residualImpact), residualProbability: Number(data.residualProbability), controls: [], evidences: [], approvals: [], createdAt: new Date(), updatedAt: new Date() }
         storedRisks.push(risk)
         return riskView(risk)
       }),
@@ -162,8 +185,55 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         return null
       }),
     },
+    riskApproval: {
+      create: vi.fn(async ({ data }: { data: { riskId: string; requestedById: string; openKey: string | null } }) => {
+        const approval: StoredApproval = { id: `cmapproval${String(nextApproval++).padStart(12, '0')}`, status: 'PENDING', decidedById: null, decidedAt: null, comment: null, ticketId: null, createdAt: new Date(), updatedAt: new Date(), ...data }
+        ;(riskFor(data.riskId) as StoredRisk).approvals.push(approval)
+        return approvalSummaryView(approval)
+      }),
+      findFirst: vi.fn(async ({ where }: { where: { riskId?: string; status?: string; id?: string } }) => {
+        const approvals = storedRisks.flatMap((risk) => risk.approvals).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        const match = approvals.find((approval) => (!where.riskId || approval.riskId === where.riskId) && (!where.status || approval.status === where.status) && (!where.id || approval.id === where.id))
+        return match ? (where.status !== undefined || where.riskId !== undefined ? { id: match.id, status: match.status } : approvalSummaryView(match)) : null
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const approval = storedRisks.flatMap((risk) => risk.approvals).find((item) => item.id === where.id)
+        return approval ? approvalDetailView(approval) : null
+      }),
+      findMany: vi.fn(async ({ where }: { where?: { risk?: { riskOwnerId?: string } } } = {}) => storedRisks.flatMap((risk) => risk.approvals).filter((approval) => !where?.risk?.riskOwnerId || (riskFor(approval.riskId) as StoredRisk).riskOwnerId === where.risk.riskOwnerId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).map(approvalDetailView)),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<StoredApproval> }) => {
+        const approval = storedRisks.flatMap((risk) => risk.approvals).find((item) => item.id === where.id) as StoredApproval
+        Object.assign(approval, data, { updatedAt: new Date() })
+        return approvalSummaryView(approval)
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: { id?: string; status?: string }; data: Partial<StoredApproval> }) => {
+        const matches = storedRisks.flatMap((risk) => risk.approvals).filter((approval) => (!where.id || approval.id === where.id) && (!where.status || approval.status === where.status))
+        for (const approval of matches) Object.assign(approval, data, { updatedAt: new Date() })
+        return { count: matches.length }
+      }),
+    },
+    notification: {
+      create: vi.fn(async ({ data }: { data: Omit<StoredNotification, 'id' | 'readAt' | 'createdAt'> }) => {
+        const notification: StoredNotification = { id: `cmnotification${String(nextNotification++).padStart(10, '0')}`, readAt: null, createdAt: new Date(), ...data }
+        storedNotifications.push(notification)
+        return notification
+      }),
+      findMany: vi.fn(async ({ where }: { where: { userId: string } }) => storedNotifications.filter((item) => item.userId === where.userId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())),
+      count: vi.fn(async ({ where }: { where: { userId: string; readAt: null } }) => storedNotifications.filter((item) => item.userId === where.userId && (where.readAt === null ? item.readAt === null : true)).length),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => storedNotifications.find((item) => item.id === where.id) ?? null),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: { readAt: Date } }) => {
+        const notification = storedNotifications.find((item) => item.id === where.id) as StoredNotification
+        Object.assign(notification, data)
+        return notification
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: { userId: string; readAt: null }; data: { readAt: Date } }) => {
+        const matches = storedNotifications.filter((item) => item.userId === where.userId && item.readAt === null)
+        for (const notification of matches) Object.assign(notification, data)
+        return { count: matches.length }
+      }),
+    },
   }
-  return { db: db as unknown as PrismaClient, storedRisks, storedProcesses }
+  return { db: db as unknown as PrismaClient, storedRisks, storedProcesses, storedNotifications }
 }
 
 /** Fila de riesgo con datos anteriores al catálogo actual (tipo legado, sin código asignado). */
@@ -171,7 +241,7 @@ const legacyRiskRow = (overrides: Partial<StoredRisk> & { id: string }): StoredR
   processId, name: 'Riesgo legado', description: 'Riesgo guardado con un catálogo anterior.', riskType: 'Operativo', code: null,
   bpmnActivity: 'Actividad antigua', riskOwnerId: null, acceptanceStatus: 'PENDING', treatment: null, mitigationOwnerId: null,
   mitigationStartDate: null, mitigationDueDate: null, inherentImpact: 2, inherentProbability: 2, residualImpact: 1,
-  residualProbability: 1, controls: [], evidences: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
+  residualProbability: 1, controls: [], evidences: [], approvals: [], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
   ...overrides,
 })
 

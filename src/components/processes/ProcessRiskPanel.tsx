@@ -4,6 +4,7 @@ import { api, ApiError } from '../../api'
 import { riskLevelFor, riskLevelLabel, riskLevelText, riskScoreFor } from '../../risk-matrix'
 import type { Process, ProcessRisk, ProcessRiskControl, ProcessRiskEvidence, ProcessType, RiskAcceptanceStatus, RiskControlEvaluation, RiskLevel, RiskTreatment, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
+import { ApprovalStatusChip } from '../approvals/ApprovalsInbox'
 import { RiskHeatmap, type HeatmapSelection } from './RiskHeatmap'
 import { draftFromRisk, emptyRiskDraft, riskPayloadFromDraft, riskTypeForProcessType, riskTypeLabelFor, riskTypeLabels, type RiskDraft } from './risk-type'
 
@@ -20,6 +21,45 @@ const treatmentLabelFor = (value: RiskTreatment | null): string => value ? (trea
 const acceptanceOptions: Array<[RiskAcceptanceStatus, string]> = [['PENDING', 'Pendiente'], ['ACCEPTED', 'Aceptado'], ['REJECTED', 'Rechazado']]
 const acceptanceLabelFor = (value: RiskAcceptanceStatus): string => acceptanceOptions.find(([option]) => option === value)?.[1] ?? value
 const isHttpUrl = (value: string): boolean => /^https?:\/\/\S+$/i.test(value.trim())
+const approvalDate = (value: string): string => new Date(value).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
+
+/**
+ * Estado del ciclo de aprobación dentro del detalle del riesgo: informa en qué va la revisión y
+ * ofrece enviar/reenviar a aprobación solo cuando corresponde (dueño asignado, canWrite y sin ciclo
+ * abierto). Se muestra solo para riesgos ya guardados; un riesgo nuevo no tiene ciclo.
+ */
+export function ApprovalBar({ risk, canWrite, sending, onRequest }: {
+  risk: ProcessRisk
+  canWrite: boolean
+  sending: boolean
+  onRequest: () => void
+}) {
+  const approval = risk.approval
+  const ownerName = risk.riskOwner?.name ?? 'el dueño asignado'
+  const copy = !approval
+    ? 'Aún no se ha enviado a aprobación.'
+    : approval.status === 'PENDING'
+      ? `Solicitado el ${approvalDate(approval.requestedAt)}; ${ownerName} debe aprobarlo o rechazarlo desde «Mis aprobaciones».`
+      : approval.status === 'APPROVED'
+        ? `Aprobado${approval.decidedBy ? ` por ${approval.decidedBy.name}` : ''}${approval.decidedAt ? ` el ${approvalDate(approval.decidedAt)}` : ''}.`
+        : approval.status === 'REJECTED'
+          ? `Rechazado${approval.decidedBy ? ` por ${approval.decidedBy.name}` : ''}${approval.decidedAt ? ` el ${approvalDate(approval.decidedAt)}` : ''}${approval.comment ? `: «${approval.comment}»` : '.'}`
+          : `Aprobado${approval.decidedBy ? ` por ${approval.decidedBy.name}` : ''}${approval.decidedAt ? ` el ${approvalDate(approval.decidedAt)}` : ''} y marcado para nueva revisión porque el riesgo cambió.`
+  const canRequest = canWrite && Boolean(risk.riskOwner) && (!approval || approval.status === 'REJECTED' || approval.status === 'OUTDATED')
+  return (
+    <div className="risk-approval-bar" role="note" aria-label="Estado de aprobación del riesgo">
+      <span className="risk-approval-label">APROBACIÓN</span>
+      {approval && <ApprovalStatusChip status={approval.status} />}
+      <span className="risk-approval-copy">{copy}</span>
+      {!risk.riskOwner && canWrite && <span className="risk-approval-hint">Asigna un dueño y guarda el riesgo para iniciar el flujo de aprobación.</span>}
+      {canRequest && (
+        <button type="button" className="button secondary small-button" disabled={sending} onClick={onRequest}>
+          {sending ? 'Enviando...' : approval ? 'Reenviar a aprobación' : 'Enviar a aprobación'}
+        </button>
+      )}
+    </div>
+  )
+}
 
 function LevelBadge({ level, score }: { level: RiskLevel; score: number }) {
   return <span className={`risk-level-badge ${level.toLowerCase()}`}><span className="risk-level-dot" />{score} — {riskLevelLabel[level]}</span>
@@ -123,12 +163,13 @@ function EvidenceEditor({ evidence, draft, saving, error, onDraftChange, onSave,
   )
 }
 
-export function ProcessRiskPanel({ process, users, canWrite, onBack }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; onBack: () => void }) {
+export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocusConsumed, onBack }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; onFocusConsumed?: () => void; onBack: () => void }) {
   const [risks, setRisks] = useState<ProcessRisk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
+  const [sendingApproval, setSendingApproval] = useState(false)
   const [selected, setSelected] = useState<ProcessRisk | null>(null)
   const [showDetail, setShowDetail] = useState(false)
   const [draft, setDraft] = useState<RiskDraft>(emptyRiskDraft)
@@ -154,6 +195,17 @@ export function ProcessRiskPanel({ process, users, canWrite, onBack }: { process
   }, [process.id])
 
   useEffect(() => { void loadRisks() }, [loadRisks])
+
+  // Enfoca el riesgo indicado por la bandeja de aprobaciones o por un ticket, una sola vez y
+  // recién cargada la lista; si ya no existe se consume el foco igual para no dejarlo huérfano.
+  useEffect(() => {
+    if (!focusRiskId || loading) return
+    const target = risks.find((risk) => risk.id === focusRiskId)
+    if (target) openEdit(target)
+    onFocusConsumed?.()
+    // openEdit solo compone estado interno; no hace falta declararla como dependencia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRiskId, risks, loading])
 
   function openCreate() {
     setShowDetail(true)
@@ -223,6 +275,34 @@ export function ProcessRiskPanel({ process, users, canWrite, onBack }: { process
       setNotice('Riesgo eliminado correctamente.')
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el riesgo.')
+    }
+  }
+
+  async function requestApproval() {
+    if (!selected || !canWrite || sendingApproval) return
+    const confirmed = await askConfirm({
+      title: selected.approval ? 'Reenviar a aprobación' : 'Enviar a aprobación',
+      message: selected.approval
+        ? `Se abrirá un nuevo ciclo de revisión para «${selected.name}» y se notificará a ${selected.riskOwner?.name ?? 'el dueño'}. ¿Continuar?`
+        : `Se enviará «${selected.name}» a revisión de ${selected.riskOwner?.name ?? 'el dueño'}. ¿Continuar?`,
+      confirmLabel: 'Enviar',
+    })
+    if (!confirmed) return
+    setSendingApproval(true)
+    setError('')
+    setNotice('')
+    try {
+      await api(`/processes/${process.id}/risks/${selected.id}/approvals`, { method: 'POST' })
+      const updated = (await loadRisks()).find((risk) => risk.id === selected.id)
+      if (updated) {
+        setSelected(updated)
+        setDraft(draftFromRisk(updated))
+      }
+      setNotice('Riesgo enviado a aprobación. El dueño fue notificado.')
+    } catch (requestError) {
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo enviar el riesgo a aprobación.')
+    } finally {
+      setSendingApproval(false)
     }
   }
 
@@ -327,6 +407,7 @@ export function ProcessRiskPanel({ process, users, canWrite, onBack }: { process
       {isDetail ? (
         <form className="panel risk-detail-panel" onSubmit={(event) => void saveRisk(event)}>
           <div className="risk-detail-toolbar"><button type="button" className="text-button" onClick={closeDetail}>← Volver a riesgos</button>{selected && canWrite && <button type="button" className="button danger small-button" onClick={() => void removeRisk(selected)}>Eliminar riesgo</button>}</div>
+          {selected && <ApprovalBar risk={selected} canWrite={canWrite} sending={sendingApproval} onRequest={() => void requestApproval()} />}
           <fieldset disabled={!canWrite} className="risk-detail-fields">
              <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><RiskCodeInput code={selected ? selected.code : null} creating={!selected} /><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><RiskTypeInput processType={process.type} /><label>Dueño del riesgo<select value={draft.riskOwnerId} onChange={(event) => setDraft({ ...draft, riskOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
             <section className="risk-detail-section risk-evaluation-section"><div className="risk-section-heading"><div><p className="detail-label">VALORACIÓN</p><h2>EVALUACIÓN DE RIESGOS</h2></div><span className="risk-method-note">Matriz 5 × 5 · impacto × probabilidad</span></div><div className="risk-evaluation-layout"><EvaluationCard title="RIESGO INHERENTE" impact={draft.inherentImpact} probability={draft.inherentProbability} onImpact={(value) => setDraft({ ...draft, inherentImpact: value })} onProbability={(value) => setDraft({ ...draft, inherentProbability: value })} disabled={!canWrite} /><section className="risk-controls-card"><div className="risk-controls-heading"><div><p className="detail-label">MITIGACIÓN</p><h3>CONTROLES</h3></div>{canWrite && selected && !controlEditor && <button type="button" className="button secondary small-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para agregar controles.</div> : selected.controls.length === 0 && !controlEditor ? <div className="risk-controls-empty">Sin controles registrados{canWrite && <button type="button" className="text-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div> : <div className="risk-control-list">{selected.controls.map((control) => <div className="risk-control-item" key={control.id}><span className="risk-control-mark">✓</span><div><strong>{control.description}</strong><span className={`control-evaluation ${control.evaluation.toLowerCase()}`}>{controlEvaluationOptions.find(([value]) => value === control.evaluation)?.[1]}</span></div>{canWrite && <span className="risk-control-actions"><button type="button" className="sipoc-icon-button" title="Editar control" aria-label="Editar control" onClick={() => setControlEditor({ control, draft: { description: control.description, evaluation: control.evaluation } })}>✎</button><button type="button" className="sipoc-icon-button danger" title="Eliminar control" aria-label="Eliminar control" onClick={() => void removeControl(control)}>×</button></span>}</div>)}</div>}{controlEditor && selected && <ControlEditor control={controlEditor.control} draft={controlEditor.draft} saving={saving} error={error} onDraftChange={(value) => setControlEditor({ ...controlEditor, draft: value })} onSave={() => void saveControl()} onCancel={() => setControlEditor(null)} />}</section><RiskResidualCard risk={selected} draft={draft} onImpact={(value) => setDraft({ ...draft, residualImpact: value })} onProbability={(value) => setDraft({ ...draft, residualProbability: value })} /></div></section>

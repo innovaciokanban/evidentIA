@@ -16,7 +16,7 @@ import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, stra
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -99,6 +99,9 @@ const ticketInclude = {
       actionPlan: { select: { id: true, title: true, strategySource: true, strategySourceRef: true, strategyTitle: true, strategyDescription: true } },
     },
   },
+  // Como RiskApproval.ticketId es único, un ticket pertenece a como mucho un ciclo de aprobación
+  // (la lista tiene 0 o 1 elementos) y sirve de referencia navegable al riesgo de origen.
+  riskApprovals: { select: { id: true, riskId: true, risk: { select: { id: true, code: true, name: true, processId: true } } } },
 } as const
 const ticketView = (ticket: Prisma.TicketGetPayload<{ include: typeof ticketInclude }>) => ticket
 const crossInclude = { factor1: true, factor2: true } as const
@@ -580,35 +583,50 @@ const riskInclude = {
   evidences: { orderBy: { createdAt: 'asc' as const } },
   riskOwner: { select: { id: true, name: true } },
   mitigationOwner: { select: { id: true, name: true } },
+  // Último ciclo de aprobación del riesgo (el más reciente) para pintar su estado en el panel.
+  approvals: { orderBy: { createdAt: 'desc' as const }, take: 1, include: { decidedBy: { select: { id: true, name: true } } } },
 } as const
 // Temporary compatibility value until the NOT NULL BPMN column is removed by a migration.
 const legacyBpmnActivityValue = 'No especificada'
-const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) => ({
-  id: risk.id,
-  processId: risk.processId,
-  name: risk.name,
-  description: risk.description,
-  riskType: risk.riskType,
-  code: risk.code,
-  riskOwner: risk.riskOwner,
-  acceptanceStatus: risk.acceptanceStatus,
-  treatment: risk.treatment,
-  mitigationOwner: risk.mitigationOwner,
-  mitigationStartDate: risk.mitigationStartDate,
-  mitigationDueDate: risk.mitigationDueDate,
-  inherentImpact: risk.inherentImpact,
-  inherentProbability: risk.inherentProbability,
-  inherentScore: riskScoreFor(risk.inherentImpact, risk.inherentProbability),
-  inherentLevel: riskLevelFor(risk.inherentImpact, risk.inherentProbability),
-  residualImpact: risk.residualImpact,
-  residualProbability: risk.residualProbability,
-  residualScore: riskScoreFor(risk.residualImpact, risk.residualProbability),
-  residualLevel: riskLevelFor(risk.residualImpact, risk.residualProbability),
-  controls: risk.controls,
-  evidences: risk.evidences,
-  createdAt: risk.createdAt,
-  updatedAt: risk.updatedAt,
-})
+const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) => {
+  // Los mocks de prueba pueden no incluir approvals; el valor real siempre viene del include.
+  const latestApproval = Array.isArray(risk.approvals) && risk.approvals.length > 0 ? risk.approvals[0] : null
+  return {
+    id: risk.id,
+    processId: risk.processId,
+    name: risk.name,
+    description: risk.description,
+    riskType: risk.riskType,
+    code: risk.code,
+    riskOwner: risk.riskOwner,
+    acceptanceStatus: risk.acceptanceStatus,
+    treatment: risk.treatment,
+    mitigationOwner: risk.mitigationOwner,
+    mitigationStartDate: risk.mitigationStartDate,
+    mitigationDueDate: risk.mitigationDueDate,
+    inherentImpact: risk.inherentImpact,
+    inherentProbability: risk.inherentProbability,
+    inherentScore: riskScoreFor(risk.inherentImpact, risk.inherentProbability),
+    inherentLevel: riskLevelFor(risk.inherentImpact, risk.inherentProbability),
+    residualImpact: risk.residualImpact,
+    residualProbability: risk.residualProbability,
+    residualScore: riskScoreFor(risk.residualImpact, risk.residualProbability),
+    residualLevel: riskLevelFor(risk.residualImpact, risk.residualProbability),
+    controls: risk.controls,
+    evidences: risk.evidences,
+    approval: latestApproval ? {
+      id: latestApproval.id,
+      status: latestApproval.status,
+      requestedAt: latestApproval.createdAt,
+      decidedBy: latestApproval.decidedBy ?? null,
+      decidedAt: latestApproval.decidedAt ?? null,
+      comment: latestApproval.comment ?? null,
+      ticketId: latestApproval.ticketId ?? null,
+    } : null,
+    createdAt: risk.createdAt,
+    updatedAt: risk.updatedAt,
+  }
+}
 
 /**
  * El plan de mitigación no admite vencimiento anterior a la fecha de inicio. En PATCH solo viene
@@ -650,6 +668,107 @@ const processTypeToRiskCategory: Record<ProcessType, RiskCodeCategory> = {
 const residualBaselineImpact = 1
 const residualBaselineProbability = 1
 const residualRequiresControlsError = 'Residual risk values require at least one control'
+
+// Etiquetas del nivel de riesgo para notificaciones y tickets (misma matriz 5×5 de siempre).
+const riskLevelNames: Record<'LOW' | 'MEDIUM' | 'HIGH', string> = { LOW: 'Bajo', MEDIUM: 'Medio', HIGH: 'Alto' }
+
+// El link de una notificación apunta a la bandeja "Mis aprobaciones"; la campana lo interpreta.
+const approvalNotificationLink = (approvalId: string) => `approvals/${approvalId}`
+
+const riskApprovalInclude = {
+  requestedBy: { select: { id: true, name: true } },
+  decidedBy: { select: { id: true, name: true } },
+  ticket: { select: { id: true, title: true, status: true } },
+  risk: {
+    include: {
+      process: { select: { id: true, name: true, code: true, companyId: true } },
+      riskOwner: { select: { id: true, name: true } },
+      controls: { orderBy: { createdAt: 'asc' as const } },
+    },
+  },
+} as const
+
+const riskApprovalView = (approval: Prisma.RiskApprovalGetPayload<{ include: typeof riskApprovalInclude }>) => ({
+  id: approval.id,
+  riskId: approval.riskId,
+  status: approval.status,
+  requestedBy: approval.requestedBy,
+  requestedAt: approval.createdAt,
+  decidedBy: approval.decidedBy,
+  decidedAt: approval.decidedAt,
+  comment: approval.comment,
+  ticket: approval.ticket,
+  risk: {
+    id: approval.risk.id,
+    code: approval.risk.code,
+    name: approval.risk.name,
+    description: approval.risk.description,
+    acceptanceStatus: approval.risk.acceptanceStatus,
+    treatment: approval.risk.treatment,
+    riskOwner: approval.risk.riskOwner,
+    inherentImpact: approval.risk.inherentImpact,
+    inherentProbability: approval.risk.inherentProbability,
+    inherentScore: riskScoreFor(approval.risk.inherentImpact, approval.risk.inherentProbability),
+    inherentLevel: riskLevelFor(approval.risk.inherentImpact, approval.risk.inherentProbability),
+    residualImpact: approval.risk.residualImpact,
+    residualProbability: approval.risk.residualProbability,
+    residualScore: riskScoreFor(approval.risk.residualImpact, approval.risk.residualProbability),
+    residualLevel: riskLevelFor(approval.risk.residualImpact, approval.risk.residualProbability),
+    controls: approval.risk.controls,
+    process: { id: approval.risk.process.id, name: approval.risk.process.name, code: approval.risk.process.code },
+  },
+})
+
+/**
+ * Datos del ticket que genera una aprobación, siguiendo las mismas reglas que el ticket automático
+ * de los ítems de plan: OPEN, prioridad heredada del nivel inherente (misma escala, sin inventar
+ * niveles), asignado al dueño del riesgo y con referencia navegable al riesgo de origen.
+ */
+const ticketDataFromRiskApproval = (approval: { id: string; risk: { id: string; code: string | null; name: string; description: string; inherentImpact: number; inherentProbability: number; riskOwnerId: string | null; process: { id: string; name: string; code: string | null } } }, createdById: string) => {
+  const level = riskLevelFor(approval.risk.inherentImpact, approval.risk.inherentProbability)
+  return {
+    title: `${approval.risk.code ?? 'Riesgo'} · ${approval.risk.name}`,
+    description: `Riesgo aprobado y aceptado por su dueño.\n\n${approval.risk.description}\n\nProceso: ${approval.risk.process.name}${approval.risk.process.code ? ` (${approval.risk.process.code})` : ''}\nNivel inherente: ${riskLevelNames[level]} (${riskScoreFor(approval.risk.inherentImpact, approval.risk.inherentProbability)})\nReferencia: riesgo ${approval.risk.id} del proceso ${approval.risk.process.id}`,
+    status: TicketStatus.OPEN,
+    priority: TicketPriority[level === 'LOW' ? 'LOW' : level === 'MEDIUM' ? 'MEDIUM' : 'HIGH'],
+    assignedToId: approval.risk.riskOwnerId,
+    createdById,
+  }
+}
+
+/**
+ * Abre un ciclo de aprobación y notifica in-app al dueño del riesgo. La notificación identifica
+ * código, nombre y nivel inherente, y su link abre la revisión en "Mis aprobaciones".
+ */
+const createRiskApprovalCycle = async (client: Prisma.TransactionClient | PrismaClient, data: { riskId: string; requestedById: string; riskOwnerId: string; risk: { code: string | null; name: string; description: string; inherentImpact: number; inherentProbability: number } }) => {
+  const approval = await client.riskApproval.create({ data: { riskId: data.riskId, requestedById: data.requestedById, openKey: data.riskId } })
+  const level = riskLevelFor(data.risk.inherentImpact, data.risk.inherentProbability)
+  await client.notification.create({
+    data: {
+      userId: data.riskOwnerId,
+      title: `${data.risk.code ? `Riesgo ${data.risk.code}` : 'Nuevo riesgo'} pendiente de tu revisión`,
+      body: `«${data.risk.name}» está esperando tu aprobación. Nivel inherente: ${riskLevelNames[level]} (${riskScoreFor(data.risk.inherentImpact, data.risk.inherentProbability)}).`,
+      link: approvalNotificationLink(approval.id),
+    },
+  })
+  return approval
+}
+
+// Bandeja y autorización: el dueño del riesgo ve sus riesgos; los administradores ven su empresa
+// (o todo, si son superusuarios) para poder decidir en nombre de un dueño ausente.
+const approvalVisibilityWhere = (request: Request): Prisma.RiskApprovalWhereInput => {
+  if (request.user?.role === Role.SUPERUSER) return {}
+  if (request.user?.role === Role.COMPANY_ADMIN) return { risk: { process: { companyId: request.user.companyId ?? 'none' } } }
+  return { risk: { riskOwnerId: request.user?.id ?? 'none' } }
+}
+
+const canDecideApproval = (request: Request, approval: { risk: { riskOwnerId: string | null; process: { companyId: string | null } } }): boolean => {
+  const user = request.user
+  if (!user) return false
+  if (approval.risk.riskOwnerId === user.id) return true
+  if (user.role === Role.SUPERUSER) return true
+  return user.role === Role.COMPANY_ADMIN && approval.risk.process.companyId === user.companyId
+}
 
 const isUniqueConstraintError = (error: unknown): boolean =>
   Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'P2002')
@@ -1576,7 +1695,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       riskOwnerId: riskOwner.userId,
       mitigationOwnerId: mitigationOwner.userId,
     })
-    response.status(201).json({ risk: riskView(risk) })
+    // Si el riesgo nace con dueño, se abre su ciclo de aprobación y se le avisa in-app. Si algo
+    // falla aquí el riesgo ya existe y se devuelve igual: el panel permite reenviarlo explícitamente
+    // a aprobación, así que un fallo puntual de la notificación no pierde el registro del riesgo.
+    if (risk.riskOwner?.id) {
+      try {
+        await createRiskApprovalCycle(db, { riskId: risk.id, requestedById: request.user!.id, riskOwnerId: risk.riskOwner.id, risk })
+      } catch (cycleError) {
+        console.error('[risk-approvals] failed to open approval cycle on risk creation', cycleError)
+      }
+    }
+    // El ciclo se abre después de persistir el riesgo: se relee con su include para que la
+    // respuesta ya traiga el estado de aprobación real (no el snapshot previo al ciclo).
+    const refreshed = await db.risk.findUnique({ where: { id: risk.id }, include: riskInclude })
+    response.status(201).json({ risk: riskView(refreshed ?? risk) })
   }))
 
   app.patch('/api/processes/:processId/risks/:riskId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -1639,6 +1771,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: residualRequiresControlsError })
       return
     }
+    // Si el último ciclo quedó APROBADO y cambian datos relevantes del riesgo, ese ciclo pasa a
+    // OUTDATED sin alterar la decisión anterior: quién decidió, cuándo y con qué comentario se
+    // conservan, y el dueño puede volver a enviar el riesgo corregido con una acción explícita.
+    // El ticket generado por el ciclo aprobado queda como está (el trabajo ya se creó). El cambio
+    // se aplica antes de leer el riesgo con su include, para que la respuesta ya traiga OUTDATED.
+    const relevantChanged = (data.name !== undefined && data.name !== existing.name)
+      || (data.description !== undefined && data.description !== existing.description)
+      || (data.inherentImpact !== undefined && data.inherentImpact !== existing.inherentImpact)
+      || (data.inherentProbability !== undefined && data.inherentProbability !== existing.inherentProbability)
+    if (relevantChanged) {
+      const latestApproval = await db.riskApproval.findFirst({ where: { riskId: existing.id }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } })
+      if (latestApproval?.status === 'APPROVED') {
+        await db.riskApproval.update({ where: { id: latestApproval.id }, data: { status: 'OUTDATED' } })
+      }
+    }
     // El código es inmutable: cambiar el proceso o el tipo nunca renumera el identificador histórico.
     // Solo se asigna cuando el riesgo aún no tiene código (dato legado sin clasificar) y, en ese
     // mismo momento, su riskType se completa con la categoría del proceso. Los riesgos que ya
@@ -1664,6 +1811,167 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     await db.risk.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  // ---- Aprobación colaborativa de riesgos ----
+
+  app.get('/api/approvals', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = riskApprovalQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid filters', details: parsed.error.issues })
+      return
+    }
+    const approvals = await db.riskApproval.findMany({
+      where: { ...approvalVisibilityWhere(request), ...(parsed.data.status ? { status: parsed.data.status } : {}) },
+      include: riskApprovalInclude,
+      orderBy: { createdAt: 'desc' },
+    })
+    response.json({ approvals: approvals.map(riskApprovalView) })
+  }))
+
+  app.get('/api/approvals/:id', authMiddleware, asyncHandler(async (request, response) => {
+    const approval = await db.riskApproval.findUnique({ where: { id: String(request.params.id) }, include: riskApprovalInclude })
+    // Fuera de la empresa (o del alcance del usuario) el ciclo simplemente no existe.
+    if (!approval || !canDecideApproval(request, approval)) {
+      response.status(404).json({ error: 'Approval not found' })
+      return
+    }
+    response.json({ approval: riskApprovalView(approval) })
+  }))
+
+  app.post('/api/approvals/:id/decision', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = riskApprovalDecisionSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid approval decision', details: parsed.error.issues })
+      return
+    }
+    const approval = await db.riskApproval.findUnique({ where: { id: String(request.params.id) }, include: riskApprovalInclude })
+    if (!approval || !canDecideApproval(request, approval)) {
+      response.status(404).json({ error: 'Approval not found' })
+      return
+    }
+    if (approval.status !== 'PENDING') {
+      response.status(409).json({ error: 'This approval was already decided' })
+      return
+    }
+    const approving = parsed.data.decision === 'APPROVE'
+    try {
+      const settled = await db.$transaction(async (tx) => {
+        // El guard `status: 'PENDING'` hace que una decisión repetida no pase de largo: si otro
+        // usuario ya resolvió el ciclo, count === 0 y no se toca nada (evita doble ticket).
+        const guarded = await tx.riskApproval.updateMany({
+          where: { id: approval.id, status: 'PENDING' },
+          data: { status: approving ? 'APPROVED' : 'REJECTED', openKey: null, decidedById: request.user!.id, decidedAt: new Date(), comment: parsed.data.comment ?? null },
+        })
+        if (guarded.count === 0) return false
+        if (approving) {
+          // "Aprobar y aceptar": además del ciclo, el veredicto formal del riesgo queda ACCEPTED.
+          await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'ACCEPTED' } })
+          // Ticket único por ciclo (RiskApproval.ticketId es único): un reintento jamás duplica.
+          const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
+          await tx.riskApproval.update({ where: { id: approval.id }, data: { ticketId: ticket.id } })
+        }
+        const level = riskLevelFor(approval.risk.inherentImpact, approval.risk.inherentProbability)
+        await tx.notification.create({
+          data: {
+            userId: approval.requestedById,
+            title: `${approval.risk.code ? `Riesgo ${approval.risk.code}` : 'Riesgo'} ${approving ? 'aprobado' : 'rechazado'}`,
+            body: approving
+              ? `«${approval.risk.name}» fue aprobado y aceptado; se generó un ticket de seguimiento.`
+              : `«${approval.risk.name}» fue rechazado por ${request.user!.name} (nivel inherente ${riskLevelNames[level]}).${parsed.data.comment ? ` Motivo: ${parsed.data.comment}` : ''}`,
+            link: approvalNotificationLink(approval.id),
+          },
+        })
+        return true
+      })
+      if (!settled) {
+        response.status(409).json({ error: 'This approval was already decided' })
+        return
+      }
+    } catch (decisionError) {
+      // Si la creación del ticket u otra escritura falla, la transacción revierte TODO: el ciclo
+      // sigue PENDING con su openKey y el dueño puede reintentar la decisión sin perder datos ni
+      // duplicar tickets (el índice único de ticketId corta cualquier duplicado residual).
+      console.error('[risk-approvals] decision could not be persisted', decisionError)
+      response.status(500).json({ error: 'The approval decision could not be saved; it can be retried' })
+      return
+    }
+    const updated = await db.riskApproval.findUnique({ where: { id: approval.id }, include: riskApprovalInclude })
+    // El ticket enlazado se relee con su include para devolver la referencia al riesgo de origen
+    // ya resuelta (riskApprovals), que se calcula después de unirlo al ciclo.
+    const finalTicket = updated?.ticketId
+      ? (await db.ticket.findUnique({ where: { id: updated.ticketId }, include: ticketInclude })) ?? null
+      : null
+    response.json({ approval: updated ? riskApprovalView(updated) : null, ticket: finalTicket ? ticketView(finalTicket) : null })
+  }))
+
+  app.post('/api/processes/:processId/risks/:riskId/approvals', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const user = request.user!
+    // Reenviar puede el dueño del riesgo o un autorizado de escritura de su empresa; crear el
+    // riesgo no da derecho a aprobarlo por sí solo (solo a pedir la revisión del dueño).
+    const isOwner = risk.riskOwner?.id === user.id
+    const isCompanyWriter = user.role === Role.SUPERUSER || (user.role === Role.COMPANY_ADMIN && process.companyId === user.companyId)
+    if (!isOwner && !isCompanyWriter) {
+      response.status(403).json({ error: 'Only the risk owner or a company admin can request approval' })
+      return
+    }
+    if (!risk.riskOwner?.id) {
+      response.status(400).json({ error: 'Assign a risk owner before requesting approval' })
+      return
+    }
+    const openCycle = await db.riskApproval.findFirst({ where: { riskId: risk.id, status: 'PENDING' }, select: { id: true } })
+    if (openCycle) {
+      response.status(409).json({ error: 'This risk already has a pending approval' })
+      return
+    }
+    try {
+      const approval = await createRiskApprovalCycle(db, { riskId: risk.id, requestedById: user.id, riskOwnerId: risk.riskOwner.id, risk })
+      const created = await db.riskApproval.findUnique({ where: { id: approval.id }, include: riskApprovalInclude })
+      response.status(201).json({ approval: created ? riskApprovalView(created) : null })
+    } catch (cycleError) {
+      // Dos reenvíos simultáneos chocan en el índice único de openKey: solo uno gana.
+      if (isUniqueConstraintError(cycleError)) {
+        response.status(409).json({ error: 'This risk already has a pending approval' })
+        return
+      }
+      throw cycleError
+    }
+  }))
+
+  // ---- Notificaciones in-app ----
+
+  app.get('/api/notifications', authMiddleware, asyncHandler(async (request, response) => {
+    const userId = request.user!.id
+    const [notifications, unread] = await Promise.all([
+      db.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 30 }),
+      db.notification.count({ where: { userId, readAt: null } }),
+    ])
+    response.json({ notifications, unread })
+  }))
+
+  app.patch('/api/notifications/:id', authMiddleware, asyncHandler(async (request, response) => {
+    const existing = await db.notification.findUnique({ where: { id: String(request.params.id) } })
+    if (!existing || existing.userId !== request.user!.id) {
+      response.status(404).json({ error: 'Notification not found' })
+      return
+    }
+    const notification = existing.readAt ? existing : await db.notification.update({ where: { id: existing.id }, data: { readAt: new Date() } })
+    response.json({ notification })
+  }))
+
+  app.post('/api/notifications/read-all', authMiddleware, asyncHandler(async (request, response) => {
+    await db.notification.updateMany({ where: { userId: request.user!.id, readAt: null }, data: { readAt: new Date() } })
     response.status(204).send()
   }))
 

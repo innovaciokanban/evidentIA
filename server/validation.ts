@@ -231,6 +231,20 @@ export const riskControlUpdateSchema = z.object({
   'At least one control field is required',
 )
 
+// Decisión del dueño sobre un ciclo de aprobación. El rechazo exige motivo obligatorio; la
+// aprobación puede llevar comentario opcional. El servidor ignora cualquier userId/riskId del
+// cuerpo: quién decide sale de la sesión y el riesgo del ciclo solicitado.
+export const riskApprovalDecisionSchema = z.object({
+  decision: z.enum(['APPROVE', 'REJECT']),
+  comment: z.string().trim().min(3).max(2000).optional(),
+}).refine(
+  (value) => value.decision === 'APPROVE' || Boolean(value.comment),
+  { message: 'A rejection requires a mandatory reason', path: ['comment'] },
+)
+export const riskApprovalQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'OUTDATED']).optional(),
+})
+
 // Solo enlaces http(s): no se guardan archivos ni rutas del servidor, solo la URL de la evidencia.
 const riskEvidenceUrl = z.string().trim().url('Evidence link must be a valid URL').refine(
   (value) => /^https?:\/\//i.test(value),
