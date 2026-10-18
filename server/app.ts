@@ -1,10 +1,11 @@
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { createHash } from 'node:crypto'
 import cors from 'cors'
+import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, Role, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, Role, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
@@ -16,7 +17,7 @@ import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, stra
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -737,11 +738,20 @@ const ticketDataFromRiskApproval = (approval: { id: string; risk: { id: string; 
 }
 
 /**
- * Abre un ciclo de aprobación y notifica in-app al dueño del riesgo. La notificación identifica
- * código, nombre y nivel inherente, y su link abre la revisión en "Mis aprobaciones".
+ * Abre un ciclo de aprobación, notifica in-app al dueño del riesgo y registra el evento
+ * APPROVAL_REQUESTED del historial, todo en la misma operación (el llamador pasa db o una
+ * transacción). La notificación identifica código, nombre y nivel inherente, y su link abre la
+ * revisión en "Mis aprobaciones". El actor es quien envía (requestedById), no un valor del cliente.
  */
-const createRiskApprovalCycle = async (client: Prisma.TransactionClient | PrismaClient, data: { riskId: string; requestedById: string; riskOwnerId: string; risk: { code: string | null; name: string; description: string; inherentImpact: number; inherentProbability: number } }) => {
+const createRiskApprovalCycle = async (client: Prisma.TransactionClient | PrismaClient, data: { riskId: string; requestedById: string; riskOwnerId: string; actor: RiskAuditActor; risk: { code: string | null; name: string; description: string; inherentImpact: number; inherentProbability: number } }) => {
   const approval = await client.riskApproval.create({ data: { riskId: data.riskId, requestedById: data.requestedById, openKey: data.riskId } })
+  await riskAuditWrite(client, {
+    riskId: data.riskId,
+    eventType: 'APPROVAL_REQUESTED',
+    summary: 'Enviado a aprobación',
+    actor: data.actor,
+    metadata: { approvalId: approval.id },
+  })
   const level = riskLevelFor(data.risk.inherentImpact, data.risk.inherentProbability)
   await client.notification.create({
     data: {
@@ -801,15 +811,167 @@ const withCodeRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
   throw lastConflict
 }
 
+// Solo el backend genera el código: el cliente nunca envía ni modifica Risk.code.
 type RiskWithInclude = Prisma.RiskGetPayload<{ include: typeof riskInclude }>
 
-// Solo el backend genera el código: el cliente nunca envía ni modifica Risk.code.
-const persistRiskWithCode = (db: PrismaClient, data: Prisma.RiskUncheckedCreateInput): Promise<RiskWithInclude> =>
-  withCodeRetry(async () => {
-    if (!isRiskCodeCategory(data.riskType)) throw new Error(`No code prefix for risk type ${String(data.riskType)}`)
-    const code = await nextRiskCodeFor(db, data.riskType)
-    return db.risk.create({ data: { ...data, code }, include: riskInclude })
-  })
+// ---- Auditoría del ciclo de vida del riesgo (RiskAuditEvent) ----
+
+type RiskAuditActor = { id: string; name: string; email: string }
+type RiskAuditClient = PrismaClient | Prisma.TransactionClient
+// Mismo formato before/after por campo que ProcessChange: la UI del historial lo reutiliza.
+type RiskAuditChange = ProcessChangeItem
+
+const auditActorFields = (actor: RiskAuditActor | null | undefined) => actor
+  ? { actorId: actor.id, actorName: actor.name || null, actorEmail: actor.email || null }
+  : // Operación de sistema (sin sesión que atribuir): queda explícita con actor null.
+    { actorId: null, actorName: null, actorEmail: null }
+
+// Defensa en profundidad: aunque solo el backend escribe metadata (ids, estados, comentario de la
+// decisión), se descartan claves sensibles antes de devolverla por la API por si un futuro evento
+// guardara por error contraseñas, cookies, tokens o secretos.
+const sensitiveAuditKey = /password|token|secret|cookie|hash|credential|authorization/i
+const riskAuditMetadataView = (metadata: Prisma.JsonValue | null): Record<string, unknown> | null => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
+    if (sensitiveAuditKey.test(key)) continue
+    clean[key] = value
+  }
+  return clean
+}
+
+const riskAuditInclude = { actor: { select: { id: true, name: true } } } as const
+type RiskAuditEventWithActor = Prisma.RiskAuditEventGetPayload<{ include: typeof riskAuditInclude }>
+const riskAuditEventView = (event: RiskAuditEventWithActor) => ({
+  id: event.id,
+  riskId: event.riskId,
+  eventType: event.eventType,
+  summary: event.summary,
+  actorId: event.actorId,
+  actor: event.actor,
+  actorName: event.actorName,
+  actorEmail: event.actorEmail,
+  occurredAt: event.occurredAt,
+  changes: Array.isArray(event.changes) ? event.changes : [],
+  metadata: riskAuditMetadataView(event.metadata),
+})
+
+// Única vía de escritura del historial y siempre desde el backend con el cliente (db o tx) de la
+// operación auditada: no existe endpoint que reciba eventos del cliente.
+const riskAuditWrite = (client: RiskAuditClient, data: {
+  riskId: string
+  eventType: RiskAuditEventType
+  summary: string
+  actor: RiskAuditActor | null | undefined
+  changes?: RiskAuditChange[]
+  metadata?: Record<string, unknown>
+}) => client.riskAuditEvent.create({
+  data: {
+    riskId: data.riskId,
+    eventType: data.eventType,
+    summary: data.summary,
+    ...(data.changes && data.changes.length > 0 ? { changes: data.changes as unknown as Prisma.InputJsonValue } : {}),
+    ...(data.metadata ? { metadata: data.metadata as unknown as Prisma.InputJsonValue } : {}),
+    ...auditActorFields(data.actor),
+  },
+})
+
+const auditValue = (value: unknown): ProcessChangeValue => {
+  if (value === null || value === undefined) return null
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  if (typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return String(value)
+}
+
+const riskCreationChanges = (risk: RiskWithInclude): RiskAuditChange[] => [
+  { field: 'code', label: 'Código', previousValue: null, newValue: auditValue(risk.code) },
+  { field: 'name', label: 'Nombre', previousValue: null, newValue: auditValue(risk.name) },
+  { field: 'description', label: 'Descripción', previousValue: null, newValue: auditValue(risk.description) },
+  { field: 'riskOwnerId', label: 'Dueño del riesgo', previousValue: null, newValue: risk.riskOwner?.name ?? null },
+  { field: 'inherentImpact', label: 'Impacto inherente', previousValue: null, newValue: auditValue(risk.inherentImpact) },
+  { field: 'inherentProbability', label: 'Probabilidad inherente', previousValue: null, newValue: auditValue(risk.inherentProbability) },
+]
+
+/**
+ * Diferencia campo a campo entre el riesgo guardado y el payload de PATCH. Solo se registran los
+ * campos editables relevantes (el proceso no es editable: riskUpdateSchema no lo admite) y los
+ * dueños se muestran por nombre, con el nombre nuevo resuelto por la ruta llamadora.
+ */
+const updatedRiskChanges = (existing: RiskWithInclude, data: Prisma.RiskUncheckedUpdateInput, owners: { riskOwner?: string | null; mitigationOwner?: string | null }): RiskAuditChange[] => {
+  const changes: RiskAuditChange[] = []
+  const pushIfChanged = (field: string, label: string, previous: unknown, next: unknown) => {
+    if (next === undefined) return
+    const previousValue = auditValue(previous)
+    const newValue = auditValue(next)
+    if (previousValue === newValue) return
+    changes.push({ field, label, previousValue, newValue })
+  }
+  pushIfChanged('name', 'Nombre', existing.name, data.name)
+  pushIfChanged('description', 'Descripción', existing.description, data.description)
+  pushIfChanged('bpmnActivity', 'Actividad BPM', existing.bpmnActivity, data.bpmnActivity)
+  pushIfChanged('inherentImpact', 'Impacto inherente', existing.inherentImpact, data.inherentImpact)
+  pushIfChanged('inherentProbability', 'Probabilidad inherente', existing.inherentProbability, data.inherentProbability)
+  pushIfChanged('residualImpact', 'Impacto residual', existing.residualImpact, data.residualImpact)
+  pushIfChanged('residualProbability', 'Probabilidad residual', existing.residualProbability, data.residualProbability)
+  pushIfChanged('treatment', 'Tratamiento', existing.treatment, data.treatment)
+  pushIfChanged('acceptanceStatus', 'Aceptación', existing.acceptanceStatus, data.acceptanceStatus)
+  pushIfChanged('mitigationStartDate', 'Fecha de inicio del plan', existing.mitigationStartDate, data.mitigationStartDate)
+  pushIfChanged('mitigationDueDate', 'Fecha de vencimiento del plan', existing.mitigationDueDate, data.mitigationDueDate)
+  if (data.riskOwnerId !== undefined && data.riskOwnerId !== existing.riskOwnerId) {
+    changes.push({ field: 'riskOwnerId', label: 'Dueño del riesgo', previousValue: existing.riskOwner?.name ?? null, newValue: owners.riskOwner ?? null })
+  }
+  if (data.mitigationOwnerId !== undefined && data.mitigationOwnerId !== existing.mitigationOwnerId) {
+    changes.push({ field: 'mitigationOwnerId', label: 'Responsable del plan', previousValue: existing.mitigationOwner?.name ?? null, newValue: owners.mitigationOwner ?? null })
+  }
+  return changes
+}
+
+// Cambios de un control (alta, edición o baja). Las filas sin variación se descartan, de modo que
+// el alta solo muestra lo nuevo y la baja solo lo que se perdió.
+const controlAuditChanges = (previous: { description: string; evaluation: string } | null, next: { description: string; evaluation: string } | null): RiskAuditChange[] => [
+  { field: 'description', label: 'Descripción del control', previousValue: previous?.description ?? null, newValue: next?.description ?? null },
+  { field: 'evaluation', label: 'Evaluación de efectividad', previousValue: previous?.evaluation ?? null, newValue: next?.evaluation ?? null },
+].filter((change) => change.previousValue !== change.newValue)
+
+const evidenceAuditChanges = (previous: { name: string; description: string; url: string } | null, next: { name: string; description: string; url: string } | null): RiskAuditChange[] => [
+  { field: 'name', label: 'Nombre de la evidencia', previousValue: previous?.name ?? null, newValue: next?.name ?? null },
+  { field: 'description', label: 'Descripción de la evidencia', previousValue: previous?.description ?? null, newValue: next?.description ?? null },
+  { field: 'url', label: 'Enlace de la evidencia', previousValue: previous?.url ?? null, newValue: next?.url ?? null },
+].filter((change) => change.previousValue !== change.newValue)
+
+// Estado del ticket en español para el resumen del evento (misma escala TicketStatus de siempre).
+const ticketStatusNames: Record<TicketStatus, string> = {
+  [TicketStatus.OPEN]: 'Abierto',
+  [TicketStatus.IN_PROGRESS]: 'En curso',
+  [TicketStatus.RESOLVED]: 'Resuelto',
+  [TicketStatus.CLOSED]: 'Cerrado',
+}
+
+/**
+ * Alta de un riesgo con su código y su evento RISK_CREATED en la MISMA transacción: la secuencia
+ * por categoría se lee dentro del tx (el lock de fila se sostiene hasta el commit) y withCodeRetry
+ * reinicia la transacción completa ante un conflicto de índice único, de modo que un reintento
+ * jamás deja un riesgo sin su evento ni un evento sin su riesgo. El actor sale de la sesión.
+ */
+const createRiskWithAudit = async (db: PrismaClient, actor: RiskAuditActor, data: Prisma.RiskUncheckedCreateInput): Promise<RiskWithInclude> => {
+  if (!isRiskCodeCategory(data.riskType)) throw new Error(`No code prefix for risk type ${String(data.riskType)}`)
+  // Se captura fuera del closure: TypeScript no mantiene el estrechamiento de data.riskType dentro
+  // de las funciones anidadas y nextRiskCodeFor exige la categoría ya validada.
+  const riskType = data.riskType
+  return withCodeRetry(() => db.$transaction(async (tx) => {
+    const code = await nextRiskCodeFor(tx, riskType)
+    const risk = await tx.risk.create({ data: { ...data, riskType, code }, include: riskInclude })
+    await riskAuditWrite(tx, {
+      riskId: risk.id,
+      eventType: 'RISK_CREATED',
+      summary: `Riesgo ${code} creado`,
+      actor,
+      changes: riskCreationChanges(risk),
+    })
+    return risk
+  }))
+}
 
 const actionItemToTicketStatus: Record<ActionItemStatus, TicketStatus> = {
   [ActionItemStatus.PENDING]: TicketStatus.OPEN,
@@ -1527,6 +1689,55 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ history: history.map(processChangeView) })
   }))
 
+  /**
+   * Historial del ciclo de vida de un riesgo (append-only): solo lectura con paginación y filtros;
+   * no existe ningún método que inserte o altere eventos desde una petición. El acceso exige
+   * proceso visible para la sesión y que el riesgo pertenezca exactamente a ese proceso (404 en
+   * caso contrario, sin filtros que deliten la existencia de recursos ajenos).
+   */
+  app.get('/api/processes/:processId/risks/:riskId/history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, riskId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      riskId: String(request.params.riskId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid process id' })
+      return
+    }
+    const parsedQuery = riskAuditQuerySchema.safeParse(request.query)
+    if (!parsedQuery.success) {
+      response.status(400).json({ error: 'Invalid history query' })
+      return
+    }
+    const process = await findAccessibleProcess(request, parsedIds.data.processId)
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: parsedIds.data.riskId }, select: { id: true, processId: true } })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const { page, pageSize, eventType, from, to } = parsedQuery.data
+    const where = {
+      riskId: risk.id,
+      ...(eventType ? { eventType } : {}),
+      ...((from || to) ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    }
+    const [total, events] = await Promise.all([
+      db.riskAuditEvent.count({ where }),
+      db.riskAuditEvent.findMany({
+        where,
+        include: riskAuditInclude,
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ])
+    response.json({ events: events.map(riskAuditEventView), total, page, pageSize })
+  }))
+
   const sipocDelegatesFor = (client: ProcessTransaction): Record<SipocKind, SipocDelegate> => ({
     suppliers: client.sipocSupplier as unknown as SipocDelegate,
     inputs: client.sipocInput as unknown as SipocDelegate,
@@ -1685,7 +1896,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: residualRequiresControlsError })
       return
     }
-    const risk = await persistRiskWithCode(db, {
+    // El actor de auditoría sale SIEMPRE de la sesión autenticada, nunca del cuerpo de la petición.
+    const actor = request.user!
+    const risk = await createRiskWithAudit(db, actor, {
       processId: process.id,
       ...parsed.data,
       // Se escribe después del spread para que la categoría derivada del proceso pase siempre por
@@ -1698,9 +1911,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // Si el riesgo nace con dueño, se abre su ciclo de aprobación y se le avisa in-app. Si algo
     // falla aquí el riesgo ya existe y se devuelve igual: el panel permite reenviarlo explícitamente
     // a aprobación, así que un fallo puntual de la notificación no pierde el registro del riesgo.
-    if (risk.riskOwner?.id) {
+    const riskOwnerId = risk.riskOwner?.id
+    if (riskOwnerId) {
       try {
-        await createRiskApprovalCycle(db, { riskId: risk.id, requestedById: request.user!.id, riskOwnerId: risk.riskOwner.id, risk })
+        // Ciclo + notificación + evento APPROVAL_REQUESTED comparten transacción: nunca queda un
+        // ciclo confirmado sin su evento de auditoría.
+        await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: actor.id, riskOwnerId, actor, risk }))
       } catch (cycleError) {
         console.error('[risk-approvals] failed to open approval cycle on risk creation', cycleError)
       }
@@ -1774,28 +1990,54 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // Si el último ciclo quedó APROBADO y cambian datos relevantes del riesgo, ese ciclo pasa a
     // OUTDATED sin alterar la decisión anterior: quién decidió, cuándo y con qué comentario se
     // conservan, y el dueño puede volver a enviar el riesgo corregido con una acción explícita.
-    // El ticket generado por el ciclo aprobado queda como está (el trabajo ya se creó). El cambio
-    // se aplica antes de leer el riesgo con su include, para que la respuesta ya traiga OUTDATED.
+    // El ticket generado por el ciclo aprobado queda como está (el trabajo ya se creó). El marcado
+    // y su evento ocuren dentro de la transacción definida más abajo, junto con la edición.
     const relevantChanged = (data.name !== undefined && data.name !== existing.name)
       || (data.description !== undefined && data.description !== existing.description)
       || (data.inherentImpact !== undefined && data.inherentImpact !== existing.inherentImpact)
       || (data.inherentProbability !== undefined && data.inherentProbability !== existing.inherentProbability)
-    if (relevantChanged) {
-      const latestApproval = await db.riskApproval.findFirst({ where: { riskId: existing.id }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } })
-      if (latestApproval?.status === 'APPROVED') {
-        await db.riskApproval.update({ where: { id: latestApproval.id }, data: { status: 'OUTDATED' } })
-      }
-    }
     // El código es inmutable: cambiar el proceso o el tipo nunca renumera el identificador histórico.
     // Solo se asigna cuando el riesgo aún no tiene código (dato legado sin clasificar) y, en ese
     // mismo momento, su riskType se completa con la categoría del proceso. Los riesgos que ya
     // tienen código conservan su tipo almacenado aunque sea anterior a esta regla.
-    const risk = existing.code === null
-      ? await withCodeRetry(async () => {
-          const code = await nextRiskCodeFor(db, riskCategory)
-          return db.risk.update({ where: { id: existing.id }, data: { ...data, riskType: riskCategory, code }, include: riskInclude })
-        })
-      : await db.risk.update({ where: { id: existing.id }, data, include: riskInclude })
+    // Toda la escritura (marcado OUTDATED + su evento, edición del riesgo y evento RISK_UPDATED)
+    // ocurre en una sola transacción: o se confirma todo con su auditoría, o no se guarda nada.
+    const actor = request.user!
+    const ownerNames: { riskOwner?: string | null; mitigationOwner?: string | null } = {}
+    if (data.riskOwnerId !== undefined && data.riskOwnerId !== existing.riskOwnerId && data.riskOwnerId) {
+      ownerNames.riskOwner = (await db.user.findUnique({ where: { id: data.riskOwnerId }, select: { name: true } }))?.name ?? null
+    }
+    if (data.mitigationOwnerId !== undefined && data.mitigationOwnerId !== existing.mitigationOwnerId && data.mitigationOwnerId) {
+      ownerNames.mitigationOwner = (await db.user.findUnique({ where: { id: data.mitigationOwnerId }, select: { name: true } }))?.name ?? null
+    }
+    const risk = await withCodeRetry(() => db.$transaction(async (tx) => {
+      if (relevantChanged) {
+        const latestApproval = await tx.riskApproval.findFirst({ where: { riskId: existing.id }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } })
+        if (latestApproval?.status === 'APPROVED') {
+          await tx.riskApproval.update({ where: { id: latestApproval.id }, data: { status: 'OUTDATED' } })
+          await riskAuditWrite(tx, {
+            riskId: existing.id,
+            eventType: 'APPROVAL_OUTDATED',
+            summary: 'Aprobación marcada para nueva revisión',
+            actor,
+            metadata: { approvalId: latestApproval.id, previousStatus: 'APPROVED' },
+          })
+        }
+      }
+      const updated = existing.code === null
+        ? await tx.risk.update({ where: { id: existing.id }, data: { ...data, riskType: riskCategory, code: await nextRiskCodeFor(tx, riskCategory) }, include: riskInclude })
+        : await tx.risk.update({ where: { id: existing.id }, data, include: riskInclude })
+      // Solo se registra cuando hay variación real: un PATCH que no cambia nada no genera ruido,
+      // y la asignación de código legado entra como cambio con su valor anterior (sin código).
+      const changes: RiskAuditChange[] = [
+        ...(existing.code === null && updated.code !== null ? [{ field: 'code', label: 'Código', previousValue: null, newValue: updated.code } as RiskAuditChange] : []),
+        ...updatedRiskChanges(existing, data, ownerNames),
+      ]
+      if (changes.length > 0) {
+        await riskAuditWrite(tx, { riskId: existing.id, eventType: 'RISK_UPDATED', summary: 'Riesgo actualizado', actor, changes })
+      }
+      return updated
+    }))
     response.json({ risk: riskView(risk) })
   }))
 
@@ -1865,12 +2107,37 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           data: { status: approving ? 'APPROVED' : 'REJECTED', openKey: null, decidedById: request.user!.id, decidedAt: new Date(), comment: parsed.data.comment ?? null },
         })
         if (guarded.count === 0) return false
+        let createdTicketId: string | null = null
         if (approving) {
           // "Aprobar y aceptar": además del ciclo, el veredicto formal del riesgo queda ACCEPTED.
           await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'ACCEPTED' } })
           // Ticket único por ciclo (RiskApproval.ticketId es único): un reintento jamás duplica.
           const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
           await tx.riskApproval.update({ where: { id: approval.id }, data: { ticketId: ticket.id } })
+          createdTicketId = ticket.id
+        }
+        // Decisión y ticket quedan en el historial dentro de la MISMA transacción que los cambió:
+        // si la transacción revierte, tampoco se registran (nunca hay evento sin operación ni
+        // operación sin evento). El actor es la sesión que decidió; el comentario, en metadata.
+        await riskAuditWrite(tx, {
+          riskId: approval.riskId,
+          eventType: 'APPROVAL_DECIDED',
+          summary: approving ? 'Riesgo aprobado' : 'Riesgo rechazado',
+          actor: request.user!,
+          metadata: {
+            approvalId: approval.id,
+            decision: approving ? 'APPROVED' : 'REJECTED',
+            ...(parsed.data.comment ? { comment: parsed.data.comment } : {}),
+          },
+        })
+        if (createdTicketId) {
+          await riskAuditWrite(tx, {
+            riskId: approval.riskId,
+            eventType: 'TICKET_CREATED',
+            summary: 'Ticket de seguimiento creado',
+            actor: request.user!,
+            metadata: { ticketId: createdTicketId, approvalId: approval.id },
+          })
         }
         const level = riskLevelFor(approval.risk.inherentImpact, approval.risk.inherentProbability)
         await tx.notification.create({
@@ -1926,7 +2193,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(403).json({ error: 'Only the risk owner or a company admin can request approval' })
       return
     }
-    if (!risk.riskOwner?.id) {
+    const approvalOwnerId = risk.riskOwner?.id
+    if (!approvalOwnerId) {
       response.status(400).json({ error: 'Assign a risk owner before requesting approval' })
       return
     }
@@ -1936,7 +2204,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     try {
-      const approval = await createRiskApprovalCycle(db, { riskId: risk.id, requestedById: user.id, riskOwnerId: risk.riskOwner.id, risk })
+      // Ciclo + notificación + evento APPROVAL_REQUESTED comparten transacción: el índice único
+      // de openKey sigue coordinando los reenvíos simultáneos (uno gana, el otro recibe 409).
+      const approval = await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: user.id, riskOwnerId: approvalOwnerId, actor: user, risk }))
       const created = await db.riskApproval.findUnique({ where: { id: approval.id }, include: riskApprovalInclude })
       response.status(201).json({ approval: created ? riskApprovalView(created) : null })
     } catch (cycleError) {
@@ -1991,7 +2261,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Risk not found' })
       return
     }
-    const control = await db.riskControl.create({ data: { riskId: risk.id, ...parsed.data } })
+    const control = await db.$transaction(async (tx) => {
+      const created = await tx.riskControl.create({ data: { riskId: risk.id, ...parsed.data } })
+      await riskAuditWrite(tx, {
+        riskId: risk.id,
+        eventType: 'CONTROL_CREATED',
+        summary: 'Control agregado',
+        actor: request.user!,
+        changes: controlAuditChanges(null, created),
+        metadata: { controlId: created.id },
+      })
+      return created
+    })
     response.status(201).json({ control })
   }))
 
@@ -2016,7 +2297,22 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Control not found' })
       return
     }
-    const control = await db.riskControl.update({ where: { id: existing.id }, data: parsed.data })
+    const control = await db.$transaction(async (tx) => {
+      const updated = await tx.riskControl.update({ where: { id: existing.id }, data: parsed.data })
+      const changes = controlAuditChanges(existing, updated)
+      // Una edición que no varía nada (eco del valor guardado) no genera evento.
+      if (changes.length > 0) {
+        await riskAuditWrite(tx, {
+          riskId: risk.id,
+          eventType: 'CONTROL_UPDATED',
+          summary: 'Control modificado',
+          actor: request.user!,
+          changes,
+          metadata: { controlId: updated.id },
+        })
+      }
+      return updated
+    })
     response.json({ control })
   }))
 
@@ -2036,7 +2332,17 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Control not found' })
       return
     }
-    await db.riskControl.delete({ where: { id: existing.id } })
+    await db.$transaction(async (tx) => {
+      await tx.riskControl.delete({ where: { id: existing.id } })
+      await riskAuditWrite(tx, {
+        riskId: risk.id,
+        eventType: 'CONTROL_DELETED',
+        summary: 'Control eliminado',
+        actor: request.user!,
+        changes: controlAuditChanges(existing, null),
+        metadata: { controlId: existing.id },
+      })
+    })
     response.status(204).send()
   }))
 
@@ -2056,7 +2362,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Risk not found' })
       return
     }
-    const evidence = await db.riskEvidence.create({ data: { riskId: risk.id, ...parsed.data } })
+    const evidence = await db.$transaction(async (tx) => {
+      const created = await tx.riskEvidence.create({ data: { riskId: risk.id, ...parsed.data } })
+      await riskAuditWrite(tx, {
+        riskId: risk.id,
+        eventType: 'EVIDENCE_CREATED',
+        summary: 'Evidencia agregada',
+        actor: request.user!,
+        changes: evidenceAuditChanges(null, created),
+        metadata: { evidenceId: created.id },
+      })
+      return created
+    })
     response.status(201).json({ evidence })
   }))
 
@@ -2081,7 +2398,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
-    const evidence = await db.riskEvidence.update({ where: { id: existing.id }, data: parsed.data })
+    const evidence = await db.$transaction(async (tx) => {
+      const updated = await tx.riskEvidence.update({ where: { id: existing.id }, data: parsed.data })
+      const changes = evidenceAuditChanges(existing, updated)
+      if (changes.length > 0) {
+        await riskAuditWrite(tx, {
+          riskId: risk.id,
+          eventType: 'EVIDENCE_UPDATED',
+          summary: 'Evidencia actualizada',
+          actor: request.user!,
+          changes,
+          metadata: { evidenceId: updated.id },
+        })
+      }
+      return updated
+    })
     response.json({ evidence })
   }))
 
@@ -2101,7 +2432,17 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
-    await db.riskEvidence.delete({ where: { id: existing.id } })
+    await db.$transaction(async (tx) => {
+      await tx.riskEvidence.delete({ where: { id: existing.id } })
+      await riskAuditWrite(tx, {
+        riskId: risk.id,
+        eventType: 'EVIDENCE_DELETED',
+        summary: 'Evidencia eliminada',
+        actor: request.user!,
+        changes: evidenceAuditChanges(existing, null),
+        metadata: { evidenceId: existing.id },
+      })
+    })
     response.status(204).send()
   }))
 
@@ -3350,6 +3691,25 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
       if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
         await tx.actionItem.update({ where: { id: existing.actionItemId }, data: { status: ticketStatusToActionItemStatus[newStatus] } })
+      }
+      // Trazabilidad en el historial del riesgo de origen: solo los tickets derivados de una
+      // aprobación llevan riskApprovals (0 o 1), y solo los cambios de estado relevantes quedan
+      // registrados. Se escribe en la MISMA transacción que la modificación del ticket, con el
+      // actor de la sesión (quien hizo el cambio) y los estados antes/después en metadata.
+      const originApproval = existing.riskApprovals?.[0]
+      if (newStatus !== undefined && newStatus !== existing.status && originApproval?.riskId) {
+        await riskAuditWrite(tx, {
+          riskId: originApproval.riskId,
+          eventType: 'TICKET_STATUS_CHANGED',
+          summary: `Estado del ticket: ${ticketStatusNames[newStatus]}`,
+          actor: request.user!,
+          metadata: {
+            ticketId: existing.id,
+            approvalId: originApproval.id,
+            previousStatus: existing.status,
+            status: newStatus,
+          },
+        })
       }
       return updated
     })

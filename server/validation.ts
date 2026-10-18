@@ -245,6 +245,24 @@ export const riskApprovalQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'OUTDATED']).optional(),
 })
 
+// Consulta paginada del historial de un riesgo. El listado de tipos es cerrado (el cliente no
+// puede escribir eventos, solo filtrar por los que el backend emite). pageSize limitado a 50 para
+// que ninguna página pueda pedir el historial completo de golpe.
+export const riskAuditEventTypeSchema = z.enum([
+  'RISK_CREATED', 'RISK_UPDATED',
+  'CONTROL_CREATED', 'CONTROL_UPDATED', 'CONTROL_DELETED',
+  'EVIDENCE_CREATED', 'EVIDENCE_UPDATED', 'EVIDENCE_DELETED',
+  'APPROVAL_REQUESTED', 'APPROVAL_DECIDED', 'APPROVAL_OUTDATED',
+  'TICKET_CREATED', 'TICKET_STATUS_CHANGED',
+])
+export const riskAuditQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  eventType: riskAuditEventTypeSchema.optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+})
+
 // Solo enlaces http(s): no se guardan archivos ni rutas del servidor, solo la URL de la evidencia.
 const riskEvidenceUrl = z.string().trim().url('Evidence link must be a valid URL').refine(
   (value) => /^https?:\/\//i.test(value),

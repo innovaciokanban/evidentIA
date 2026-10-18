@@ -18,6 +18,7 @@ type StoredRisk = {
   controls: StoredControl[]; evidences: never[]; approvals: StoredApproval[]; createdAt: Date; updatedAt: Date
 }
 type StoredProcess = { id: string; companyId: string; name: string; code: string | null; type: 'MISSIONAL' | 'STRATEGIC' | 'SUPPORT' }
+type StoredAuditEvent = { id: string; riskId: string; actorId: string | null; actorName: string | null; actorEmail: string | null; eventType: string; summary: string; changes: unknown; metadata: unknown; occurredAt: Date }
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -55,11 +56,13 @@ function makeApprovalDb() {
   const storedRisks: StoredRisk[] = []
   const storedNotifications: StoredNotification[] = []
   const storedTickets: StoredTicket[] = []
+  const storedAuditEvents: StoredAuditEvent[] = []
   const codeSequences: Record<string, number> = {}
   let nextRisk = 1
   let nextApproval = 1
   let nextNotification = 1
   let nextTicket = 1
+  let nextAudit = 1
   let clock = Date.parse('2026-10-01T08:00:00.000Z')
   let failTicketCreation = false
 
@@ -132,11 +135,13 @@ function makeApprovalDb() {
     risks: structuredClone(storedRisks),
     tickets: structuredClone(storedTickets),
     notifications: structuredClone(storedNotifications),
+    auditEvents: structuredClone(storedAuditEvents),
   })
   const restore = (state: ReturnType<typeof snapshot>) => {
     storedRisks.splice(0, storedRisks.length, ...state.risks)
     storedTickets.splice(0, storedTickets.length, ...state.tickets)
     storedNotifications.splice(0, storedNotifications.length, ...state.notifications)
+    storedAuditEvents.splice(0, storedAuditEvents.length, ...state.auditEvents)
   }
 
   const db = {
@@ -270,6 +275,45 @@ function makeApprovalDb() {
         return { count: targets.length }
       }),
     },
+    riskAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        // El reloj no avanza aquí (new Date(clock)) para no alterar los sellos existentes; los
+        // empates se resuelven por id, igual que en el backend (occurredAt desc, id desc).
+        const event: StoredAuditEvent = {
+          id: `cmaudit${String(nextAudit).padStart(10, '0')}`,
+          riskId: String(data.riskId),
+          actorId: (data.actorId as string | null) ?? null,
+          actorName: (data.actorName as string | null) ?? null,
+          actorEmail: (data.actorEmail as string | null) ?? null,
+          eventType: String(data.eventType),
+          summary: String(data.summary),
+          changes: data.changes ?? null,
+          metadata: data.metadata ?? null,
+          occurredAt: new Date(clock),
+        }
+        nextAudit += 1
+        storedAuditEvents.push(event)
+        return { ...event }
+      }),
+      findMany: vi.fn(async (args: { where?: Record<string, any>; skip?: number; take?: number } = {}) => {
+        const rows = storedAuditEvents
+          .filter((event) => (!args.where?.riskId || event.riskId === args.where.riskId)
+            && (!args.where?.eventType || event.eventType === args.where.eventType)
+            && (!args.where?.occurredAt?.gte || event.occurredAt >= args.where.occurredAt.gte)
+            && (!args.where?.occurredAt?.lte || event.occurredAt <= args.where.occurredAt.lte))
+          .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || b.id.localeCompare(a.id))
+        const sliced = rows.slice(args.skip ?? 0, (args.skip ?? 0) + (args.take ?? rows.length))
+        return sliced.map((event) => {
+          const actor = users.find((user) => user.id === event.actorId)
+          return { ...event, actor: actor ? { id: actor.id, name: actor.name } : null }
+        })
+      }),
+      count: vi.fn(async (args: { where?: Record<string, any> } = {}) => storedAuditEvents
+        .filter((event) => (!args.where?.riskId || event.riskId === args.where.riskId)
+          && (!args.where?.eventType || event.eventType === args.where.eventType)
+          && (!args.where?.occurredAt?.gte || event.occurredAt >= args.where.occurredAt.gte)
+          && (!args.where?.occurredAt?.lte || event.occurredAt <= args.where.occurredAt.lte)).length),
+    },
     notification: {
       create: vi.fn(async ({ data }: { data: { userId: string; title: string; body: string; link: string } }) => {
         const notification: StoredNotification = { id: `cmnotification${String(nextNotification).padStart(10, '0')}`, ...data, readAt: null, createdAt: stamp() }
@@ -334,7 +378,7 @@ function makeApprovalDb() {
 
   return {
     db: db as unknown as PrismaClient,
-    state: { storedRisks, storedNotifications, storedTickets },
+    state: { storedRisks, storedNotifications, storedTickets, storedAuditEvents },
     setTicketFailure: (value: boolean) => { failTicketCreation = value },
   }
 }

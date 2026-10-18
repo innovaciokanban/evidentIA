@@ -69,12 +69,17 @@ Los modelos viven en `prisma/schema.prisma`; las migraciones, en `prisma/migrati
 npm run db:seed
 ```
 
-Crea dos usuarios con la contraseña de `SEED_PASSWORD`:
+Crea una empresa de prueba y tres usuarios con la contraseña de `SEED_PASSWORD`:
 
 - `admin@kanban.local` — rol `SUPERUSER`
-- `usuario@kanban.local` — rol `USER`
+- `empresa@kanban.local` — rol `COMPANY_ADMIN`
+- `usuario@kanban.local` — rol `COMPANY_USER`
 
 El seed rechaza `SEED_PASSWORD` por defecto en producción.
+
+Para un escenario completo de riesgos (4 riesgos con aprobación, rechazo, tickets e historial de
+auditoría) usa el seed DEMO: `npm run db:seed:demo` (limpieza: `npm run db:seed:demo:clean`).
+Detalle y garantías en [seed-demo.md](./seed-demo.md).
 
 ## Desarrollo local
 

@@ -106,7 +106,7 @@ export function createProcessPayload(draft: ProcessDraft) {
   return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
 }
 
-export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent }: { user: User; riskIntent?: { processId: string; riskId: string } | null; onConsumeRiskIntent?: () => void }) {
+export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket }: { user: User; riskIntent?: { processId: string; riskId: string } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
   const canCreate = canManageProcesses(user.role)
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
@@ -354,7 +354,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent }: { user:
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
-          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} />
+          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (

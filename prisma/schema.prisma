@@ -181,6 +181,26 @@ enum RiskApprovalStatus {
   OUTDATED
 }
 
+/**
+ * Tipos de evento del historial auditable de un riesgo. El conjunto es cerrado: la API no admite
+ * escritura de eventos desde el cliente, así que solo el backend puede emitir estos valores.
+ */
+enum RiskAuditEventType {
+  RISK_CREATED
+  RISK_UPDATED
+  CONTROL_CREATED
+  CONTROL_UPDATED
+  CONTROL_DELETED
+  EVIDENCE_CREATED
+  EVIDENCE_UPDATED
+  EVIDENCE_DELETED
+  APPROVAL_REQUESTED
+  APPROVAL_DECIDED
+  APPROVAL_OUTDATED
+  TICKET_CREATED
+  TICKET_STATUS_CHANGED
+}
+
 model User {
   id             String    @id @default(cuid())
   email          String    @unique
@@ -206,6 +226,7 @@ model User {
   riskApprovalDecisions RiskApproval[] @relation("RiskApprovalDeciders")
   notifications Notification[]
   processChanges  ProcessChange[] @relation("ProcessChangeActors")
+  riskAuditEvents RiskAuditEvent[] @relation("RiskAuditActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
   createdAt      DateTime  @default(now())
@@ -682,12 +703,42 @@ model Risk {
   controls             RiskControl[]
   evidences            RiskEvidence[]
   approvals            RiskApproval[]
+  auditEvents          RiskAuditEvent[]
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
   @@index([processId])
   @@index([riskOwnerId])
   @@index([mitigationOwnerId])
+}
+
+/**
+ * Historial cronológico y auditable del ciclo de vida de un riesgo. Solo lectura desde la
+ * aplicación: no existe endpoint que modifique o borre filas (append-only), y este modelo no
+ * expone mutaciones por PrismaClient en ninguna ruta. `actorName`/`actorEmail` quedan
+ * desnormalizados para que el evento sobreviva a la baja del usuario (mismo criterio que
+ * ProcessChange); `actorId` es null solo cuando no hay actor de sesión que atribuir.
+ * `changes` guarda los before/after por campo (formato de ProcessChange) y `metadata` los datos
+ * estructurados minimizados (ids de ciclo/ticket, decisión, comentario): nunca contraseñas,
+ * cookies, tokens ni secretos. El historial vive y muere con su riesgo (ON DELETE CASCADE), igual
+ * que controles y evidencias: borrar el riesgo elimina también sus eventos.
+ */
+model RiskAuditEvent {
+  id         String            @id @default(cuid())
+  riskId     String
+  actorId    String?
+  actorName  String?
+  actorEmail String?
+  eventType  RiskAuditEventType
+  summary    String
+  changes    Json?
+  metadata   Json?
+  occurredAt DateTime          @default(now())
+  risk       Risk              @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  actor      User?             @relation("RiskAuditActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([riskId, occurredAt])
+  @@index([eventType])
 }
 
 // Contador del último código emitido por categoría (bloqueo de fila al incrementar).

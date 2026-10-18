@@ -16,7 +16,9 @@
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:seed:demo": "tsx prisma/seed-demo.ts",
+    "db:seed:demo:clean": "tsx prisma/seed-demo.ts clean"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

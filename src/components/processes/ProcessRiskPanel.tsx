@@ -6,6 +6,7 @@ import type { Process, ProcessRisk, ProcessRiskControl, ProcessRiskEvidence, Pro
 import { askConfirm } from '../ui/useConfirm'
 import { ApprovalStatusChip } from '../approvals/ApprovalsInbox'
 import { RiskHeatmap, type HeatmapSelection } from './RiskHeatmap'
+import { RiskHistorySection } from './RiskHistorySection'
 import { draftFromRisk, emptyRiskDraft, riskPayloadFromDraft, riskTypeForProcessType, riskTypeLabelFor, riskTypeLabels, type RiskDraft } from './risk-type'
 
 type ControlDraft = { description: string; evaluation: RiskControlEvaluation }
@@ -163,7 +164,7 @@ function EvidenceEditor({ evidence, draft, saving, error, onDraftChange, onSave,
   )
 }
 
-export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocusConsumed, onBack }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; onFocusConsumed?: () => void; onBack: () => void }) {
+export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocusConsumed, onBack, onOpenApproval, onOpenTicket }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; onFocusConsumed?: () => void; onBack: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
   const [risks, setRisks] = useState<ProcessRisk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -177,6 +178,10 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
   const [evidenceEditor, setEvidenceEditor] = useState<{ evidence: ProcessRiskEvidence | null; draft: EvidenceDraft } | null>(null)
   const [riskView, setRiskView] = useState<'list' | 'heatmap'>('list')
   const [heatmapSelection, setHeatmapSelection] = useState<HeatmapSelection | null>(null)
+  // Versión del historial: se incrementa tras cada mutación (riesgo, aprobación, controles o
+  // evidencias) para que RiskHistorySection vuelva a consultar los eventos más recientes.
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const touchHistory = () => setHistoryVersion((value) => value + 1)
 
   const loadRisks = useCallback(async () => {
     setLoading(true)
@@ -256,6 +261,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       setSelected(result.risk)
       setDraft(draftFromRisk(result.risk))
       setNotice(`Riesgo ${selected ? 'actualizado' : 'creado'} correctamente.`)
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el riesgo.')
     } finally {
@@ -299,6 +305,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
         setDraft(draftFromRisk(updated))
       }
       setNotice('Riesgo enviado a aprobación. El dueño fue notificado.')
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo enviar el riesgo a aprobación.')
     } finally {
@@ -317,6 +324,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       if (updated) setSelected(updated)
       setControlEditor(null)
       setNotice(`Control ${controlEditor.control ? 'actualizado' : 'agregado'} correctamente.`)
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el control.')
     } finally {
@@ -333,6 +341,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       const updated = (await loadRisks()).find((risk) => risk.id === selected.id)
       if (updated) setSelected(updated)
       setNotice('Control eliminado correctamente.')
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el control.')
     }
@@ -354,6 +363,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       if (updated) setSelected(updated)
       setEvidenceEditor(null)
       setNotice(`Evidencia ${evidenceEditor.evidence ? 'actualizada' : 'agregada'} correctamente.`)
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar la evidencia.')
     } finally {
@@ -370,6 +380,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       const updated = (await loadRisks()).find((risk) => risk.id === selected.id)
       if (updated) setSelected(updated)
       setNotice('Evidencia eliminada correctamente.')
+      touchHistory()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la evidencia.')
     }
@@ -405,6 +416,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
       {error && !controlEditor && !evidenceEditor && <div className="form-error page-alert" role="alert">{error}<button type="button" className="button secondary small-button" onClick={() => void loadRisks()}>Reintentar</button></div>}
 
       {isDetail ? (
+        <>
         <form className="panel risk-detail-panel" onSubmit={(event) => void saveRisk(event)}>
           <div className="risk-detail-toolbar"><button type="button" className="text-button" onClick={closeDetail}>← Volver a riesgos</button>{selected && canWrite && <button type="button" className="button danger small-button" onClick={() => void removeRisk(selected)}>Eliminar riesgo</button>}</div>
           {selected && <ApprovalBar risk={selected} canWrite={canWrite} sending={sendingApproval} onRequest={() => void requestApproval()} />}
@@ -417,6 +429,8 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
           {error && !controlEditor && !evidenceEditor && <div className="form-error risk-detail-error" role="alert">{error}</div>}
           <footer className="risk-detail-footer"><button type="button" className="button secondary" onClick={closeDetail}>Cancelar</button>{canWrite && <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : selected ? 'Guardar cambios' : 'Guardar riesgo'}</button>}</footer>
         </form>
+        {selected && <RiskHistorySection processId={process.id} riskId={selected.id} refreshVersion={historyVersion} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />}
+        </>
       ) : (
          <section className="panel risk-list-panel"><div className="panel-heading risk-list-heading"><div><p className="detail-label">MATRIZ DEL PROCESO</p><h2>{riskView === 'heatmap' ? 'Matriz de calor' : 'Listado de riesgos'}</h2></div><div className="risk-view-toggle" role="group" aria-label="Vista de riesgos"><button type="button" className={riskView === 'list' ? 'is-active' : ''} aria-pressed={riskView === 'list'} onClick={() => setRiskView('list')}>Listado</button><button type="button" className={riskView === 'heatmap' ? 'is-active' : ''} aria-pressed={riskView === 'heatmap'} onClick={() => setRiskView('heatmap')}>Matriz de calor</button></div></div>{loading ? <div className="inline-loading"><span className="loader" />Cargando riesgos...</div> : risks.length === 0 ? <div className="risk-empty"><span className="risk-empty-icon">!</span><h3>Aún no hay riesgos registrados</h3><p>Documenta el primer riesgo asociado a este proceso.</p>{canWrite && <button type="button" className="button secondary" onClick={openCreate}>Crear primer riesgo</button>}</div> : riskView === 'heatmap' ? <div className="risk-heatmaps"><RiskHeatmap title="RIESGO INHERENTE" subtitle="ANTES DE CONTROLES" mode="inherent" risks={risks} selection={heatmapSelection} onSelect={toggleHeatmapCell} /><RiskHeatmap title="RIESGO RESIDUAL" subtitle="DESPUÉS DE CONTROLES" mode="residual" risks={risks} selection={heatmapSelection} onSelect={toggleHeatmapCell} />{heatmapSelection && heatmapSelectionLevel && <div className="risk-heatmap-results"><div className="risk-heatmap-results-heading"><h3>{heatmapSelection.mode === 'inherent' ? 'Inherente' : 'Residual'} · Impacto {heatmapSelection.impact} × Probabilidad {heatmapSelection.probability} <span className={`risk-level-badge ${heatmapSelectionLevel.toLowerCase()}`}><span className="risk-level-dot" />{riskScoreFor(heatmapSelection.impact, heatmapSelection.probability)} — {riskLevelLabel[heatmapSelectionLevel]}</span></h3><button type="button" className="text-button" onClick={() => setHeatmapSelection(null)}>Limpiar selección</button></div>{heatmapMatches.length === 0 ? <div className="risk-controls-empty">Sin riesgos en esta celda.</div> : heatmapMatches.map((risk) => <button type="button" className="risk-heatmap-result" key={risk.id} onClick={() => openEdit(risk)}><span className="risk-heatmap-result-name"><strong>{risk.name}</strong><small>{risk.code ? `${risk.code} · ` : ''}{risk.riskOwner?.name ?? 'Sin asignar'}</small></span><span>{renderLevel(heatmapSelection.mode === 'inherent' ? risk.inherentLevel : risk.residualLevel, heatmapSelection.mode === 'inherent' ? risk.inherentScore : risk.residualScore)}</span><span className="risk-list-arrow">→</span></button>)}</div>}</div> : <div className="risk-list"><div className="risk-list-head"><span>Código</span><span>Riesgo</span><span>Tipo</span><span>Dueño</span><span>Tratamiento</span><span>Aceptación</span><span>Inherente</span><span>Residual</span><span /></div>{risks.map((risk) => <article className="risk-list-item" key={risk.id}><button type="button" className="risk-list-main" onClick={() => openEdit(risk)}><span className="risk-list-code">{risk.code ?? '—'}</span><span className="risk-list-name"><strong>{risk.name}</strong><small>{risk.description}</small></span><span>{riskTypeLabelFor(risk.riskType)}</span><span>{risk.riskOwner?.name ?? 'Sin asignar'}</span><span className={`risk-treatment-chip ${risk.treatment ? risk.treatment.toLowerCase() : 'none'}`}>{treatmentLabelFor(risk.treatment)}</span><span className={`risk-acceptance-chip ${risk.acceptanceStatus.toLowerCase()}`}>{acceptanceLabelFor(risk.acceptanceStatus)}</span><span>{renderLevel(risk.inherentLevel, risk.inherentScore)}</span><span>{renderLevel(risk.residualLevel, risk.residualScore)}</span><span className="risk-list-arrow">→</span></button>{canWrite && <button type="button" className="risk-list-delete" aria-label={`Eliminar ${risk.name}`} onClick={() => void removeRisk(risk)}>×</button>}</article>)}</div>}</section>
       )}

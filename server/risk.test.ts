@@ -47,12 +47,14 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const storedRisks: StoredRisk[] = []
   const storedProcessChanges: string[] = []
   const storedNotifications: StoredNotification[] = []
+  const storedAuditEvents: Array<Record<string, unknown>> = []
   let nextProcess = 3
   let nextRisk = 1
   let nextControl = 1
   let nextEvidence = 1
   let nextApproval = 1
   let nextNotification = 1
+  let nextAudit = 1
   const processFor = (id: string) => storedProcesses.find((item) => item.id === id) ?? null
   const processView = (item: TestProcess) => ({ ...item, company: { id: item.companyId }, responsible: null })
   const riskFor = (id: string) => storedRisks.find((item) => item.id === id) ?? null
@@ -211,6 +213,15 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         for (const approval of matches) Object.assign(approval, data, { updatedAt: new Date() })
         return { count: matches.length }
       }),
+    },
+    riskAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const event = { id: `cmaudit${String(nextAudit++).padStart(12, '0')}`, actor: null, occurredAt: new Date(), ...data }
+        storedAuditEvents.push(event)
+        return event
+      }),
+      findMany: vi.fn(async () => storedAuditEvents.map((event) => ({ ...event }))),
+      count: vi.fn(async () => storedAuditEvents.length),
     },
     notification: {
       create: vi.fn(async ({ data }: { data: Omit<StoredNotification, 'id' | 'readAt' | 'createdAt'> }) => {

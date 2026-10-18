@@ -253,6 +253,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const consumeRiskIntent = useCallback(() => setRiskIntent(null), [])
   const [approvalFocusId, setApprovalFocusId] = useState<string | null>(null)
   const consumeApprovalFocus = useCallback(() => setApprovalFocusId(null), [])
+  // Foco de ticket: llega desde el historial de un riesgo ("Ver ticket") y se consume al abrirlo.
+  const [ticketFocusId, setTicketFocusId] = useState<string | null>(null)
+  const consumeTicketFocus = useCallback(() => setTicketFocusId(null), [])
   const refreshInbox = useCallback(async () => {
     try {
       const [inbox, pending] = await Promise.all([
@@ -290,6 +293,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   function openRisk(processId: string, riskId: string) {
     setRiskIntent({ processId, riskId })
     navigateToView('processes')
+  }
+  // Desde el historial de un riesgo: abrir la aprobación o el ticket concretos en su vista.
+  function openApproval(approvalId: string) {
+    setApprovalFocusId(approvalId)
+    navigateToView('approvals')
+  }
+  function openTicket(ticketId: string) {
+    setTicketFocusId(ticketId)
+    navigateToView('tickets')
   }
   async function logout() {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
@@ -395,10 +407,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </div>
         </header>
         {view === 'dashboard' && <Dashboard user={user} onNavigate={navigateToView} />}
-        {view === 'tickets' && <Tickets user={user} onOpenRisk={openRisk} />}
-        {view === 'approvals' && <ApprovalsInbox user={user} initialApprovalId={approvalFocusId} onConsumeInitialId={consumeApprovalFocus} onOpenRisk={openRisk} onChanged={() => void refreshInbox()} />}
+    {view === 'tickets' && <Tickets user={user} onOpenRisk={openRisk} initialTicketId={ticketFocusId} onConsumeInitialTicketId={consumeTicketFocus} />}
+    {view === 'approvals' && <ApprovalsInbox user={user} initialApprovalId={approvalFocusId} onConsumeInitialId={consumeApprovalFocus} onOpenRisk={openRisk} onChanged={() => void refreshInbox()} />}
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
-        {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} />}
+        {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} onOpenApproval={openApproval} onOpenTicket={openTicket} />}
         {(view === 'companies' || view === 'swot' || view === 'recommendations' || view === 'action-plans') && (
           <Companies user={user} intent={companiesIntent} onConsumeIntent={consumeCompaniesIntent} diagnosticActive={diagnosticActive} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />
         )}
@@ -1638,7 +1650,7 @@ export function StrategyWeightingScreen({ diagnostic, canValue, initialStrategie
 
 function SWOTItemForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: SWOTDraft; setDraft: React.Dispatch<React.SetStateAction<SWOTDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { const detected = swotTypes.find((item) => item.value === draft.type); const detectedSymbol = draft.type === 'STRENGTH' ? '+' : draft.type === 'WEAKNESS' ? '−' : draft.type === 'OPPORTUNITY' ? '↗' : '!'; return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className={`company-modal-icon factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>{isEdit ? 'Editar factor' : 'Agregar factor'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información del factor.' : 'Detectado automáticamente'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{!isEdit && <div className="factor-type-detect"><span className={`swot-symbol factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</span><div className="factor-type-copy"><p className="detail-label">Tipo detectado</p><strong>{detected?.label}</strong></div><span className="factor-type-badge">Detectado automáticamente</span></div>}{isEdit && <label>Tipo<input type="text" value={detected?.label ?? ''} readOnly /></label>}<label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el factor..." rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar factor' : 'Agregar factor'}</button></div></form></div> }
 
-function Tickets({ user, onOpenRisk }: { user: User; onOpenRisk: (processId: string, riskId: string) => void }) {
+function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: { user: User; onOpenRisk: (processId: string, riskId: string) => void; initialTicketId?: string | null; onConsumeInitialTicketId?: () => void }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [selected, setSelected] = useState<Ticket | null>(null)
@@ -1666,6 +1678,23 @@ function Tickets({ user, onOpenRisk }: { user: User; onOpenRisk: (processId: str
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 350); return () => window.clearTimeout(timer) }, [search])
   useEffect(() => { const timer = window.setTimeout(() => { void loadTickets() }, 0); return () => window.clearTimeout(timer) }, [loadTickets])
   useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
+  // Llegando desde el historial de un riesgo ("Ver ticket"): el ticket se abre desde el servidor
+  // (la lista puede estar paginada o filtrada) y el foco se consume para no reabrirlo al volver.
+  useEffect(() => {
+    if (!initialTicketId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await api<{ ticket: Ticket }>(`/tickets/${initialTicketId}`)
+        if (!cancelled) { setSelected(result.ticket); setShowForm(false) }
+      } catch {
+        // Si el ticket no es visible para esta sesión, la vista queda en su lista habitual.
+      } finally {
+        if (!cancelled) onConsumeInitialTicketId?.()
+      }
+    })()
+    return () => { cancelled = true }
+  }, [initialTicketId, onConsumeInitialTicketId])
   function startCreate() { setSelected(null); setDraft(emptyDraft); setShowForm(true) }
   function startEdit(ticket: Ticket) { setSelected(ticket); setDraft({ title: ticket.title, description: ticket.description, priority: ticket.priority, status: ticket.status, assignedToId: ticket.assignedTo?.id ?? '' }); setShowForm(true) }
   async function saveTicket(event: React.FormEvent<HTMLFormElement>) {

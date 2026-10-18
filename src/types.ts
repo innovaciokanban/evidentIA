@@ -312,6 +312,48 @@ export type ProcessChange = {
   changes: ProcessChangeItem[]
 }
 
+// Historial del ciclo de vida de un riesgo (RiskAuditEvent). La API es cerrada: el backend solo
+// emite estos tipos de evento y solo admite filtrar por ellos (append-only, sin escritura).
+export type RiskAuditEventType =
+  | 'RISK_CREATED'
+  | 'RISK_UPDATED'
+  | 'CONTROL_CREATED'
+  | 'CONTROL_UPDATED'
+  | 'CONTROL_DELETED'
+  | 'EVIDENCE_CREATED'
+  | 'EVIDENCE_UPDATED'
+  | 'EVIDENCE_DELETED'
+  | 'APPROVAL_REQUESTED'
+  | 'APPROVAL_DECIDED'
+  | 'APPROVAL_OUTDATED'
+  | 'TICKET_CREATED'
+  | 'TICKET_STATUS_CHANGED'
+
+export type RiskAuditMetadata = {
+  approvalId?: string
+  ticketId?: string
+  controlId?: string
+  evidenceId?: string
+  decision?: 'APPROVED' | 'REJECTED'
+  comment?: string
+  previousStatus?: string
+  status?: string
+}
+
+export type RiskAuditEvent = {
+  id: string
+  riskId: string
+  eventType: RiskAuditEventType
+  summary: string
+  actorId: string | null
+  actor: Pick<User, 'id' | 'name'> | null
+  actorName: string | null
+  actorEmail: string | null
+  occurredAt: string
+  changes: ProcessChangeItem[]
+  metadata: RiskAuditMetadata | null
+}
+
 export type ProcessKpi = {
   id: string
   processId: string
