@@ -2,20 +2,19 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { KPICard } from '../ui/KPICard'
 import { LoadingState } from '../ui/LoadingState'
-import { AddProcessCard, ProcessCard, type ProcessCategory, type ProcessStatus } from './ProcessCard'
+import { ProcessMapBand, type ProcessCategory } from './ProcessCard'
 import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
 import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ProcessRiskPanel } from './ProcessRiskPanel'
 import { ProcessChangeHistory } from './ProcessChangeHistory'
 import { ProcessProcedurePanel } from './ProcessProcedurePanel'
 import { ProcessAuditPanel } from './ProcessAuditPanel'
-import { ArrowDownIcon, ArrowRightIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
+import { ArrowDownIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
 
 export const categoryOf: Record<ProcessType, ProcessCategory> = { STRATEGIC: 'estrategico', MISSIONAL: 'misional', SUPPORT: 'apoyo' }
-const visualStatusOf: Record<Process['status'], ProcessStatus> = { ACTIVE: 'active', INACTIVE: 'paused' }
 export const canManageProcesses = (role: User['role']) => role === 'SUPERUSER' || role === 'COMPANY_ADMIN'
 
 export function groupProcesses(processes: Process[]): Record<ProcessCategory, Process[]> {
@@ -323,6 +322,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
 
   async function saveProcess(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!canCreate) return
     if (saving) return
     setFormError('')
     setNotice('')
@@ -452,41 +452,14 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
           <div className="process-map-body">
             {bands.map((band, index) => (
               <Fragment key={band.key}>
-                <section className={`process-band ${band.key}`}>
-                  <header className="process-band-head">
-                    <span className="process-band-icon">{band.icon}</span>
-                    <div className="process-band-copy">
-                      <div className="process-band-title">
-                        <h3>{band.title}</h3>
-                        <span className="process-band-role">{band.role}</span>
-                      </div>
-                      <p>{band.description}</p>
-                    </div>
-                  </header>
-                  <div className="process-band-flow">
-                    {grouped[band.key].map((process, processIndex) => (
-                      <Fragment key={process.id}>
-                        {processIndex > 0 && <span className="process-arrow"><ArrowRightIcon size={16} /></span>}
-                        <ProcessCard
-                          name={process.name}
-                          code={process.code}
-                          objective={process.objective}
-                          description={process.description || ''}
-                          category={band.key}
-                          status={visualStatusOf[process.status]}
-                          responsible={process.responsible?.name ?? null}
-                          onOpen={() => openProcess(process)}
-                          onDelete={canCreate ? () => void removeProcess(process) : undefined}
-                        />
-                      </Fragment>
-                    ))}
-                    <AddProcessCard
-                      onClick={canCreate ? () => startCreate(band.type) : undefined}
-                      disabled={!canCreate}
-                      title={canCreate ? undefined : 'Solo administradores pueden crear procesos.'}
-                    />
-                  </div>
-                </section>
+                <ProcessMapBand
+                  band={band}
+                  processes={grouped[band.key]}
+                  canCreate={canCreate}
+                  onOpenProcess={openProcess}
+                  onCreateProcess={() => startCreate(band.type)}
+                  onDeleteProcess={(process) => void removeProcess(process)}
+                />
                 {index < bands.length - 1 && (
                   <div className="process-flow-link" aria-hidden="true">
                     <span className="process-flow-line" />

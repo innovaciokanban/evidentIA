@@ -1112,6 +1112,31 @@ describe('processes API', () => {
     expect((await foreignAdmin.get(`/api/processes/${processFixture.id}/change-history`)).status).toBe(404)
     expect((await foreignAdmin.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(404)
   })
+
+  it('lets the system admin delete a process without history while company users stay read-only', async () => {
+    const systemAdmin = request.agent(createApp(makeDb()))
+    await systemAdmin.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    // Sin historial de cambios, el administrador del sistema puede eliminar un proceso.
+    expect((await systemAdmin.get('/api/processes')).body.processes).toHaveLength(1)
+    expect((await systemAdmin.delete(`/api/processes/${processFixture.id}`)).status).toBe(204)
+    expect((await systemAdmin.get('/api/processes')).body.processes).toHaveLength(0)
+
+    // La regla de integridad protege a los procesos con historial (el alta registra la entrada CREATED).
+    const created = await systemAdmin.post('/api/processes').send({ name: 'Proceso temporal', type: 'SUPPORT', category: 'apoyo', objective: 'Objetivo temporal', companyId: company.id })
+    expect(created.status).toBe(201)
+    expect((await systemAdmin.delete(`/api/processes/${created.body.process.id}`)).status).toBe(409)
+
+    // COMPANY_USER solo consulta: lectura permitida y cualquier escritura responde 403.
+    const reader = request.agent(createApp(makeDb('COMPANY_USER')))
+    await reader.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await reader.get('/api/processes')).status).toBe(200)
+    expect((await reader.get(`/api/processes/${processFixture.id}`)).status).toBe(200)
+    expect((await reader.post('/api/processes').send({ name: 'No permitido', type: 'SUPPORT', category: 'apoyo', objective: 'Objetivo' })).status).toBe(403)
+    expect((await reader.patch(`/api/processes/${processFixture.id}`).send({ critical: true })).status).toBe(403)
+    expect((await reader.delete(`/api/processes/${processFixture.id}`)).status).toBe(403)
+    expect((await reader.get('/api/processes')).body.processes.some((item: { id: string }) => item.id === processFixture.id)).toBe(true)
+  })
 })
 
 describe('dashboard API', () => {

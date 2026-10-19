@@ -68,4 +68,33 @@ describe('ProcessForm embebido', () => {
     expect(markup).toContain('EDITAR PROCESO')
     expect(markup).toContain('Proceso existente')
   })
+
+  it('en solo lectura oculta las acciones de edición pero conserva la navegación', () => {
+    const markup = renderToStaticMarkup(
+      <ProcessForm
+        draft={{ ...draft, name: 'Proceso existente' }}
+        setDraft={vi.fn() as unknown as Dispatch<SetStateAction<ProcessDraft>>}
+        users={[]}
+        companies={[company]}
+        editing
+        readOnly
+        saving={false}
+        error=""
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+        onOpenKpis={vi.fn()}
+        onOpenRisks={vi.fn()}
+        onOpenChangeHistory={vi.fn()}
+        onOpenProcedures={vi.fn()}
+        onOpenAudits={vi.fn()}
+      />,
+    )
+
+    expect(markup).toContain('VER PROCESO')
+    expect(markup).toContain('Volver al mapa')
+    expect(markup).not.toContain('Guardar cambios')
+    expect(markup).not.toContain('Guardar proceso')
+    expect(markup).toContain('<fieldset disabled')
+    expect(markup).toContain('Riesgos')
+  })
 })

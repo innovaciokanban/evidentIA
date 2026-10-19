@@ -1,4 +1,7 @@
+import { Fragment } from 'react'
+import type { ReactNode } from 'react'
 import { ArrowRightIcon, PlusIcon, WorkflowIcon } from './ProcessIcons'
+import type { Process } from '../../types'
 
 /** Categoría del proceso dentro del mapa: define el tono visual de la tarjeta. */
 export type ProcessCategory = 'estrategico' | 'misional' | 'apoyo'
@@ -54,5 +57,54 @@ export function AddProcessCard({ onClick, disabled = false, title }: AddProcessC
       <span className="process-add-icon"><PlusIcon size={16} /></span>
       Agregar proceso
     </button>
+  )
+}
+
+/** Estado visual del proceso en el mapa. La fuente de verdad es el backend y se traduce al entrar. */
+const visualStatusOf: Record<Process['status'], ProcessStatus> = { ACTIVE: 'active', INACTIVE: 'paused' }
+
+export type ProcessMapBandProps = {
+  band: { key: ProcessCategory; title: string; role: string; description: string; icon: ReactNode }
+  processes: Process[]
+  canCreate: boolean
+  onOpenProcess: (process: Process) => void
+  onCreateProcess: () => void
+  onDeleteProcess: (process: Process) => void
+}
+
+/** Banda del mapa de procesos. Las acciones de gestión solo se muestran con permiso de escritura. */
+export function ProcessMapBand({ band, processes, canCreate, onOpenProcess, onCreateProcess, onDeleteProcess }: ProcessMapBandProps) {
+  return (
+    <section className={`process-band ${band.key}`}>
+      <header className="process-band-head">
+        <span className="process-band-icon">{band.icon}</span>
+        <div className="process-band-copy">
+          <div className="process-band-title">
+            <h3>{band.title}</h3>
+            <span className="process-band-role">{band.role}</span>
+          </div>
+          <p>{band.description}</p>
+        </div>
+      </header>
+      <div className="process-band-flow">
+        {processes.map((process, processIndex) => (
+          <Fragment key={process.id}>
+            {processIndex > 0 && <span className="process-arrow"><ArrowRightIcon size={16} /></span>}
+            <ProcessCard
+              name={process.name}
+              code={process.code}
+              objective={process.objective}
+              description={process.description || ''}
+              category={band.key}
+              status={visualStatusOf[process.status]}
+              responsible={process.responsible?.name ?? null}
+              onOpen={() => onOpenProcess(process)}
+              onDelete={canCreate ? () => onDeleteProcess(process) : undefined}
+            />
+          </Fragment>
+        ))}
+        {canCreate && <AddProcessCard onClick={onCreateProcess} />}
+      </div>
+    </section>
   )
 }
