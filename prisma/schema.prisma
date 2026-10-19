@@ -387,8 +387,16 @@ model ActionPlan {
   strategySourceRef String?
   strategyTitle String?
   strategyDescription String?
+  /**
+   * Riesgo cuyo plan de mitigación ejecuta este plan de acción. Nullable y sin unicidad: un plan
+   * puede existir sin estar vinculado (los planes de análisis estratégico, p. ej.) y un riesgo puede
+   * acumular varios planes. El plan sobrevive a la baja del riesgo (SetNull), igual que el resto de
+   * los enlaces débiles del proyecto: el diagnóstico al que pertenece no se toca.
+   */
+  riskId         String?
   diagnostic     QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
   createdBy      User              @relation("CreatedActionPlans", fields: [createdById], references: [id], onDelete: Restrict)
+  risk           Risk?             @relation(fields: [riskId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   items          ActionItem[]
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
@@ -396,6 +404,7 @@ model ActionPlan {
   @@index([diagnosticId])
   @@index([createdById])
   @@index([status])
+  @@index([riskId])
   @@unique([diagnosticId, strategySource, strategySourceRef])
 }
 
@@ -704,6 +713,8 @@ model Risk {
   evidences            RiskEvidence[]
   approvals            RiskApproval[]
   auditEvents          RiskAuditEvent[]
+  /** Planes de acción que ejecutan el plan de mitigación de este riesgo (pueden ser varios). */
+  mitigationPlans      ActionPlan[]
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 

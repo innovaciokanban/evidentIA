@@ -106,7 +106,7 @@ export function createProcessPayload(draft: ProcessDraft) {
   return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
 }
 
-export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket }: { user: User; riskIntent?: { processId: string; riskId: string } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
+export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket }: { user: User; riskIntent?: { processId: string; riskId: string; section?: 'residual' | null } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
   const canCreate = canManageProcesses(user.role)
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
@@ -123,8 +123,9 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
-  // Riesgo a enfocar al entrar desde la bandeja de aprobaciones o desde un ticket de aprobación.
-  const [riskFocus, setRiskFocus] = useState<string | null>(null)
+  // Riesgo a enfocar al entrar desde la bandeja de aprobaciones, desde un ticket o desde una
+  // notificación; el section opcional pide llevar además a una sección concreta del detalle.
+  const [riskFocus, setRiskFocus] = useState<{ riskId: string; section?: 'residual' | null } | null>(null)
 
   const loadProcesses = useCallback(async (): Promise<boolean> => {
     setLoading(true)
@@ -160,13 +161,13 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     return () => window.clearTimeout(timer)
   }, [loadProcesses, loadCompanies])
 
-  // Entrada desde la bandeja de aprobaciones o desde un ticket: abre el panel de riesgos del
-  // proceso y deja el riesgo indicado listo para enfocarse una vez cargada su lista.
+  // Entrada desde la bandeja de aprobaciones, un ticket o una notificación: abre el panel de
+  // riesgos del proceso y deja el riesgo (y su sección) listo para enfocarse al cargar la lista.
   useEffect(() => {
     if (!riskIntent || loading) return
     const process = processes.find((item) => item.id === riskIntent.processId)
     if (process) {
-      setRiskFocus(riskIntent.riskId)
+      setRiskFocus({ riskId: riskIntent.riskId, section: riskIntent.section ?? null })
       openRisks(process)
     }
     onConsumeRiskIntent?.()
@@ -354,7 +355,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
-          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />
+          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus?.riskId ?? null} focusRiskSection={riskFocus?.section ?? null} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (

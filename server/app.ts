@@ -17,6 +17,7 @@ import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, stra
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
+import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -1001,6 +1002,64 @@ const ticketStatusToActionItemStatus: Record<TicketStatus, ActionItemStatus> = {
   [TicketStatus.CLOSED]: ActionItemStatus.COMPLETED,
 }
 
+/**
+ * Aviso "el plan de mitigación quedó completo": se lo manda al creador del riesgo y a su dueño
+ * (sin duplicar ids si son la misma persona; si un riesgo legado no tiene evento de creación o no
+ * tiene dueño, el destinatario faltante se descarta y con ninguno no se avisa).
+ *
+ * Se ejecuta DESPUÉS de escribir la actividad completada y DENTRO de la misma transacción de
+ * negocio: la condición se evalúa sobre los datos reales de esa transacción (misma vista de los
+ * planes y actividades que acaba de modificar la petición), no sobre un snapshot leído antes de
+ * empezar. Así dos peticiones concurrentes que cierren el último pendiente juntas no pueden dejar
+ * el plan completo sin aviso, porque cada transacción ve primero su propia escritura y luego
+ * espera la otra antes de decidir.
+ *
+ * El aviso es idempotente por diseño (mismo link por usuario): antes de insertar se busca ya
+ * existente con ese link, y solo si no está se crea. La comprobación vive en la misma
+ * transacción, así que en la carrera entre dos cierres simultáneos la segunda transacción se queda
+ * esperando y al leer ve la notificación que ya insertó la primera. Preferimos que en el peor
+ * caso (una doble escritura de la notificación a milisegundos de distancia, ante el mismo enlace)
+ * se repita el aviso a que un cierre concurrente deje el riesgo completo sin notificar a nadie.
+ */
+const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlanId: string): Promise<void> => {
+  const plan = await client.actionPlan.findUnique({ where: { id: actionPlanId }, select: { id: true, riskId: true } })
+  // Plan sin riesgo asociado (p. ej. las tareas generadas desde ponderación, o un plan todavía
+  // no vinculado): no hay riesgo cuya mitigación haya terminado.
+  if (!plan?.riskId) return
+  const risk = await client.risk.findUnique({
+    where: { id: plan.riskId },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      processId: true,
+      riskOwnerId: true,
+      // El creador no es una columna del riesgo: queda en el historial como RISK_CREATED.
+      auditEvents: {
+        where: { eventType: RiskAuditEventType.RISK_CREATED },
+        orderBy: { occurredAt: 'asc' },
+        take: 1,
+        select: { actorId: true },
+      },
+      // El estado se lee de las relaciones persistidas: si el riesgo no tiene planes, o uno de
+      // sus planes quedó sin actividades, no hay nada completado.
+      mitigationPlans: { select: { id: true, items: { select: { status: true } } } },
+    },
+  })
+  if (!risk) return
+  if (!mitigationPlansCompleted(risk.mitigationPlans)) return
+  const candidateIds = mitigationNotificationRecipients(risk.auditEvents[0]?.actorId, risk.riskOwnerId)
+  if (candidateIds.length === 0) return
+  const recipients = await client.user.findMany({ where: { id: { in: candidateIds } }, select: { id: true } })
+  const link = riskResidualSectionLink(risk.processId, risk.id)
+  const { title, body } = mitigationCompletedNotification(risk)
+  for (const recipient of recipients) {
+    const existing = await client.notification.findFirst({ where: { userId: recipient.id, link }, select: { id: true } })
+    if (existing) continue
+    await client.notification.create({ data: { userId: recipient.id, title, body, link } })
+  }
+}
+
 const ticketDataFromActionItem = (item: { title: string; description: string; status: ActionItemStatus; priority: Priority; responsibleId: string | null; dueDate: Date | null; actionItemId: string; createdById: string }) => ({
   title: item.title,
   description: item.description,
@@ -1853,6 +1912,41 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const risks = await db.risk.findMany({ where: { processId: process.id }, include: riskInclude, orderBy: { createdAt: 'asc' } })
     response.json({ risks: risks.map(riskView) })
+  }))
+
+  /**
+   * Planes de acción que el detalle de un riesgo puede vincular a su plan de mitigación. Son los
+   * planes de los diagnósticos de la misma empresa que el proceso (el vínculo plan↔riesgo solo se
+   * permite dentro de la compañía), con su progreso de actividades y el riesgo al que apuntan hoy,
+   * para que la interfaz muestre los ya vinculados y ofrezca solo los disponibles. Sin este
+   * enlace no hay forma de poblar ActionPlan.riskId desde la UI y el aviso de mitigación completa
+   * no puede dispararse al cerrar las actividades.
+   */
+  app.get('/api/processes/:processId/action-plans', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const plans = await db.actionPlan.findMany({
+      where: { diagnostic: { companyId: process.companyId } },
+      select: {
+        id: true,
+        title: true,
+        riskId: true,
+        items: { select: { status: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    })
+    response.json({
+      actionPlans: plans.map((plan) => ({
+        id: plan.id,
+        title: plan.title,
+        riskId: plan.riskId,
+        itemsTotal: plan.items.length,
+        itemsCompleted: plan.items.filter((item) => item.status === ActionItemStatus.COMPLETED).length,
+      })),
+    })
   }))
 
   app.post('/api/processes/:processId/risks', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -3351,6 +3445,21 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     response.json({ actionPlans: actionPlans.map(actionPlanView) })
   }))
 
+  /**
+   * El vínculo plan↔riesgo se valida contra la base, nunca a ciegas: el cliente puede desvincular
+   * con null, o escoger un riesgo que exista y que pertenezca a la misma empresa del diagnóstico
+   * del plan. El riesgo de destino y los destinatarios del aviso quedan siempre en manos del
+   * backend (el aviso se deriva del riesgo guardado, no de lo que pida quien completó la tarea).
+   */
+  const resolveMitigationPlanRisk = async (riskId: string | null, companyId: string): Promise<{ ok: true; riskId: string | null } | { ok: false; error: string }> => {
+    if (riskId === null) return { ok: true, riskId: null }
+    const risk = await db.risk.findUnique({ where: { id: riskId }, select: { id: true, process: { select: { companyId: true } } } })
+    if (!risk || risk.process.companyId !== companyId) {
+      return { ok: false, error: 'Risk not found' }
+    }
+    return { ok: true, riskId: risk.id }
+  }
+
   app.post('/api/diagnostics/:id/action-plans', authMiddleware, asyncHandler(async (request, response) => {
     const parsed = actionPlanCreateSchema.safeParse(request.body)
     if (!parsed.success) {
@@ -3362,7 +3471,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Diagnostic not found' })
       return
     }
-    const actionPlan = await db.actionPlan.create({ data: { diagnosticId: diagnostic.id, title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, createdById: request.user!.id }, include: actionPlanInclude })
+    const planData: Prisma.ActionPlanUncheckedCreateInput = { diagnosticId: diagnostic.id, title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, createdById: request.user!.id }
+    if (parsed.data.riskId !== undefined) {
+      const linked = await resolveMitigationPlanRisk(parsed.data.riskId, diagnostic.company.id)
+      if (!linked.ok) {
+        response.status(400).json({ error: linked.error })
+        return
+      }
+      planData.riskId = linked.riskId
+    }
+    const actionPlan = await db.actionPlan.create({ data: planData, include: actionPlanInclude })
     response.status(201).json({ actionPlan: actionPlanView(actionPlan) })
   }))
 
@@ -3386,7 +3504,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Action plan not found' })
       return
     }
-    const actionPlan = await db.actionPlan.update({ where: { id: existing.id }, data: parsed.data, include: actionPlanInclude })
+    const data: Prisma.ActionPlanUncheckedUpdateInput = { ...parsed.data }
+    if (parsed.data.riskId !== undefined) {
+      const linked = await resolveMitigationPlanRisk(parsed.data.riskId, existing.diagnostic.company.id)
+      if (!linked.ok) {
+        response.status(400).json({ error: linked.error })
+        return
+      }
+      data.riskId = linked.riskId
+    }
+    const actionPlan = await db.actionPlan.update({ where: { id: existing.id }, data, include: actionPlanInclude })
     response.json({ actionPlan: actionPlanView(actionPlan) })
   }))
 
@@ -3537,6 +3664,11 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     const { item, ticket } = await db.$transaction(async (tx) => {
       const created = await tx.actionItem.create({ data: { actionPlanId: actionPlan.id, ...parsed.data }, include: actionItemInclude })
+      // Alta de una actividad ya completada: también puede cerrar la mitigación del riesgo, así
+      // que se corre la misma comprobación (si el plan no estaba completo, no hace nada).
+      if (created.status === ActionItemStatus.COMPLETED) {
+        await notifyMitigationPlanCompleted(tx, created.actionPlanId)
+      }
       const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
       const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
       return { item: created, ticket: linkedTicket }
@@ -3573,6 +3705,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
+    // Transición de estado que cierra la mitigación: solo cuando la actividad pasa a COMPLETED
+    // desde otro estado se reevalúa el plan de mitigación del riesgo. Editar un ítem ya
+    // completado sin tocar su estado, o marcarlo CANCELLED, no dispara el aviso.
+    const justCompleted = parsed.data.status === ActionItemStatus.COMPLETED && existing.status !== ActionItemStatus.COMPLETED
     const item = await db.$transaction(async (tx) => {
       const updated = await tx.actionItem.update({ where: { id: existing.id }, data: parsed.data, include: actionItemInclude })
       const linked = await tx.ticket.findUnique({ where: { actionItemId: updated.id }, select: { id: true } })
@@ -3589,6 +3725,9 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         }
       } else {
         await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
+      }
+      if (justCompleted) {
+        await notifyMitigationPlanCompleted(tx, updated.actionPlanId)
       }
       return updated
     })
@@ -3690,7 +3829,13 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     const ticket = await db.$transaction(async (tx) => {
       const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
       if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
+        // La tarea es la fuente de verdad del progreso del plan; el estado antes de escribirlo
+        // decide si esto cierra la mitigación (p. ej. ticket RESOLVED -> actividad COMPLETED).
+        const itemBefore = await tx.actionItem.findUnique({ where: { id: existing.actionItemId }, select: { status: true, actionPlanId: true } })
         await tx.actionItem.update({ where: { id: existing.actionItemId }, data: { status: ticketStatusToActionItemStatus[newStatus] } })
+        if (itemBefore && itemBefore.status !== ActionItemStatus.COMPLETED && ticketStatusToActionItemStatus[newStatus] === ActionItemStatus.COMPLETED) {
+          await notifyMitigationPlanCompleted(tx, itemBefore.actionPlanId)
+        }
       }
       // Trazabilidad en el historial del riesgo de origen: solo los tickets derivados de una
       // aprobación llevan riskApprovals (0 o 1), y solo los cambios de estado relevantes quedan

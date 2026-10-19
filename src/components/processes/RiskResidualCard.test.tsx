@@ -79,4 +79,11 @@ describe('RiskResidualCard', () => {
     expect(markup).not.toContain('Agrega al menos un control')
     expect(markup).not.toContain('disabled')
   })
+
+  it('expone el ancla de la notificación de plan de mitigación completado', () => {
+    // El link "risks/<proceso>/<riesgo>/residual" apunta a este id para llevar al usuario hasta la
+    // calificación residual en cuanto se cerraron las actividades del plan.
+    const markup = renderToStaticMarkup(<RiskResidualCard risk={makeRisk({ controls: [makeControl()] })} draft={draft} onImpact={noop} onProbability={noop} />)
+    expect(markup).toContain('id="risk-residual-section"')
+  })
 })

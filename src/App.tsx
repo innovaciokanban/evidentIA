@@ -14,6 +14,7 @@ import { NotificationsBell } from './components/approvals/NotificationsBell'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
 import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
+import { parseNotificationLink } from './notification-links'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -249,7 +250,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [pendingApprovals, setPendingApprovals] = useState(0)
-  const [riskIntent, setRiskIntent] = useState<{ processId: string; riskId: string } | null>(null)
+  const [riskIntent, setRiskIntent] = useState<{ processId: string; riskId: string; section?: 'residual' | null } | null>(null)
   const consumeRiskIntent = useCallback(() => setRiskIntent(null), [])
   const [approvalFocusId, setApprovalFocusId] = useState<string | null>(null)
   const consumeApprovalFocus = useCallback(() => setApprovalFocusId(null), [])
@@ -271,15 +272,20 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   }, [])
   useEffect(() => { void refreshInbox() }, [refreshInbox])
   // Abrir una notificación la marca como leída (optimista, con respaldo en el servidor) y navega
-  // a su destino; "approvals/<id>" lleva a la revisión concreta en la bandeja.
+  // a su destino; el parser decide si es una aprobación o un riesgo y, en ese caso, si hay que
+  // llevar a una sección concreta (p. ej. "risks/<processId>/<riskId>/residual").
   async function openNotification(notification: AppNotification) {
     setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: item.readAt ?? new Date().toISOString() } : item))
     if (!notification.readAt) setUnreadNotifications((count) => Math.max(0, count - 1))
     void api(`/notifications/${notification.id}`, { method: 'PATCH' }).catch(() => undefined)
-    const [section, id] = notification.link.split('/')
-    if (section === 'approvals') {
-      setApprovalFocusId(id ?? null)
+    const target = parseNotificationLink(notification.link)
+    if (target?.kind === 'approval') {
+      setApprovalFocusId(target.approvalId)
       navigateToView('approvals')
+    }
+    if (target?.kind === 'risk') {
+      setRiskIntent({ processId: target.processId, riskId: target.riskId, section: target.section })
+      navigateToView('processes')
     }
   }
   function markAllNotificationsRead() {

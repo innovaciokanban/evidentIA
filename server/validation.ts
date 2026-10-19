@@ -345,6 +345,10 @@ export const actionPlanCreateSchema = z.object({
   title: z.string().trim().min(3).max(120),
   description: z.string().trim().min(3).max(5000),
   status: actionPlanStatusSchema.optional(),
+  // Riesgo cuyo plan de mitigación ejecuta este plan. Solo nace desde Prisma (cuid); el endpoint
+  // comprueba además que el riesgo exista y sea de la misma empresa que el diagnóstico. null
+  // desvincula el plan de un riesgo.
+  riskId: z.string().cuid().nullable().optional(),
 })
 
 export const actionPlanUpdateSchema = actionPlanCreateSchema.partial().refine(

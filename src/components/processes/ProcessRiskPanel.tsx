@@ -11,6 +11,8 @@ import { draftFromRisk, emptyRiskDraft, riskPayloadFromDraft, riskTypeForProcess
 
 type ControlDraft = { description: string; evaluation: RiskControlEvaluation }
 type EvidenceDraft = { name: string; description: string; url: string }
+/** Plan de acción de la empresa, con su vínculo actual y su progreso, para poder vincularlo al riesgo. */
+type MitigationPlanOption = { id: string; title: string; riskId: string | null; itemsTotal: number; itemsCompleted: number }
 
 const emptyControlDraft: ControlDraft = { description: '', evaluation: 'PENDING' }
 const emptyEvidenceDraft: EvidenceDraft = { name: '', description: '', url: '' }
@@ -121,7 +123,14 @@ export function RiskResidualCard({ risk, draft, onImpact, onProbability }: {
   onProbability: (value: string) => void
 }) {
   const locked = residualRiskLocked(risk)
-  return <EvaluationCard title="RIESGO RESIDUAL" impact={draft.residualImpact} probability={draft.residualProbability} onImpact={onImpact} onProbability={onProbability} disabled={locked} note={locked ? 'Agrega al menos un control para habilitar el riesgo residual' : undefined} />
+  // El id es el ancla de la notificación "plan de mitigación completado": el link
+  // "risks/<proceso>/<riesgo>/residual" trae al usuario hasta esta tarjeta para calificar el
+  // riesgo residual en cuanto se hayan cerrado las actividades del plan.
+  return (
+    <div id="risk-residual-section">
+      <EvaluationCard title="RIESGO RESIDUAL" impact={draft.residualImpact} probability={draft.residualProbability} onImpact={onImpact} onProbability={onProbability} disabled={locked} note={locked ? 'Agrega al menos un control para habilitar el riesgo residual' : undefined} />
+    </div>
+  )
 }
 
 function ControlEditor({ control, draft, saving, error, onDraftChange, onSave, onCancel }: {
@@ -164,7 +173,7 @@ function EvidenceEditor({ evidence, draft, saving, error, onDraftChange, onSave,
   )
 }
 
-export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocusConsumed, onBack, onOpenApproval, onOpenTicket }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; onFocusConsumed?: () => void; onBack: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
+export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusRiskSection, onFocusConsumed, onBack, onOpenApproval, onOpenTicket }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; focusRiskSection?: 'residual' | null; onFocusConsumed?: () => void; onBack: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
   const [risks, setRisks] = useState<ProcessRisk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -176,6 +185,12 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
   const [draft, setDraft] = useState<RiskDraft>(emptyRiskDraft)
   const [controlEditor, setControlEditor] = useState<{ control: ProcessRiskControl | null; draft: ControlDraft } | null>(null)
   const [evidenceEditor, setEvidenceEditor] = useState<{ evidence: ProcessRiskEvidence | null; draft: EvidenceDraft } | null>(null)
+  // Planes de acción de la empresa con los que se puede armar el plan de mitigación del riesgo
+  // (los ya vinculados, con su progreso, y los disponibles): sin ese vínculo el cierre de las
+  // actividades no tiene riesgo que notificar.
+  const [planOptions, setPlanOptions] = useState<MitigationPlanOption[]>([])
+  const [planSelectId, setPlanSelectId] = useState('')
+  const [linkingPlan, setLinkingPlan] = useState(false)
   const [riskView, setRiskView] = useState<'list' | 'heatmap'>('list')
   const [heatmapSelection, setHeatmapSelection] = useState<HeatmapSelection | null>(null)
   // Versión del historial: se incrementa tras cada mutación (riesgo, aprobación, controles o
@@ -201,16 +216,47 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
 
   useEffect(() => { void loadRisks() }, [loadRisks])
 
-  // Enfoca el riesgo indicado por la bandeja de aprobaciones o por un ticket, una sola vez y
-  // recién cargada la lista; si ya no existe se consume el foco igual para no dejarlo huérfano.
+  // Los planes de acción se cargan al abrir el detalle (el desplegable de vinculación solo
+  // existe con el detalle abierto); la lista es de toda la empresa, así que sirve igual para un
+  // riesgo nuevo o existente. Se llama desde openCreate/openEdit en lugar de desde un efecto
+  // para no disparar cargas desde un efecto.
+  const loadPlanOptions = useCallback(async () => {
+    try {
+      const result = await api<{ actionPlans: MitigationPlanOption[] }>(`/processes/${process.id}/action-plans`)
+      setPlanOptions(result.actionPlans)
+    } catch (requestError) {
+      console.error('[process-risks] failed to load action plans', requestError)
+    }
+  }, [process.id])
+
+  // Enfoca el riesgo indicado por la bandeja de aprobaciones, por un ticket o por una
+  // notificación, una sola vez y recién cargada la lista; si ya no existe se consume el foco
+  // igual para no dejarlo huérfano. Un foco que además pide la sección residual deja el foco
+  // armado para el efecto siguiente, que se consume recién cuando el scroll se ejecuta.
   useEffect(() => {
     if (!focusRiskId || loading) return
     const target = risks.find((risk) => risk.id === focusRiskId)
-    if (target) openEdit(target)
-    onFocusConsumed?.()
-    // openEdit solo compone estado interno; no hace falta declararla como dependencia.
+    if (!target) {
+      onFocusConsumed?.()
+      return
+    }
+    openEdit(target)
+    if (focusRiskSection !== 'residual') onFocusConsumed?.()
+    // openEdit y onFocusConsumed solo componen estado interno; no hace falta declararlos como
+    // dependencia.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusRiskId, risks, loading])
+  }, [focusRiskId, focusRiskSection, risks, loading])
+
+  // El detalle ya abierto con la intención de sección residual significa que el ancla está en el
+  // DOM: se desplaza hasta la tarjeta de riesgo residual (el mismo id al que apunta el link de la
+  // notificación "risks/<proceso>/<riesgo>/residual") y recién ahí se libera el foco. No hay
+  // estado intermedio: todo se deriva de las props y del detalle abierto.
+  useEffect(() => {
+    if (!focusRiskId || focusRiskSection !== 'residual' || !showDetail) return
+    document.getElementById('risk-residual-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRiskId, focusRiskSection, showDetail])
 
   function openCreate() {
     setShowDetail(true)
@@ -218,8 +264,10 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
     setDraft(emptyRiskDraft)
     setControlEditor(null)
     setEvidenceEditor(null)
+    setPlanSelectId('')
     setNotice('')
     setError('')
+    void loadPlanOptions()
   }
 
   function openEdit(risk: ProcessRisk) {
@@ -228,8 +276,10 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
     setDraft(draftFromRisk(risk))
     setControlEditor(null)
     setEvidenceEditor(null)
+    setPlanSelectId('')
     setNotice('')
     setError('')
+    void loadPlanOptions()
   }
 
   function closeDetail() {
@@ -237,6 +287,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
     setSelected(null)
     setControlEditor(null)
     setEvidenceEditor(null)
+    setPlanSelectId('')
     setError('')
   }
 
@@ -386,8 +437,41 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
     }
   }
 
+  async function linkPlan() {
+    if (!selected || !planSelectId || !canWrite || linkingPlan) return
+    setLinkingPlan(true)
+    setError('')
+    try {
+      await api(`/action-plans/${planSelectId}`, { method: 'PATCH', body: JSON.stringify({ riskId: selected.id }) })
+      await loadPlanOptions()
+      setPlanSelectId('')
+      setNotice('Plan de acción vinculado al plan de mitigación del riesgo.')
+    } catch (requestError) {
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo vincular el plan de acción.')
+    } finally {
+      setLinkingPlan(false)
+    }
+  }
+
+  async function unlinkPlan(plan: MitigationPlanOption) {
+    if (!selected || !canWrite || linkingPlan) return
+    setLinkingPlan(true)
+    setError('')
+    try {
+      await api(`/action-plans/${plan.id}`, { method: 'PATCH', body: JSON.stringify({ riskId: null }) })
+      await loadPlanOptions()
+      setNotice(`Plan de acción «${plan.title}» desvinculado del riesgo.`)
+    } catch (requestError) {
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo desvincular el plan de acción.')
+    } finally {
+      setLinkingPlan(false)
+    }
+  }
+
   const isDetail = showDetail
   const availableRiskOwners = users.filter((user) => user.companyId === process.companyId)
+  const linkedPlans = selected ? planOptions.filter((plan) => plan.riskId === selected.id) : []
+  const linkablePlans = selected ? planOptions.filter((plan) => plan.riskId === null) : []
   const renderLevel = (level: RiskLevel, score: number) => <LevelBadge level={level} score={score} />
   const heatmapMatches = heatmapSelection ? risks.filter((risk) => {
     const impact = heatmapSelection.mode === 'inherent' ? risk.inherentImpact : risk.residualImpact
@@ -424,7 +508,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, onFocu
              <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><RiskCodeInput code={selected ? selected.code : null} creating={!selected} /><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><RiskTypeInput processType={process.type} /><label>Dueño del riesgo<select value={draft.riskOwnerId} onChange={(event) => setDraft({ ...draft, riskOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
             <section className="risk-detail-section risk-evaluation-section"><div className="risk-section-heading"><div><p className="detail-label">VALORACIÓN</p><h2>EVALUACIÓN DE RIESGOS</h2></div><span className="risk-method-note">Matriz 5 × 5 · impacto × probabilidad</span></div><div className="risk-evaluation-layout"><EvaluationCard title="RIESGO INHERENTE" impact={draft.inherentImpact} probability={draft.inherentProbability} onImpact={(value) => setDraft({ ...draft, inherentImpact: value })} onProbability={(value) => setDraft({ ...draft, inherentProbability: value })} disabled={!canWrite} /><section className="risk-controls-card"><div className="risk-controls-heading"><div><p className="detail-label">MITIGACIÓN</p><h3>CONTROLES</h3></div>{canWrite && selected && !controlEditor && <button type="button" className="button secondary small-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para agregar controles.</div> : selected.controls.length === 0 && !controlEditor ? <div className="risk-controls-empty">Sin controles registrados{canWrite && <button type="button" className="text-button" onClick={() => setControlEditor({ control: null, draft: emptyControlDraft })}>+ Agregar control</button>}</div> : <div className="risk-control-list">{selected.controls.map((control) => <div className="risk-control-item" key={control.id}><span className="risk-control-mark">✓</span><div><strong>{control.description}</strong><span className={`control-evaluation ${control.evaluation.toLowerCase()}`}>{controlEvaluationOptions.find(([value]) => value === control.evaluation)?.[1]}</span></div>{canWrite && <span className="risk-control-actions"><button type="button" className="sipoc-icon-button" title="Editar control" aria-label="Editar control" onClick={() => setControlEditor({ control, draft: { description: control.description, evaluation: control.evaluation } })}>✎</button><button type="button" className="sipoc-icon-button danger" title="Eliminar control" aria-label="Eliminar control" onClick={() => void removeControl(control)}>×</button></span>}</div>)}</div>}{controlEditor && selected && <ControlEditor control={controlEditor.control} draft={controlEditor.draft} saving={saving} error={error} onDraftChange={(value) => setControlEditor({ ...controlEditor, draft: value })} onSave={() => void saveControl()} onCancel={() => setControlEditor(null)} />}</section><RiskResidualCard risk={selected} draft={draft} onImpact={(value) => setDraft({ ...draft, residualImpact: value })} onProbability={(value) => setDraft({ ...draft, residualProbability: value })} /></div></section>
             <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">TRATAMIENTO</p><h2>TRATAMIENTO Y ACEPTACIÓN</h2></div><span className="risk-method-note">Independiente de los niveles inherente y residual</span></div><div className="risk-base-grid"><label>Tratamiento del riesgo<select value={draft.treatment} onChange={(event) => setDraft({ ...draft, treatment: event.target.value })}><option value="">Sin tratamiento definido</option>{treatmentOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>Aceptación del riesgo<select value={draft.acceptanceStatus} onChange={(event) => setDraft({ ...draft, acceptanceStatus: event.target.value as RiskAcceptanceStatus })}>{acceptanceOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><p className="risk-field-note">El tratamiento define cómo se gestionará el riesgo; la aceptación registra el veredicto formal (inicialmente «Pendiente») y no depende del tratamiento.</p></div></section>
-            <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">SEGUIMIENTO</p><h2>PLAN DE MITIGACIÓN</h2></div><span className="risk-method-note">Responsable, fechas y evidencias</span></div><div className="risk-base-grid"><label>Responsable del plan<select value={draft.mitigationOwnerId} onChange={(event) => setDraft({ ...draft, mitigationOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><span className="risk-plan-dates"><label>Fecha de inicio<input type="date" value={draft.mitigationStartDate} onChange={(event) => setDraft({ ...draft, mitigationStartDate: event.target.value })} /></label><label>Fecha de vencimiento<input type="date" value={draft.mitigationDueDate} min={draft.mitigationStartDate || undefined} onChange={(event) => setDraft({ ...draft, mitigationDueDate: event.target.value })} /></label></span></div><div className="risk-evidence-block"><div className="risk-controls-heading"><div><p className="detail-label">EVIDENCIAS</p><h3>EVIDENCIAS DEL PLAN</h3></div>{canWrite && selected && !evidenceEditor && <button type="button" className="button secondary small-button" onClick={() => setEvidenceEditor({ evidence: null, draft: emptyEvidenceDraft })}>+ Agregar evidencia</button>}</div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para agregar evidencias.</div> : selected.evidences.length === 0 && !evidenceEditor ? <div className="risk-controls-empty">Sin evidencias registradas{canWrite && <button type="button" className="text-button" onClick={() => setEvidenceEditor({ evidence: null, draft: emptyEvidenceDraft })}>+ Agregar evidencia</button>}</div> : <div className="risk-control-list">{selected.evidences.map((evidence) => <div className="risk-control-item" key={evidence.id}><span className="risk-control-mark">✓</span><div><strong>{evidence.name}</strong><span className="risk-evidence-description">{evidence.description}</span><a className="risk-evidence-link" href={evidence.url} target="_blank" rel="noopener noreferrer">{evidence.url}</a></div>{canWrite && <span className="risk-control-actions"><button type="button" className="sipoc-icon-button" title="Editar evidencia" aria-label="Editar evidencia" onClick={() => setEvidenceEditor({ evidence, draft: { name: evidence.name, description: evidence.description, url: evidence.url } })}>✎</button><button type="button" className="sipoc-icon-button danger" title="Eliminar evidencia" aria-label="Eliminar evidencia" onClick={() => void removeEvidence(evidence)}>×</button></span>}</div>)}</div>}{evidenceEditor && selected && <EvidenceEditor evidence={evidenceEditor.evidence} draft={evidenceEditor.draft} saving={saving} error={error} onDraftChange={(value) => setEvidenceEditor({ ...evidenceEditor, draft: value })} onSave={() => void saveEvidence()} onCancel={() => setEvidenceEditor(null)} />}</div></section>
+            <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">SEGUIMIENTO</p><h2>PLAN DE MITIGACIÓN</h2></div><span className="risk-method-note">Responsable, fechas y evidencias</span></div><div className="risk-base-grid"><label>Responsable del plan<select value={draft.mitigationOwnerId} onChange={(event) => setDraft({ ...draft, mitigationOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><span className="risk-plan-dates"><label>Fecha de inicio<input type="date" value={draft.mitigationStartDate} onChange={(event) => setDraft({ ...draft, mitigationStartDate: event.target.value })} /></label><label>Fecha de vencimiento<input type="date" value={draft.mitigationDueDate} min={draft.mitigationStartDate || undefined} onChange={(event) => setDraft({ ...draft, mitigationDueDate: event.target.value })} /></label></span></div><div className="risk-evidence-block"><div className="risk-controls-heading"><div><p className="detail-label">PLAN DE ACCIÓN</p><h3>ACTIVIDADES DE MITIGACIÓN</h3></div></div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para vincular un plan de acción.</div> : linkedPlans.length === 0 && linkablePlans.length === 0 ? <div className="risk-controls-empty">Sin planes de acción disponibles en la empresa.</div> : <>{linkedPlans.length > 0 ? <div className="risk-control-list">{linkedPlans.map((plan) => <div className="risk-control-item" key={plan.id}><span className="risk-control-mark">✓</span><div><strong>{plan.title}</strong><span className="control-evaluation">{plan.itemsCompleted} de {plan.itemsTotal} actividades completadas</span></div>{canWrite && <span className="risk-control-actions"><button type="button" className="button secondary small-button" disabled={linkingPlan} onClick={() => void unlinkPlan(plan)}>Desvincular</button></span>}</div>)}</div> : <div className="risk-controls-empty">Sin planes de acción vinculados. Vincula uno para que el cierre de sus actividades avise al creador y al dueño del riesgo.</div>}{linkablePlans.length > 0 && <div className="risk-control-editor"><label>Vincular plan de acción<select value={planSelectId} onChange={(event) => setPlanSelectId(event.target.value)} disabled={linkingPlan}><option value="">Selecciona un plan de acción…</option>{linkablePlans.map((plan) => <option value={plan.id} key={plan.id}>{plan.title}</option>)}</select></label><div className="risk-control-editor-actions"><button type="button" className="button primary small-button" disabled={linkingPlan || !planSelectId} onClick={() => void linkPlan()}>{linkingPlan ? 'Vinculando...' : 'Vincular'}</button></div></div>}</>}{selected && <p className="risk-field-note">Cuando todas las actividades de todos los planes vinculados estén completadas, el sistema avisará al creador y al dueño del riesgo.</p>}</div><div className="risk-evidence-block"><div className="risk-controls-heading"><div><p className="detail-label">EVIDENCIAS</p><h3>EVIDENCIAS DEL PLAN</h3></div>{canWrite && selected && !evidenceEditor && <button type="button" className="button secondary small-button" onClick={() => setEvidenceEditor({ evidence: null, draft: emptyEvidenceDraft })}>+ Agregar evidencia</button>}</div>{!selected ? <div className="risk-controls-empty">Guarda el riesgo para agregar evidencias.</div> : selected.evidences.length === 0 && !evidenceEditor ? <div className="risk-controls-empty">Sin evidencias registradas{canWrite && <button type="button" className="text-button" onClick={() => setEvidenceEditor({ evidence: null, draft: emptyEvidenceDraft })}>+ Agregar evidencia</button>}</div> : <div className="risk-control-list">{selected.evidences.map((evidence) => <div className="risk-control-item" key={evidence.id}><span className="risk-control-mark">✓</span><div><strong>{evidence.name}</strong><span className="risk-evidence-description">{evidence.description}</span><a className="risk-evidence-link" href={evidence.url} target="_blank" rel="noopener noreferrer">{evidence.url}</a></div>{canWrite && <span className="risk-control-actions"><button type="button" className="sipoc-icon-button" title="Editar evidencia" aria-label="Editar evidencia" onClick={() => setEvidenceEditor({ evidence, draft: { name: evidence.name, description: evidence.description, url: evidence.url } })}>✎</button><button type="button" className="sipoc-icon-button danger" title="Eliminar evidencia" aria-label="Eliminar evidencia" onClick={() => void removeEvidence(evidence)}>×</button></span>}</div>)}</div>}{evidenceEditor && selected && <EvidenceEditor evidence={evidenceEditor.evidence} draft={evidenceEditor.draft} saving={saving} error={error} onDraftChange={(value) => setEvidenceEditor({ ...evidenceEditor, draft: value })} onSave={() => void saveEvidence()} onCancel={() => setEvidenceEditor(null)} />}</div></section>
           </fieldset>
           {error && !controlEditor && !evidenceEditor && <div className="form-error risk-detail-error" role="alert">{error}</div>}
           <footer className="risk-detail-footer"><button type="button" className="button secondary" onClick={closeDetail}>Cancelar</button>{canWrite && <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : selected ? 'Guardar cambios' : 'Guardar riesgo'}</button>}</footer>
