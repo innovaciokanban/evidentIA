@@ -374,6 +374,44 @@ export type ProcessKpi = {
   updatedAt: string
 }
 
+// Estados documentales del procedimiento, espejo de ProcedureStatus. Solo DRAFT es editable;
+// APPROVED se conserva siempre en el historial de versiones.
+export type ProcedureStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'OBSOLETE'
+
+export type ProcedureHistoryAction = 'CREATED' | 'UPDATED' | 'STATUS_CHANGED'
+
+export type Procedure = {
+  id: string
+  processId: string
+  companyId: string
+  code: string
+  name: string
+  objective: string
+  scope: string
+  description: string | null
+  responsible: Pick<User, 'id' | 'name'> | null
+  status: ProcedureStatus
+  version: string
+  createdAt: string
+  updatedAt: string
+}
+
+// Historial append-only de versiones del procedimiento: solo lo escribe el backend y solo se lee.
+export type ProcedureVersion = {
+  id: string
+  procedureId: string
+  version: string
+  status: ProcedureStatus
+  action: ProcedureHistoryAction
+  changes: ProcessChangeItem[]
+  snapshot: Record<string, unknown> | null
+  changedById: string | null
+  changedBy: Pick<User, 'id' | 'name'> | null
+  changedByName: string | null
+  changedByEmail: string | null
+  changedAt: string
+}
+
 export type ProcessSipocItem = {
   id: string
   processId: string

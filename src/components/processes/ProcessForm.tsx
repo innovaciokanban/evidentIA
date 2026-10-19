@@ -48,6 +48,7 @@ type ProcessFormProps = {
   onOpenKpis?: () => void
   onOpenRisks?: () => void
   onOpenChangeHistory?: () => void
+  onOpenProcedures?: () => void
   processId?: string
 }
 
@@ -65,7 +66,7 @@ function ToggleField({ label, value, onChange }: { label: string; value: boolean
   )
 }
 
-export function ProcessForm({ draft, setDraft, users, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, processId }: ProcessFormProps) {
+export function ProcessForm({ draft, setDraft, users, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, onOpenProcedures, processId }: ProcessFormProps) {
   // El servidor vuelve a validar esta relación; aquí evitamos ofrecer responsables de otra empresa.
   const availableUsers = users.filter((user) => !draft.companyId || user.companyId === draft.companyId)
   const selectedCompany = companies.find((company) => company.id === draft.companyId)
@@ -97,7 +98,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
             <span className="characterization-helper">Selecciona un módulo para continuar</span>
           </div>
           <div className="process-module-grid">
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">▤</span><span><strong>Procedimiento</strong><small>Documentación operativa</small></span></button>
+            <button type="button" className="process-module-card interactive" onClick={onOpenProcedures} disabled={!onOpenProcedures}><span className="process-module-icon">▤</span><span><strong>Procedimiento</strong><small>Documentación operativa</small></span><span className="process-module-arrow">→</span></button>
             <button type="button" className="process-module-card interactive" onClick={onOpenKpis} disabled={!onOpenKpis}><span className="process-module-icon">◫</span><span><strong>KPI</strong><small>Indicadores del proceso</small></span><span className="process-module-arrow">→</span></button>
             <button type="button" className="process-module-card interactive" onClick={onOpenRisks} disabled={!onOpenRisks}><span className="process-module-icon">!</span><span><strong>Riesgos</strong><small>Identificación y control</small></span><span className="process-module-arrow">→</span></button>
             <button type="button" className="process-module-card interactive" onClick={onOpenChangeHistory} disabled={!onOpenChangeHistory}><span className="process-module-icon">↺</span><span><strong>Control de cambios</strong><small>Historial y trazabilidad</small></span><span className="process-module-arrow">→</span></button>

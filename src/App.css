@@ -2065,6 +2065,97 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 }
 
 /* ============================================
+   PROCEDIMIENTOS DEL PROCESO
+   ============================================ */
+.process-procedure-page { min-width: 0; }
+.procedure-page-header { margin-bottom: 22px; }
+.procedure-back-button { display: inline-flex; margin-bottom: 14px; color: var(--blue); }
+.procedure-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.procedure-page-heading h1 { margin: 4px 0 0; font: 700 28px/1.15 'Space Grotesk', sans-serif; letter-spacing: -.5px; }
+.procedure-process-context { display: grid; grid-template-columns: minmax(0, 2fr) repeat(2, minmax(140px, 1fr)); gap: 18px; margin-bottom: 22px; padding: 18px 20px; }
+.procedure-process-context div { min-width: 0; }
+.procedure-process-context span, .procedure-process-context strong { display: block; }
+.procedure-process-context span { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
+.procedure-process-context strong { overflow: hidden; color: var(--ink); font: 600 14px 'Space Grotesk', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.procedure-list-panel { overflow: hidden; }
+.procedure-list-heading { padding: 18px 20px; }
+.procedure-list-heading .detail-label { margin-bottom: 5px; color: var(--blue); }
+.procedure-list-note { padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--bg); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+.procedure-list-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 20px 0; }
+.procedure-table-wrap { width: 100%; }
+.procedure-table-head, .procedure-row-summary { display: grid; grid-template-columns: minmax(96px, .7fr) minmax(220px, 2fr) minmax(120px, .8fr) minmax(72px, .5fr) 28px; align-items: center; gap: 14px; }
+.procedure-table-head { padding: 11px 20px; border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border); color: var(--muted); background: var(--bg); font-size: 10px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; }
+.procedure-row { border-bottom: 1px solid var(--border-light); }
+.procedure-row:last-child { border-bottom: 0; }
+.procedure-row-summary { width: 100%; padding: 16px 20px; border: 0; background: var(--surface); color: var(--ink-secondary); font: inherit; text-align: left; cursor: pointer; transition: background var(--transition); }
+.procedure-row-summary:hover, .procedure-row-summary:focus-visible { background: var(--blue-light); outline: none; }
+.procedure-row.expanded .procedure-row-summary { background: var(--blue-light); }
+.procedure-code-cell { color: var(--ink); font: 600 12px 'Space Grotesk', sans-serif; overflow-wrap: anywhere; }
+.procedure-name-cell { display: block; min-width: 0; }
+.procedure-name-cell strong, .procedure-name-cell small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.procedure-name-cell strong { color: var(--ink); font: 600 13px/1.35 'Space Grotesk', sans-serif; white-space: nowrap; }
+.procedure-name-cell small { margin-top: 4px; color: var(--muted); font-size: 11.5px; line-height: 1.4; white-space: nowrap; }
+.procedure-status { display: inline-flex; justify-self: start; padding: 4px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.procedure-status.draft { color: var(--muted); background: var(--bg-hover); }
+.procedure-status.in_review { color: var(--amber); background: rgba(245, 158, 11, .12); }
+.procedure-status.approved { color: var(--green); background: rgba(22, 163, 74, .12); }
+.procedure-status.obsolete { color: var(--red); background: rgba(220, 38, 38, .12); }
+.procedure-version-cell { color: var(--ink-secondary); font-size: 12px; font-weight: 600; }
+.procedure-expand-icon { justify-self: end; color: var(--blue); font-size: 16px; }
+.procedure-detail { padding: 0 20px 18px; background: var(--blue-light); }
+.procedure-detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 16px; border: 1px solid var(--blue-border); border-radius: var(--radius); background: var(--surface); }
+.procedure-detail-grid > div { min-width: 0; }
+.procedure-detail-grid span:not(.procedure-status) { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
+.procedure-detail-grid p { margin: 0; overflow-wrap: anywhere; color: var(--ink-secondary); font-size: 12px; line-height: 1.5; }
+.procedure-detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.procedure-history-toggle { margin-top: 10px; }
+.procedure-history-list { margin-top: 8px; padding: 4px 16px 10px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--surface); }
+.procedure-history-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.procedure-history-empty { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.procedure-empty { display: flex; align-items: center; flex-direction: column; padding: 52px 20px; text-align: center; }
+.procedure-empty-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 12px; border-radius: var(--radius-lg); color: var(--blue); background: var(--blue-light); font-size: 20px; }
+.procedure-empty h3 { margin: 0; color: var(--ink); font: 600 16px 'Space Grotesk', sans-serif; }
+.procedure-empty p { margin: 6px 0 18px; color: var(--muted); font-size: 12px; }
+.procedure-form { overflow: hidden; }
+.procedure-form-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px 28px; border-bottom: 1px solid var(--border); background: linear-gradient(105deg, var(--surface) 0%, var(--blue-light) 100%); }
+.procedure-form-header h2 { margin: 0; color: var(--ink); font: 700 20px/1.2 'Space Grotesk', sans-serif; letter-spacing: .3px; }
+.procedure-form-header p:not(.eyebrow) { max-width: 66ch; margin: 7px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.procedure-form-error { margin: 20px 28px 0; }
+.procedure-form-section { padding: 24px 28px 8px; }
+.procedure-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.procedure-form-grid label { min-width: 0; }
+.procedure-field-wide { grid-column: 1 / -1; }
+.procedure-form-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 20px 28px 26px; border-top: 1px solid var(--border-light); }
+@media (max-width: 900px) {
+  .procedure-process-context { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .procedure-process-context div:first-child { grid-column: 1 / -1; }
+  .procedure-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .process-procedure-page .procedure-table-head, .process-procedure-page .procedure-row-summary { grid-template-columns: minmax(84px, .7fr) minmax(170px, 2fr) minmax(110px, .8fr) minmax(64px, .5fr) 24px; gap: 10px; }
+}
+@media (max-width: 640px) {
+  .procedure-page-heading, .procedure-form-header { flex-direction: column; }
+  .procedure-page-heading .button, .procedure-form-header .button { width: 100%; }
+  .procedure-process-context { grid-template-columns: 1fr; gap: 12px; }
+  .procedure-process-context div:first-child { grid-column: auto; }
+  .procedure-table-head { display: none; }
+  .procedure-row-summary { grid-template-columns: 1fr auto; gap: 8px 12px; padding: 14px; }
+  .procedure-row-summary .procedure-code-cell { grid-column: 1; grid-row: 1; }
+  .procedure-row-summary .procedure-expand-icon { grid-column: 2; grid-row: 1; }
+  .procedure-row-summary .procedure-name-cell { grid-column: 1 / -1; grid-row: 2; }
+  .procedure-row-summary .procedure-status { grid-column: 1; grid-row: 3; }
+  .procedure-row-summary .procedure-version-cell { grid-column: 2; grid-row: 3; justify-self: end; }
+  .procedure-detail { padding: 0 14px 14px; }
+  .procedure-detail-grid, .procedure-form-grid { grid-template-columns: 1fr; }
+  .procedure-field-wide { grid-column: auto; }
+  .procedure-form-section { padding: 20px 18px 6px; }
+  .procedure-form-error { margin-right: 18px; margin-left: 18px; }
+  .procedure-form-footer { align-items: stretch; flex-direction: column-reverse; padding: 18px; }
+  .procedure-form-footer .button { width: 100%; }
+  .procedure-list-heading { align-items: flex-start; flex-direction: column; padding: 16px 14px; }
+  .procedure-list-error { align-items: stretch; flex-direction: column; margin-right: 14px; margin-left: 14px; }
+}
+
+/* ============================================
    APROBACIONES DE RIESGOS Y NOTIFICACIONES
    ============================================ */
 .nav-badge { margin-left: auto; min-width: 18px; padding: 1px 6px; border-radius: 999px; color: #fff; background: var(--red); font-size: 10px; font-weight: 700; text-align: center; }

@@ -172,6 +172,50 @@ export const kpiQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
 })
 
+// Estados documentales del procedimiento, espejo de ProcedureStatus: DRAFT es el único estado
+// editable; APPROVED solo se abandona abriendo una nueva revisión para no pisar lo aprobado.
+export const procedureStatusSchema = z.enum(['DRAFT', 'IN_REVIEW', 'APPROVED', 'OBSOLETE'])
+
+const procedureText = (max: number) => z.string().trim().min(1).max(max)
+// El responsable se valida contra la empresa en la API; la base existente también contiene UUIDs
+// (mismo criterio que kpiResponsibleId).
+const procedureResponsibleId = z.string().trim().min(1).max(64).nullable().optional()
+
+export const procedureCreateSchema = z.object({
+  code: procedureText(40).refine((value) => value.length >= 2, 'Code must have at least 2 characters'),
+  name: procedureText(160).refine((value) => value.length >= 3, 'Name must have at least 3 characters'),
+  objective: procedureText(2000),
+  scope: procedureText(2000),
+  description: z.string().trim().max(10000).nullable().optional(),
+  responsibleId: procedureResponsibleId,
+})
+
+export const procedureUpdateSchema = procedureCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one field is required',
+)
+
+export const procedureQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  status: procedureStatusSchema.optional(),
+})
+
+// Transición de estado del flujo de revisión. La máquina de transiciones permitidas se valida en
+// el servidor; aquí solo se acota la forma del comentario que la acompaña.
+export const procedureStatusChangeSchema = z.object({
+  status: procedureStatusSchema,
+  comment: z.string().trim().max(1000).optional(),
+})
+
+// Consulta paginada del historial de versiones, mismo formato que riskAuditQuerySchema. El listado
+// de acciones es cerrado: solo el backend las emite, el cliente solo puede filtrar.
+export const procedureHistoryActionSchema = z.enum(['CREATED', 'UPDATED', 'STATUS_CHANGED'])
+export const procedureHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  action: procedureHistoryActionSchema.optional(),
+})
+
 export const sipocKindSchema = z.enum(['suppliers', 'inputs', 'processes', 'outputs', 'customers'])
 export const sipocItemCreateSchema = z.object({
   description: z.string().trim().min(1).max(500),

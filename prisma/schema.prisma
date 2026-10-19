@@ -143,6 +143,25 @@ enum ProcessChangeAction {
   UPDATED
 }
 
+// Estados documentales de un procedimiento. El flujo de revisión y aprobación obliga a que el
+// contenido solo sea editable en DRAFT: una vez aprobado, cualquier cambio exige abrir una nueva
+// revisión (APPROVED -> DRAFT), de modo que la versión aprobada queda siempre en el historial y
+// jamás se sobrescribe. OBSOLETE es la baja documental (no borra nada).
+enum ProcedureStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  OBSOLETE
+}
+
+// Acciones del historial append-only de un procedimiento. El conjunto es cerrado: la API no admite
+// eventos del cliente, solo los escribe el backend en la misma transacción que la operación.
+enum ProcedureHistoryAction {
+  CREATED
+  UPDATED
+  STATUS_CHANGED
+}
+
 enum RiskControlEvaluation {
   PENDING
   WEAK
@@ -229,6 +248,8 @@ model User {
   riskAuditEvents RiskAuditEvent[] @relation("RiskAuditActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
+  responsibleProcedures Procedure[] @relation("ProcedureResponsibles")
+  procedureVersions ProcedureVersion[] @relation("ProcedureVersionActors")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -576,6 +597,7 @@ model Process {
   sipocOutputs   SipocOutput[]
   sipocCustomers SipocCustomer[]
   risks          Risk[]
+  procedures     Procedure[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -631,6 +653,59 @@ model Kpi {
   @@index([processId])
   @@index([reportResponsibleId])
   @@index([monitorResponsibleId])
+}
+
+/**
+ * Procedimiento documental de un proceso. La empresa se obtiene de process.companyId, igual que en
+ * Kpi: no se duplica el tenant en dos columnas que podrían divergir. El código es único dentro del
+ * proceso (índice) y la API además lo valida contra toda la empresa antes de crear o renombrar.
+ */
+model Procedure {
+  id            String          @id @default(cuid())
+  processId     String
+  code          String
+  name          String
+  objective     String
+  scope         String
+  description   String?
+  responsibleId String?
+  status        ProcedureStatus @default(DRAFT)
+  version       String          @default("1.0")
+  process       Process         @relation(fields: [processId], references: [id], onDelete: Restrict)
+  responsible   User?           @relation("ProcedureResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  versions      ProcedureVersion[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([processId, code])
+  @@index([processId])
+  @@index([status])
+  @@index([responsibleId])
+}
+
+/**
+ * Historial de versiones de un procedimiento, append-only: cada alta, edición o cambio de estado
+ * inserta una fila con el snapshot completo del contenido tras el hecho. No existe ningún endpoint
+ * que actualice o borre filas (mismo contrato que ProcessChange): así una versión aprobada jamás se
+ * sobrescribe y el historial sobrevive a la baja del procedimiento salvo que este nunca se aprobara.
+ */
+model ProcedureVersion {
+  id            String                @id @default(cuid())
+  procedureId   String
+  version       String
+  status        ProcedureStatus
+  action        ProcedureHistoryAction
+  changes       Json?
+  snapshot      Json?
+  changedById   String?
+  changedByName String?
+  changedByEmail String?
+  changedAt     DateTime              @default(now())
+  procedure     Procedure             @relation(fields: [procedureId], references: [id], onDelete: Restrict)
+  changedBy     User?                 @relation("ProcedureVersionActors", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([procedureId, changedAt])
+  @@index([changedById])
 }
 
 model SipocSupplier {

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, Role, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
@@ -18,7 +18,7 @@ import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPai
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
 import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -550,6 +550,112 @@ const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => (
   redThreshold: kpi.redThreshold,
   createdAt: kpi.createdAt,
   updatedAt: kpi.updatedAt,
+})
+
+const procedureInclude = {
+  process: { select: { id: true, companyId: true, name: true, code: true } },
+  responsible: { select: { id: true, name: true } },
+} as const
+type ProcedureWithInclude = Prisma.ProcedureGetPayload<{ include: typeof procedureInclude }>
+const procedureView = (procedure: ProcedureWithInclude) => ({
+  id: procedure.id,
+  processId: procedure.processId,
+  companyId: procedure.process.companyId,
+  code: procedure.code,
+  name: procedure.name,
+  objective: procedure.objective,
+  scope: procedure.scope,
+  description: procedure.description,
+  responsible: procedure.responsible,
+  status: procedure.status,
+  version: procedure.version,
+  createdAt: procedure.createdAt,
+  updatedAt: procedure.updatedAt,
+})
+
+const procedureVersionInclude = { changedBy: { select: { id: true, name: true } } } as const
+type ProcedureVersionWithInclude = Prisma.ProcedureVersionGetPayload<{ include: typeof procedureVersionInclude }>
+const procedureVersionView = (version: ProcedureVersionWithInclude) => ({
+  id: version.id,
+  procedureId: version.procedureId,
+  version: version.version,
+  status: version.status,
+  action: version.action,
+  changes: Array.isArray(version.changes) ? version.changes : [],
+  snapshot: version.snapshot && typeof version.snapshot === 'object' && !Array.isArray(version.snapshot) ? version.snapshot : null,
+  changedById: version.changedById,
+  changedBy: version.changedBy,
+  changedByName: version.changedByName,
+  changedByEmail: version.changedByEmail,
+  changedAt: version.changedAt,
+})
+
+// Máquina de transiciones del flujo documental. Lo aprobado solo cambia abriendo una nueva
+// revisión (vuelve a borrador) u obsolétando: nunca se edita su contenido, de modo que la versión
+// aprobada queda siempre en el historial y jamás se sobrescribe.
+const procedureTransitions: Record<ProcedureStatus, ProcedureStatus[]> = {
+  [ProcedureStatus.DRAFT]: [ProcedureStatus.IN_REVIEW, ProcedureStatus.OBSOLETE],
+  [ProcedureStatus.IN_REVIEW]: [ProcedureStatus.DRAFT, ProcedureStatus.APPROVED, ProcedureStatus.OBSOLETE],
+  [ProcedureStatus.APPROVED]: [ProcedureStatus.DRAFT, ProcedureStatus.OBSOLETE],
+  [ProcedureStatus.OBSOLETE]: [ProcedureStatus.DRAFT],
+}
+const canTransitionProcedure = (from: ProcedureStatus, to: ProcedureStatus): boolean =>
+  from !== to && procedureTransitions[from].includes(to)
+
+const procedureChangeFields = ['code', 'name', 'objective', 'scope', 'description', 'responsibleId'] as const
+const procedureChangeLabels: Record<(typeof procedureChangeFields)[number], string> = {
+  code: 'Código',
+  name: 'Nombre',
+  objective: 'Objetivo',
+  scope: 'Alcance',
+  description: 'Descripción',
+  responsibleId: 'Responsable',
+}
+const updatedProcedureChanges = (current: ProcedureWithInclude, data: Prisma.ProcedureUncheckedUpdateInput): ProcessChangeItem[] =>
+  procedureChangeFields.flatMap((field) => {
+    if (data[field] === undefined || current[field] === data[field]) return []
+    return [{
+      field,
+      label: procedureChangeLabels[field],
+      previousValue: processChangeValue(current[field]),
+      newValue: processChangeValue(data[field]),
+    }]
+  })
+
+// Snapshot completo del contenido tras cada hecho: permite reconstruir exactamente la versión que
+// se aprobó aunque el registro actual ya haya avanzado de revisión.
+const procedureSnapshot = (procedure: ProcedureWithInclude) => ({
+  code: procedure.code,
+  name: procedure.name,
+  objective: procedure.objective,
+  scope: procedure.scope,
+  description: procedure.description,
+  responsibleId: procedure.responsibleId,
+  status: procedure.status,
+  version: procedure.version,
+})
+
+// Única vía de escritura del historial y siempre desde el backend con el cliente (db o tx) de la
+// operación auditada: no existe endpoint que reciba eventos del cliente (mismo contrato que
+// riskAuditWrite y que el historial de cambios de procesos).
+const procedureHistoryWrite = (client: ProcessTransaction, data: {
+  procedure: { id: string; code: string; version: string; status: ProcedureStatus }
+  action: ProcedureHistoryAction
+  actor: ProcessChangeActor | null | undefined
+  changes?: ProcessChangeItem[]
+  snapshot: Record<string, unknown>
+}) => client.procedureVersion.create({
+  data: {
+    procedureId: data.procedure.id,
+    version: data.procedure.version,
+    status: data.procedure.status,
+    action: data.action,
+    ...(data.changes && data.changes.length > 0 ? { changes: data.changes as unknown as Prisma.InputJsonValue } : {}),
+    snapshot: data.snapshot as unknown as Prisma.InputJsonValue,
+    changedById: data.actor?.id ?? null,
+    changedByName: data.actor?.name ?? null,
+    changedByEmail: data.actor?.email ?? null,
+  },
 })
 type SipocKind = 'suppliers' | 'inputs' | 'processes' | 'outputs' | 'customers'
 type SipocRecord = { id: string; processId: string; description: string; createdAt: Date; updatedAt: Date }
@@ -2665,6 +2771,247 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     await db.kpi.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  app.get('/api/processes/:processId/procedures', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = procedureQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid procedure filters', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const where: Prisma.ProcedureWhereInput = {
+      processId: process.id,
+      ...(parsed.data.status ? { status: parsed.data.status } : {}),
+      ...(parsed.data.search ? {
+        OR: [
+          { code: { contains: parsed.data.search, mode: 'insensitive' } },
+          { name: { contains: parsed.data.search, mode: 'insensitive' } },
+        ],
+      } : {}),
+    }
+    const procedures = await db.procedure.findMany({ where, include: procedureInclude, orderBy: [{ code: 'asc' }, { name: 'asc' }] })
+    response.json({ procedures: procedures.map(procedureView) })
+  }))
+
+  app.post('/api/processes/:processId/procedures', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = procedureCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid procedure data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const responsible = await resolveResponsible(parsed.data.responsibleId, process.companyId)
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    // El código identifica el documento dentro de la empresa, y solo dentro de ella; el índice
+    // único por proceso queda como red de seguridad interna.
+    const duplicateCode = await db.procedure.findFirst({
+      where: { code: parsed.data.code, process: { companyId: process.companyId } },
+      select: { id: true },
+    })
+    if (duplicateCode) {
+      response.status(409).json({ error: 'A procedure with this code already exists in your company' })
+      return
+    }
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    const procedure = await db.$transaction(async (tx) => {
+      const created = await tx.procedure.create({
+        data: {
+          processId: process.id,
+          code: parsed.data.code,
+          name: parsed.data.name,
+          objective: parsed.data.objective,
+          scope: parsed.data.scope,
+          description: parsed.data.description ?? null,
+          responsibleId: responsible.responsibleId,
+        },
+        include: procedureInclude,
+      })
+      await procedureHistoryWrite(tx, { procedure: created, action: 'CREATED', actor, snapshot: procedureSnapshot(created) })
+      return created
+    })
+    response.status(201).json({ procedure: procedureView(procedure) })
+  }))
+
+  app.patch('/api/processes/:processId/procedures/:procedureId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = procedureUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid procedure data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.procedure.findUnique({ where: { id: String(request.params.procedureId) }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    // Solo el borrador es editable: en revisión el contenido está congelado y lo aprobado jamás se
+    // sobrescribe (para cambiarlo hay que abrir una nueva revisión desde el endpoint de estado).
+    if (existing.status !== ProcedureStatus.DRAFT) {
+      response.status(409).json({ error: 'Only a draft procedure can be edited' })
+      return
+    }
+    if (parsed.data.code !== undefined && parsed.data.code !== existing.code) {
+      const duplicateCode = await db.procedure.findFirst({
+        where: { code: parsed.data.code, process: { companyId: process.companyId }, NOT: { id: existing.id } },
+        select: { id: true },
+      })
+      if (duplicateCode) {
+        response.status(409).json({ error: 'A procedure with this code already exists in your company' })
+        return
+      }
+    }
+    const data: Prisma.ProcedureUncheckedUpdateInput = {}
+    if (parsed.data.code !== undefined) data.code = parsed.data.code
+    if (parsed.data.name !== undefined) data.name = parsed.data.name
+    if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
+    if (parsed.data.scope !== undefined) data.scope = parsed.data.scope
+    if (parsed.data.description !== undefined) data.description = parsed.data.description
+    if (parsed.data.responsibleId !== undefined) {
+      const resolved = await resolveResponsible(parsed.data.responsibleId, process.companyId)
+      if (!resolved.ok) {
+        response.status(resolved.status).json({ error: resolved.error })
+        return
+      }
+      data.responsibleId = resolved.responsibleId
+    }
+    const changes = updatedProcedureChanges(existing, data)
+    // Sin cambios reales no se escribe historial (mismo criterio que updateProcessWithVersion).
+    if (changes.length === 0) {
+      response.json({ procedure: procedureView(existing) })
+      return
+    }
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    const procedure = await db.$transaction(async (tx) => {
+      const updated = await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude })
+      await procedureHistoryWrite(tx, { procedure: updated, action: 'UPDATED', actor, changes, snapshot: procedureSnapshot(updated) })
+      return updated
+    })
+    response.json({ procedure: procedureView(procedure) })
+  }))
+
+  app.post('/api/processes/:processId/procedures/:procedureId/status', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = procedureStatusChangeSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid status change', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.procedure.findUnique({ where: { id: String(request.params.procedureId) }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    if (!canTransitionProcedure(existing.status, parsed.data.status)) {
+      response.status(409).json({ error: 'Invalid procedure status transition' })
+      return
+    }
+    // La versión del documento avanza solo al aprobar: cada aprobación es una revisión nueva
+    // (1.0 -> 2.0 con el mismo helper de versionado de los procesos).
+    const version = parsed.data.status === ProcedureStatus.APPROVED ? nextProcessVersion(existing.version) : existing.version
+    const changes: ProcessChangeItem[] = [
+      { field: 'status', label: 'Estado', previousValue: existing.status, newValue: parsed.data.status },
+      ...(parsed.data.comment ? [{ field: 'comment', label: 'Comentario', previousValue: null, newValue: parsed.data.comment }] : []),
+    ]
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    const procedure = await db.$transaction(async (tx) => {
+      const updated = await tx.procedure.update({
+        where: { id: existing.id },
+        data: { status: parsed.data.status, version },
+        include: procedureInclude,
+      })
+      await procedureHistoryWrite(tx, { procedure: updated, action: 'STATUS_CHANGED', actor, changes, snapshot: procedureSnapshot(updated) })
+      return updated
+    })
+    response.json({ procedure: procedureView(procedure) })
+  }))
+
+  app.get('/api/processes/:processId/procedures/:procedureId/history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, procedureId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      procedureId: String(request.params.procedureId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid procedure id' })
+      return
+    }
+    const parsedQuery = procedureHistoryQuerySchema.safeParse(request.query)
+    if (!parsedQuery.success) {
+      response.status(400).json({ error: 'Invalid history query' })
+      return
+    }
+    const process = await findAccessibleProcess(request, parsedIds.data.processId)
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const procedure = await db.procedure.findUnique({ where: { id: parsedIds.data.procedureId }, select: { id: true, processId: true } })
+    if (!procedure || procedure.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    const { page, pageSize, action } = parsedQuery.data
+    const where = { procedureId: procedure.id, ...(action ? { action } : {}) }
+    const [total, versions] = await Promise.all([
+      db.procedureVersion.count({ where }),
+      db.procedureVersion.findMany({
+        where,
+        include: procedureVersionInclude,
+        orderBy: [{ changedAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ])
+    response.json({ versions: versions.map(procedureVersionView), total, page, pageSize })
+  }))
+
+  app.delete('/api/processes/:processId/procedures/:procedureId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.procedure.findUnique({ where: { id: String(request.params.procedureId) }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    // Lo aprobado no se borra jamás: si el procedimiento llegó a aprobarse, su baja es el estado
+    // OBSOLETE; el borrado queda para documentos que nunca se aprobaron.
+    const approvedVersion = await db.procedureVersion.findFirst({
+      where: { procedureId: existing.id, status: ProcedureStatus.APPROVED },
+      select: { id: true },
+    })
+    if (approvedVersion) {
+      response.status(409).json({ error: 'The procedure has approved versions; mark it obsolete instead' })
+      return
+    }
+    // Sin versiones aprobadas se retira el borrador completo: sus filas de historial acompañan en la
+    // misma transacción porque la clave foránea es Restrict.
+    await db.$transaction(async (tx) => {
+      await tx.procedureVersion.deleteMany({ where: { procedureId: existing.id } })
+      await tx.procedure.delete({ where: { id: existing.id } })
+    })
     response.status(204).send()
   }))
 
