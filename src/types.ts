@@ -412,6 +412,91 @@ export type ProcedureVersion = {
   changedAt: string
 }
 
+// ---- Módulo Auditorías de calidad (Trazabilidad y Control / Seguimiento y evidencia) ----
+// No confundir con RiskAuditEvent (auditoría del sistema del ciclo de vida de un riesgo).
+
+export type AuditStatus = 'PLANNED' | 'IN_PROGRESS' | 'CLOSED' | 'CANCELLED'
+export type AuditFindingType = 'NONCONFORMITY' | 'OBSERVATION' | 'OPPORTUNITY'
+export type AuditFindingSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR'
+export type AuditFindingStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'VERIFIED'
+export type AuditEventType =
+  | 'AUDIT_CREATED'
+  | 'AUDIT_UPDATED'
+  | 'STATUS_CHANGED'
+  | 'FINDING_CREATED'
+  | 'FINDING_UPDATED'
+  | 'FINDING_STATUS_CHANGED'
+  | 'FINDING_DELETED'
+  | 'EVIDENCE_CREATED'
+  | 'EVIDENCE_UPDATED'
+  | 'EVIDENCE_DELETED'
+
+export type AuditFinding = {
+  id: string
+  auditId: string
+  title: string
+  description: string
+  type: AuditFindingType
+  severity: AuditFindingSeverity
+  status: AuditFindingStatus
+  dueDate: string | null
+  responsible: Pick<User, 'id' | 'name'> | null
+  resolution: string | null
+  verifiedBy: Pick<User, 'id' | 'name'> | null
+  verifiedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditEvidence = {
+  id: string
+  auditId: string
+  findingId: string | null
+  name: string
+  description: string
+  url: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type Audit = {
+  id: string
+  processId: string
+  companyId: string
+  code: string
+  title: string
+  auditType: string | null
+  scope: string
+  objectives: string | null
+  criteria: string
+  status: AuditStatus
+  plannedDate: string | null
+  startDate: string | null
+  endDate: string | null
+  summary: string | null
+  leadAuditor: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name'> | null
+  findings: AuditFinding[]
+  evidences: AuditEvidence[]
+  createdAt: string
+  updatedAt: string
+}
+
+// Historial append-only del ciclo de vida de una auditoría de calidad: solo lo escribe el backend.
+export type AuditEvent = {
+  id: string
+  auditId: string
+  eventType: AuditEventType
+  summary: string
+  actorId: string | null
+  actor: Pick<User, 'id' | 'name'> | null
+  actorName: string | null
+  actorEmail: string | null
+  occurredAt: string
+  changes: ProcessChangeItem[]
+  metadata: Record<string, unknown> | null
+}
+
 export type ProcessSipocItem = {
   id: string
   processId: string

@@ -250,6 +250,11 @@ model User {
   monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
   responsibleProcedures Procedure[] @relation("ProcedureResponsibles")
   procedureVersions ProcedureVersion[] @relation("ProcedureVersionActors")
+  auditLeadAuditors Audit[] @relation("AuditLeadAuditors")
+  auditResponsibles Audit[] @relation("AuditResponsibles")
+  auditFindingResponsibles AuditFinding[] @relation("AuditFindingResponsibles")
+  auditFindingVerifiers AuditFinding[] @relation("AuditFindingVerifiers")
+  auditEvents AuditEvent[] @relation("AuditEventActors")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -598,6 +603,7 @@ model Process {
   sipocCustomers SipocCustomer[]
   risks          Risk[]
   procedures     Procedure[]
+  audits         Audit[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -901,4 +907,162 @@ model Notification {
 
   @@index([userId])
   @@index([readAt])
+}
+
+// ---- Módulo Auditorías de calidad (Trazabilidad y Control / Seguimiento y evidencia) ----
+// No confundir con RiskAuditEvent (auditoría del sistema del ciclo de vida de un riesgo): aquí se
+// planifican y ejecutan auditorías de calidad sobre un proceso, con hallazgos, evidencias y un
+// historial propio append-only. La empresa se deriva de process.companyId (mismo criterio que
+// Procedure y Kpi): no se duplica el tenant en una columna que podría divergir. El código automático
+// es único dentro de la empresa y lo genera el backend con advisory lock (patrón de Process.code);
+// no usa RiskCodeSequence.
+
+enum AuditStatus {
+  PLANNED
+  IN_PROGRESS
+  CLOSED
+  CANCELLED
+}
+
+enum AuditFindingType {
+  NONCONFORMITY
+  OBSERVATION
+  OPPORTUNITY
+}
+
+enum AuditFindingSeverity {
+  CRITICAL
+  MAJOR
+  MINOR
+}
+
+enum AuditFindingStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  VERIFIED
+}
+
+/**
+ * Tipos de evento del historial auditable de una auditoría de calidad. El conjunto es cerrado: la
+ * API no admite escritura de eventos desde el cliente, así que solo el backend puede emitirlos
+ * (mismo contrato que RiskAuditEventType y ProcedureHistoryAction).
+ */
+enum AuditEventType {
+  AUDIT_CREATED
+  AUDIT_UPDATED
+  STATUS_CHANGED
+  FINDING_CREATED
+  FINDING_UPDATED
+  FINDING_STATUS_CHANGED
+  FINDING_DELETED
+  EVIDENCE_CREATED
+  EVIDENCE_UPDATED
+  EVIDENCE_DELETED
+}
+
+model Audit {
+  id            String      @id @default(cuid())
+  processId     String
+  code          String
+  title         String
+  auditType     String?
+  scope         String
+  objectives    String?
+  criteria      String
+  status        AuditStatus @default(PLANNED)
+  plannedDate   DateTime?
+  startDate     DateTime?
+  endDate       DateTime?
+  summary       String?
+  leadAuditorId String?
+  responsibleId String?
+  process       Process     @relation(fields: [processId], references: [id], onDelete: Restrict)
+  leadAuditor   User?       @relation("AuditLeadAuditors", fields: [leadAuditorId], references: [id], onDelete: SetNull)
+  responsible   User?       @relation("AuditResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  findings      AuditFinding[]
+  evidences     AuditEvidence[]
+  events        AuditEvent[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([processId, code])
+  @@index([processId])
+  @@index([status])
+  @@index([leadAuditorId])
+  @@index([responsibleId])
+}
+
+model AuditFinding {
+  id             String              @id @default(cuid())
+  auditId        String
+  title          String
+  description    String
+  type           AuditFindingType
+  severity       AuditFindingSeverity
+  status         AuditFindingStatus  @default(OPEN)
+  dueDate        DateTime?
+  responsibleId  String?
+  resolution     String?
+  verifiedById   String?
+  verifiedAt     DateTime?
+  audit          Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  responsible    User?               @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  verifiedBy     User?               @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
+  evidences      AuditEvidence[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([auditId])
+  @@index([status])
+  @@index([severity])
+  @@index([responsibleId])
+}
+
+// Evidencia con solo enlace http(s) (mismo contrato que RiskEvidence): no se guardan archivos ni
+// rutas del servidor. Puede pertenecer a la auditoría completa o anclarse a un hallazgo concreto;
+// la ruta valida que el hallazgo sea de esta misma auditoría (sin referencias cruzadas entre
+// empresas o auditorías). Si el hallazgo se borra, la evidencia sobrevive anclada a la auditoría.
+model AuditEvidence {
+  id          String        @id @default(cuid())
+  auditId     String
+  findingId   String?
+  name        String
+  description String
+  url         String
+  audit       Audit         @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding     AuditFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([auditId])
+  @@index([findingId])
+}
+
+/**
+ * Historial cronológico y auditable del ciclo de vida de una auditoría de calidad. Solo lectura
+ * desde la aplicación: no existe endpoint que modifique o borre filas (append-only), y este modelo
+ * no expone mutaciones por PrismaClient en ninguna ruta. `actorName`/`actorEmail` quedan
+ * desnormalizados para que el evento sobreviva a la baja del usuario (mismo criterio que
+ * ProcessChange y RiskAuditEvent); `actorId` es null solo cuando no hay actor de sesión que
+ * atribuir. `changes` guarda los before/after por campo (formato ProcessChangeItem) y `metadata`
+ * los datos estructurados minimizados: nunca contraseñas, cookies, tokens ni secretos. El historial
+ * vive y muere con su auditoría (ON DELETE CASCADE), igual que hallazgos y evidencias.
+ */
+model AuditEvent {
+  id         String         @id @default(cuid())
+  auditId    String
+  actorId    String?
+  actorName  String?
+  actorEmail String?
+  eventType  AuditEventType
+  summary    String
+  changes    Json?
+  metadata   Json?
+  occurredAt DateTime       @default(now())
+  audit      Audit          @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  actor      User?          @relation("AuditEventActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([auditId, occurredAt])
+  @@index([eventType])
 }

@@ -216,6 +216,110 @@ export const procedureHistoryQuerySchema = z.object({
   action: procedureHistoryActionSchema.optional(),
 })
 
+// ---- Módulo Auditorías de calidad (Trazabilidad y Control) ----
+
+// Espejo de AuditStatus. PLANNED e IN_PROGRESS son los estados operativos; CLOSED y CANCELLED son
+// terminales y bloquean toda escritura posterior (la máquina de transiciones se valida en el servidor).
+export const auditStatusSchema = z.enum(['PLANNED', 'IN_PROGRESS', 'CLOSED', 'CANCELLED'])
+export const auditFindingTypeSchema = z.enum(['NONCONFORMITY', 'OBSERVATION', 'OPPORTUNITY'])
+export const auditFindingSeveritySchema = z.enum(['CRITICAL', 'MAJOR', 'MINOR'])
+export const auditFindingStatusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'VERIFIED'])
+
+const auditText = (max: number) => z.string().trim().min(1).max(max)
+// El responsable/auditor se valida contra la empresa en la API; la base existente también contiene
+// UUIDs (mismo criterio que kpiResponsibleId y procedureResponsibleId).
+const auditUserId = z.string().trim().min(1).max(64).nullable().optional()
+
+export const auditCreateSchema = z.object({
+  title: auditText(160).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
+  auditType: z.string().trim().max(80).nullable().optional(),
+  scope: auditText(2000),
+  objectives: z.string().trim().max(2000).nullable().optional(),
+  criteria: auditText(2000),
+  plannedDate: z.coerce.date().nullable().optional(),
+  leadAuditorId: auditUserId,
+  responsibleId: auditUserId,
+})
+
+export const auditUpdateSchema = auditCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one audit field is required',
+)
+
+export const auditQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  status: auditStatusSchema.optional(),
+})
+
+/**
+ * Transición de estado de la auditoría. La máquina de transiciones permitidas se valida en el
+ * servidor; aquí solo se acota la forma. Cerrarse exige resumen (se valida en el handler con el
+ * estado guardado, porque en PATCH no viene el estado actual).
+ */
+export const auditStatusChangeSchema = z.object({
+  status: auditStatusSchema,
+  summary: z.string().trim().max(10000).optional(),
+})
+
+export const auditFindingCreateSchema = z.object({
+  title: auditText(200).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
+  description: auditText(5000),
+  type: auditFindingTypeSchema,
+  severity: auditFindingSeveritySchema,
+  dueDate: z.coerce.date().nullable().optional(),
+  responsibleId: auditUserId,
+})
+
+export const auditFindingUpdateSchema = auditFindingCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one finding field is required',
+)
+
+/**
+ * Transición de estado de un hallazgo. RESOLVED exige resolución con contenido; VERIFIED la pone
+ * en el servidor con el actor de sesión y la fecha actual (nunca llegan del cliente).
+ */
+export const auditFindingStatusChangeSchema = z.object({
+  status: auditFindingStatusSchema,
+  resolution: z.string().trim().max(5000).optional(),
+}).refine(
+  (value) => value.status !== 'RESOLVED' || Boolean(value.resolution && value.resolution.length >= 3),
+  { message: 'Resolving a finding requires a resolution with at least 3 characters', path: ['resolution'] },
+)
+
+// Solo enlaces http(s): mismo contrato que RiskEvidence, sin guardar archivos ni rutas del servidor.
+const auditEvidenceUrl = z.string().trim().url('Evidence link must be a valid URL').refine(
+  (value) => /^https?:\/\//i.test(value),
+  'Evidence link must start with http:// or https://',
+)
+export const auditEvidenceCreateSchema = z.object({
+  name: z.string().trim().min(3).max(160),
+  description: z.string().trim().min(3).max(2000),
+  url: auditEvidenceUrl.max(500),
+  // Hallazgo al que se ancla la evidencia (opcional). La ruta comprueba que pertenezca a esta misma
+  // auditoría: no se admiten referencias cruzadas entre empresas o auditorías.
+  findingId: z.string().trim().min(1).max(64).nullable().optional(),
+})
+export const auditEvidenceUpdateSchema = auditEvidenceCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one evidence field is required',
+)
+
+// Consulta paginada del historial de una auditoría, mismo formato que riskAuditQuerySchema. El
+// listado de tipos es cerrado: solo el backend los emite, el cliente solo puede filtrar.
+export const auditEventTypeSchema = z.enum([
+  'AUDIT_CREATED', 'AUDIT_UPDATED', 'STATUS_CHANGED',
+  'FINDING_CREATED', 'FINDING_UPDATED', 'FINDING_STATUS_CHANGED', 'FINDING_DELETED',
+  'EVIDENCE_CREATED', 'EVIDENCE_UPDATED', 'EVIDENCE_DELETED',
+])
+export const auditHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  eventType: auditEventTypeSchema.optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+})
+
 export const sipocKindSchema = z.enum(['suppliers', 'inputs', 'processes', 'outputs', 'customers'])
 export const sipocItemCreateSchema = z.object({
   description: z.string().trim().min(1).max(500),

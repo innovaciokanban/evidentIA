@@ -2256,3 +2256,67 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   .risk-approval-bar { padding: 12px 16px; }
   .notifications-panel { right: -40px; }
 }
+
+/* ============================================
+   AUDITORÍAS DE CALIDAD
+   ============================================ */
+.process-audit-page .procedure-table-head { grid-template-columns: minmax(96px, .7fr) minmax(200px, 2fr) minmax(110px, .8fr) minmax(84px, .5fr) 28px; }
+.process-audit-page .procedure-row-summary { grid-template-columns: minmax(96px, .7fr) minmax(200px, 2fr) minmax(110px, .8fr) minmax(84px, .5fr) 28px; }
+
+.audit-status-planned { color: var(--blue); background: rgba(37, 99, 235, .12); }
+.audit-status-in_progress { color: var(--amber); background: rgba(217, 119, 6, .12); }
+.audit-status-closed { color: var(--green); background: rgba(22, 163, 74, .12); }
+.audit-status-cancelled { color: var(--muted); background: var(--bg-hover); }
+
+.audit-summary-field { grid-column: 1 / -1; }
+.audit-terminal-note { margin: 12px 0 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); background: var(--bg); font-size: 12px; font-style: italic; }
+
+.audit-subsection { margin-top: 16px; }
+.audit-subsection-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.audit-subsection-heading h4 { margin: 2px 0 0; color: var(--ink); font: 600 13px 'Space Grotesk', sans-serif; }
+.audit-empty-note { margin: 0; color: var(--muted); font-size: 12px; font-style: italic; }
+
+.audit-finding-list { display: flex; flex-direction: column; gap: 10px; }
+.audit-finding-card { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
+.audit-finding-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.audit-finding-header > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.audit-finding-card h5 { margin: 8px 0 0; color: var(--ink); font: 600 13.5px/1.35 'Space Grotesk', sans-serif; }
+.audit-finding-description { margin: 6px 0 0; color: var(--ink-secondary); font-size: 12.5px; line-height: 1.55; white-space: pre-line; }
+.audit-finding-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; color: var(--muted); font-size: 11.5px; }
+.audit-finding-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
+.audit-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; color: var(--ink-secondary); background: var(--bg-hover); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.audit-badge-type { border: 1px solid var(--border); background: var(--surface); }
+.audit-badge-low { color: var(--blue); background: rgba(37, 99, 235, .1); }
+.audit-badge-medium { color: var(--amber); background: rgba(217, 119, 6, .12); }
+.audit-badge-high { color: var(--red); background: rgba(220, 38, 38, .1); }
+.audit-badge-critical { color: #fff; background: var(--red); }
+.audit-badge-status-open { color: var(--red); background: rgba(220, 38, 38, .1); }
+.audit-badge-status-in_progress { color: var(--amber); background: rgba(217, 119, 6, .12); }
+.audit-badge-status-resolved { color: var(--blue); background: rgba(37, 99, 235, .1); }
+.audit-badge-status-verified { color: var(--green); background: rgba(22, 163, 74, .12); }
+
+.audit-evidence-list { display: flex; flex-direction: column; gap: 10px; }
+.audit-evidence-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
+.audit-evidence-card header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.audit-evidence-card header strong { color: var(--ink); font: 600 13px 'Space Grotesk', sans-serif; }
+.audit-evidence-card > p { margin: 0; color: var(--ink-secondary); font-size: 12.5px; line-height: 1.5; }
+.audit-evidence-link { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
+.audit-evidence-link a { color: var(--blue); font-size: 12px; word-break: break-all; }
+
+@media (max-width: 900px) {
+  .process-audit-page .procedure-table-head,
+  .process-audit-page .procedure-row-summary { grid-template-columns: minmax(84px, .7fr) minmax(160px, 2fr) minmax(100px, .8fr) minmax(70px, .5fr) 24px; gap: 10px; }
+}
+@media (max-width: 640px) {
+  .process-audit-page .procedure-table-head { display: none; }
+  .process-audit-page .procedure-row-summary { grid-template-columns: 1fr auto; gap: 8px 12px; padding: 14px; }
+  .process-audit-page .procedure-row-summary .procedure-code-cell { grid-column: 1; grid-row: 1; }
+  .process-audit-page .procedure-row-summary .procedure-expand-icon { grid-column: 2; grid-row: 1; }
+  .process-audit-page .procedure-row-summary .procedure-name-cell { grid-column: 1 / -1; grid-row: 2; }
+  .process-audit-page .procedure-row-summary .procedure-status { grid-column: 1; grid-row: 3; }
+  .process-audit-page .procedure-row-summary .procedure-version-cell { grid-column: 2; grid-row: 3; justify-self: end; }
+  .audit-subsection-heading { align-items: flex-start; flex-direction: column; }
+  .audit-finding-header { flex-direction: column; }
+  .audit-finding-actions { justify-content: flex-start; width: 100%; }
+}
