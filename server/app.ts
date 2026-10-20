@@ -2085,14 +2085,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const history = await db.processChange.findFirst({ where: { processId: existing.id }, select: { id: true } })
     if (history) {
-      response.status(409).json({ error: 'Process cannot be deleted because it has change history' })
+      response.status(409).json({ error: 'Process cannot be deleted because it has change history', reason: 'CHANGE_HISTORY' })
       return
     }
     try {
       await db.process.delete({ where: { id: existing.id } })
     } catch (error) {
       if ((error as { code?: unknown } | null)?.code === 'P2003') {
-        response.status(409).json({ error: 'Process cannot be deleted because it has change history' })
+        response.status(409).json({ error: 'Process cannot be deleted because it still has related records (risks, indicators, procedures, audits or SIPOC entries)', reason: 'RELATED_RECORDS' })
         return
       }
       throw error

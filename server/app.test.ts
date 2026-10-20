@@ -1137,6 +1137,29 @@ describe('processes API', () => {
     expect((await reader.delete(`/api/processes/${processFixture.id}`)).status).toBe(403)
     expect((await reader.get('/api/processes')).body.processes.some((item: { id: string }) => item.id === processFixture.id)).toBe(true)
   })
+
+  it('distinguishes change history from related records when deletion conflicts', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    // El alta registra la entrada CREATED: el historial bloquea el borrado con motivo CHANGE_HISTORY.
+    const created = await agent.post('/api/processes').send({ name: 'Proceso con historial', type: 'SUPPORT', category: 'apoyo', objective: 'Objetivo bloqueado por historial', companyId: company.id })
+    expect(created.status).toBe(201)
+    const withHistory = await agent.delete(`/api/processes/${created.body.process.id}`)
+    expect(withHistory.status).toBe(409)
+    expect(withHistory.body).toEqual({ error: 'Process cannot be deleted because it has change history', reason: 'CHANGE_HISTORY' })
+
+    // Sin historial, los registros relacionados que protege la FK (P2003) devuelven su propio motivo.
+    const processDelete = (db as unknown as { process: { delete: ReturnType<typeof vi.fn> } }).process
+    processDelete.delete.mockRejectedValueOnce({ code: 'P2003' })
+    const withRelated = await agent.delete(`/api/processes/${processFixture.id}`)
+    expect(withRelated.status).toBe(409)
+    expect(withRelated.body).toEqual({ error: 'Process cannot be deleted because it still has related records (risks, indicators, procedures, audits or SIPOC entries)', reason: 'RELATED_RECORDS' })
+
+    // Sin historial ni relaciones, el mismo endpoint responde 204 (no se relaja la integridad).
+    expect((await agent.delete(`/api/processes/${processFixture.id}`)).status).toBe(204)
+  })
 })
 
 describe('dashboard API', () => {

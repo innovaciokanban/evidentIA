@@ -2,7 +2,8 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { KPICard } from '../ui/KPICard'
 import { LoadingState } from '../ui/LoadingState'
-import { ProcessMapBand, type ProcessCategory } from './ProcessCard'
+import { ProcessMapBand, ProcessMapFeedback, type ProcessCategory } from './ProcessCard'
+import { processDeleteErrorMessage } from './ProcessesPage.model'
 import { ProcessForm, type ProcessDraft, type ProcessUser } from './ProcessForm'
 import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ProcessRiskPanel } from './ProcessRiskPanel'
@@ -372,7 +373,11 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
       const reloaded = await loadProcesses()
       setNotice(reloaded ? 'Proceso eliminado correctamente.' : 'El proceso se eliminó, pero no pudimos actualizar el mapa.')
     } catch (requestError) {
-      setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el proceso.')
+      if (requestError instanceof ApiError && requestError.status === 409) {
+        setFormError(processDeleteErrorMessage(requestError.reason))
+      } else {
+        setFormError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el proceso.')
+      }
     }
   }
 
@@ -395,7 +400,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
          </div>
         </div>}
 
-        {notice && !showForm && !showKpis && !showRisks && !showChangeHistory && !showProcedures && !showAudits && <div className="form-success page-alert" role="status">{notice}</div>}
+        {!showForm && !showKpis && !showRisks && !showChangeHistory && !showProcedures && !showAudits && <ProcessMapFeedback notice={notice} error={formError} />}
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (

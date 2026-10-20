@@ -108,3 +108,18 @@ export function ProcessMapBand({ band, processes, canCreate, onOpenProcess, onCr
     </section>
   )
 }
+
+export type ProcessMapFeedbackProps = {
+  notice: string
+  error: string
+}
+
+/** Confirmaciones y errores de acciones del mapa (p. ej. eliminar un proceso bloqueado). */
+export function ProcessMapFeedback({ notice, error }: ProcessMapFeedbackProps) {
+  return (
+    <>
+      {notice && <div className="form-success page-alert" role="status">{notice}</div>}
+      {error && <div className="form-error page-alert" role="alert">{error}</div>}
+    </>
+  )
+}

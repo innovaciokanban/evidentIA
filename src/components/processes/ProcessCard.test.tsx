@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ProcessCard, ProcessMapBand } from './ProcessCard'
+import { ProcessCard, ProcessMapBand, ProcessMapFeedback } from './ProcessCard'
 import type { Process } from '../../types'
 
 const process: Process = {
@@ -134,5 +134,27 @@ describe('ProcessMapBand', () => {
     expect(markup).toContain('Activo')
     expect(markup).toContain('En pausa')
     expect(markup).toContain('process-arrow')
+  })
+})
+
+describe('ProcessMapFeedback', () => {
+  it('muestra el error de una acción del mapa (p. ej. eliminar) como alerta visible', () => {
+    const markup = renderToStaticMarkup(
+      <ProcessMapFeedback notice="" error="No se puede eliminar el proceso porque tiene historial de cambios." />,
+    )
+
+    expect(markup).toContain('role="alert"')
+    expect(markup).toContain('No se puede eliminar el proceso porque tiene historial de cambios.')
+    expect(markup).not.toContain('role="status"')
+  })
+
+  it('muestra las confirmaciones con role status y silencia los estados vacíos', () => {
+    const markup = renderToStaticMarkup(<ProcessMapFeedback notice="Proceso eliminado correctamente." error="" />)
+
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('Proceso eliminado correctamente.')
+    expect(markup).not.toContain('role="alert"')
+
+    expect(renderToStaticMarkup(<ProcessMapFeedback notice="" error="" />)).toBe('')
   })
 })
