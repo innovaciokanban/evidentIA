@@ -343,23 +343,29 @@ export const riskCreateSchema = z.object({
   // Kept optional while Risk.bpmnActivity remains NOT NULL in PostgreSQL.
   bpmnActivity: z.string().trim().min(2).max(160).optional(),
   riskOwnerId: idReference.nullable().optional(),
-  // Estado inicial PENDING (sin decisión); la aceptación es un veredicto formal y no
-  // depende del tratamiento elegido para el riesgo.
+  // Solo como guarda de compatibilidad con clientes antiguos: el valor se valida (un enum
+  // inválido sigue rechazando la petición) pero NUNCA se usa. La ruta de creación fuerza
+  // PENDING porque el veredicto formal lo decide el ciclo de aprobación, nunca el cliente.
   acceptanceStatus: riskAcceptanceStatusSchema.optional(),
   // Tratamiento escogido: Evitar, Mitigar, Transferir o Aceptar. Independiente de acceptanceStatus.
   treatment: riskTreatmentTypeSchema.nullable().optional(),
   mitigationOwnerId: idReference.nullable().optional(),
-  mitigationStartDate: mitigationDate,
+  // La fecha de inicio del plan de mitigación se retiró del formulario y de la API: el schema
+  // deja de aceptarla (Zod descarta claves no declaradas, así que un cliente antiguo que la envíe
+  // no rompe la petición y el valor no se persiste). La columna en PostgreSQL se conserva.
   mitigationDueDate: mitigationDate,
   inherentImpact: riskScaleValue,
   inherentProbability: riskScaleValue,
   residualImpact: riskScaleValue,
   residualProbability: riskScaleValue,
 })
-export const riskUpdateSchema = riskCreateSchema.omit({ riskType: true }).partial().extend({
+export const riskUpdateSchema = riskCreateSchema.omit({ riskType: true, acceptanceStatus: true }).partial().extend({
   // En edición el tipo no es editable: la ruta de PATCH lo compara con la categoría derivada del
   // proceso y con el valor almacenado (para tolerar clientes antiguos) y nunca lo persiste.
   riskType: z.string().trim().min(3).max(64).optional(),
+  // acceptanceStatus se omite deliberadamente: aunque un cliente lo envíe, Zod descarta la clave
+  // (y si fuera el único campo, el refine inferior devuelve 400). La única escritura posible del
+  // veredicto pasa por la decisión autorizada del ciclo de aprobación.
 }).refine(
   (value) => Object.keys(value).length > 0,
   'At least one risk field is required',
@@ -528,6 +534,19 @@ export const actionItemUpdateSchema = z.object({
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
 )
+
+/**
+ * Alta de una actividad del plan de mitigación desde el panel de riesgos (paso 3). El usuario
+ * llena nombre, descripción, responsable y fecha de entrega; el servidor fija prioridad MEDIUM,
+ * estado PENDING y crea el ticket asociado en la misma transacción. La descripción es opcional:
+ * si no llega, se usa el título para no dejar la actividad sin contexto.
+ */
+export const mitigationActivityCreateSchema = z.object({
+  title: z.string().trim().min(3).max(120),
+  description: z.string().trim().min(3).max(5000).optional(),
+  responsibleId: idReference,
+  dueDate: z.coerce.date(),
+})
 
 export const strategyTasksCreateSchema = z.object({
   strategyId: z.string().trim().min(1).max(200),

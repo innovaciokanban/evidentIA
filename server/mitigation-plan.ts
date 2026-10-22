@@ -1,4 +1,4 @@
-import type { ActionItemStatus } from '@prisma/client'
+import type { ActionItemStatus, TicketStatus } from '@prisma/client'
 
 /**
  * Reglas puras del aviso "plan de mitigación completado". Vive aparte de app.ts para que la
@@ -19,8 +19,16 @@ export const riskResidualSectionLink = (processId: string, riskId: string): stri
 /** Pedidos mínimos de un plan de acción para decidir si su mitigación terminó. */
 export type MitigationPlanSnapshot = {
   id: string
-  items: Array<{ status: ActionItemStatus }>
+  /**
+   * `ticketStatus` corrobora el estado real del ticket que representa la actividad. Es opcional
+   * (y `null` cuando la actividad no tiene ticket) para que los consumidores que solo conocen la
+   * actividad no tengan que fabricar el dato: solo quien pueda leer el ticket llena el campo.
+   */
+  items: Array<{ status: ActionItemStatus; ticketStatus?: TicketStatus | null }>
 }
+
+/** Estados de ticket que confirman que la actividad asociada terminó su recorrido. */
+const finishedTicketStatuses: readonly TicketStatus[] = ['RESOLVED', 'CLOSED']
 
 /**
  * Condición de finalización, sobre los estados reales del proyecto:
@@ -31,20 +39,36 @@ export type MitigationPlanSnapshot = {
  *   todas sus actividades en COMPLETED.
  * - Solo COMPLETED cuenta. PENDING e IN_PROGRESS son estados intermedios que bloquean el aviso y
  *   CANCELLED no es "completada": una actividad cancelada deja el plan sin cerrar.
+ * - Cuando la actividad tiene ticket, su estado real también debe estar cerrado (RESOLVED o
+ *   CLOSED): una actividad COMPLETED con el ticket todavía abierto o en curso no afirma que la
+ *   mitigación terminara. El ticket sin actividad (null) no bloquea: no hay estado que corroborar.
  */
 export const mitigationPlansCompleted = (plans: readonly MitigationPlanSnapshot[]): boolean =>
   plans.length > 0
-  && plans.every((plan) => plan.items.length > 0 && plan.items.every((item) => item.status === 'COMPLETED'))
+  && plans.every((plan) => plan.items.length > 0 && plan.items.every((item) => (
+    item.status === 'COMPLETED'
+    && (item.ticketStatus === undefined || item.ticketStatus === null || finishedTicketStatuses.includes(item.ticketStatus))
+  )))
 
 /**
- * Destinatarios del aviso: el creador del riesgo y su dueño, sin duplicar ids. Los nulos (riesgo
- * legado sin evento de creación, o riesgo sin dueño asignado) se descartan aquí; la existencia de
- * los usuarios se comprueba después, contra la base, antes de escribir.
+ * Destinatarios del aviso, sin duplicar ids:
+ *
+ * - Si el plan tiene responsable de mitigación (Risk.mitigationOwnerId), el aviso es SOLO para él:
+ *   quien se comprometió a ejecutar la mitigación es quien debe ver que ya quedó completa.
+ * - Si el riesgo no tiene responsable de mitigación (planes legados o todavía sin asignar), se
+ *   conserva el destinatario de siempre: creador del riesgo y su dueño.
+ *
+ * Los nulos (riesgo legado sin evento de creación, riesgo sin dueño ni responsable) se descartan
+ * aquí; la existencia de los usuarios se comprueba después, contra la base, antes de escribir.
  */
 export const mitigationNotificationRecipients = (
+  mitigationOwnerId: string | null | undefined,
+  riskOwnerId: string | null | undefined,
   creatorId: string | null | undefined,
-  ownerId: string | null | undefined,
-): string[] => [...new Set([creatorId, ownerId].filter((id): id is string => Boolean(id)))]
+): string[] => {
+  const candidates = mitigationOwnerId ? [mitigationOwnerId] : [creatorId, riskOwnerId]
+  return [...new Set(candidates.filter((id): id is string => Boolean(id)))]
+}
 
 /**
  * Texto del aviso. El cuerpo es el mensaje acordado para solicitar la calificación residual; el

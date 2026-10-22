@@ -15,7 +15,6 @@ const makeRisk = ({ inherent, residual, code = 'MIS-R1', name = 'Riesgo de prueb
   acceptanceStatus: 'PENDING',
   treatment: null,
   mitigationOwner: null,
-  mitigationStartDate: null,
   mitigationDueDate: null,
   inherentImpact: inherent[0],
   inherentProbability: inherent[1],

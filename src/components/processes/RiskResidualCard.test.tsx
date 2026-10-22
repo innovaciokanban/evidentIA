@@ -24,7 +24,6 @@ const makeRisk = (overrides: Partial<ProcessRisk> = {}): ProcessRisk => ({
   acceptanceStatus: 'PENDING',
   treatment: null,
   mitigationOwner: null,
-  mitigationStartDate: null,
   mitigationDueDate: null,
   inherentImpact: 3,
   inherentProbability: 4,
@@ -46,35 +45,48 @@ const draft = { residualImpact: '1', residualProbability: '1' }
 const noop = () => {}
 
 describe('residualRiskLocked', () => {
-  it('bloquea el residual mientras el riesgo no tenga controles, incluida la creación', () => {
+  it('bloquea el residual mientras no exista, mientras falte el paso 2 o sin controles', () => {
     expect(residualRiskLocked(null)).toBe(true)
     expect(residualRiskLocked(makeRisk({ controls: [] }))).toBe(true)
+    // Con controles pero sin aceptar el riesgo, el paso 4 sigue bloqueado.
+    expect(residualRiskLocked(makeRisk({ controls: [makeControl()], acceptanceStatus: 'ACCEPTED', treatment: null }))).toBe(true)
+    expect(residualRiskLocked(makeRisk({ controls: [makeControl()], acceptanceStatus: 'REJECTED', treatment: 'MITIGATE' }))).toBe(true)
   })
 
-  it('habilita el residual con al menos un control, sin importar su evaluación', () => {
-    expect(residualRiskLocked(makeRisk({ controls: [makeControl({ evaluation: 'PENDING' })] }))).toBe(false)
-    expect(residualRiskLocked(makeRisk({ controls: [makeControl({ evaluation: 'EFFECTIVE' })] }))).toBe(false)
+  it('habilita el residual con aceptación, tratamiento y al menos un control', () => {
+    const unlocked = { treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED' } as const
+    expect(residualRiskLocked(makeRisk({ ...unlocked, controls: [makeControl({ evaluation: 'PENDING' })] }))).toBe(false)
+    expect(residualRiskLocked(makeRisk({ ...unlocked, controls: [makeControl({ evaluation: 'EFFECTIVE' })] }))).toBe(false)
   })
 
   it('vuelve a bloquear el residual al quitar el último control', () => {
-    const withControl = makeRisk({ controls: [makeControl()] })
+    const withControl = makeRisk({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', controls: [makeControl()] })
     expect(residualRiskLocked(withControl)).toBe(false)
     expect(residualRiskLocked({ ...withControl, controls: [] })).toBe(true)
   })
 })
 
 describe('RiskResidualCard', () => {
-  it('deshabilita la tarjeta residual y pide al menos un control cuando no hay ninguno', () => {
-    for (const risk of [null, makeRisk({ controls: [] })]) {
+  it('deshabilita la tarjeta y explica el primer requisito que falta, en orden de etapas', () => {
+    const cases: Array<[ProcessRisk | null, string]> = [
+      [null, 'Guarda el riesgo para continuar con la gestión.'],
+      [makeRisk({ controls: [] }), 'Define el tratamiento del riesgo para continuar'],
+      [makeRisk({ controls: [], treatment: 'MITIGATE' }), 'La gestión de controles y mitigación se habilitará cuando el dueño del riesgo acepte el riesgo'],
+      [makeRisk({ controls: [makeControl()], treatment: 'MITIGATE', acceptanceStatus: 'REJECTED' }), 'El riesgo fue rechazado. Se requiere una nueva decisión autorizada antes de continuar'],
+      // Aceptado pero sin controles: ya no es el paso 2 lo que falta, es el paso 3.
+      [makeRisk({ controls: [], treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED' }), 'Agrega al menos un control para habilitar el riesgo residual'],
+    ]
+    for (const [risk, expectedNote] of cases) {
       const markup = renderToStaticMarkup(<RiskResidualCard risk={risk} draft={draft} onImpact={noop} onProbability={noop} />)
       expect(markup).toContain('RIESGO RESIDUAL')
-      expect(markup).toContain('Agrega al menos un control para habilitar el riesgo residual')
+      expect(markup).toContain(expectedNote)
       expect(markup.match(/<select[^>]*disabled/g)).toHaveLength(2)
     }
   })
 
-  it('habilita la tarjeta residual y oculta el mensaje cuando existe al menos un control', () => {
-    const markup = renderToStaticMarkup(<RiskResidualCard risk={makeRisk({ controls: [makeControl()] })} draft={draft} onImpact={noop} onProbability={noop} />)
+  it('habilita la tarjeta residual y oculta el mensaje cuando ya está todo resuelto', () => {
+    const risk = makeRisk({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', controls: [makeControl()] })
+    const markup = renderToStaticMarkup(<RiskResidualCard risk={risk} draft={draft} onImpact={noop} onProbability={noop} />)
     expect(markup).toContain('RIESGO RESIDUAL')
     expect(markup).not.toContain('Agrega al menos un control')
     expect(markup).not.toContain('disabled')
@@ -83,7 +95,14 @@ describe('RiskResidualCard', () => {
   it('expone el ancla de la notificación de plan de mitigación completado', () => {
     // El link "risks/<proceso>/<riesgo>/residual" apunta a este id para llevar al usuario hasta la
     // calificación residual en cuanto se cerraron las actividades del plan.
-    const markup = renderToStaticMarkup(<RiskResidualCard risk={makeRisk({ controls: [makeControl()] })} draft={draft} onImpact={noop} onProbability={noop} />)
+    const markup = renderToStaticMarkup(<RiskResidualCard risk={makeRisk({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', controls: [makeControl()] })} draft={draft} onImpact={noop} onProbability={noop} />)
     expect(markup).toContain('id="risk-residual-section"')
+  })
+
+  it('usa la variante residual de la tarjeta y la retícula compartida de campos', () => {
+    const markup = renderToStaticMarkup(<RiskResidualCard risk={makeRisk({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', controls: [makeControl()] })} draft={draft} onImpact={noop} onProbability={noop} />)
+    expect(markup).toContain('risk-evaluation-card is-residual')
+    expect(markup).toContain('risk-evaluation-body')
+    expect(markup).toContain('Nivel calculado')
   })
 })

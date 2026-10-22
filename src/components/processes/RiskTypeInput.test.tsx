@@ -39,7 +39,7 @@ describe('riskPayloadFromDraft', () => {
       name: 'Entrega tardía de información',
       description: 'La información puede llegar después del plazo y afectar la respuesta.',
       riskOwnerId: '', acceptanceStatus: 'PENDING', treatment: '', mitigationOwnerId: '',
-      mitigationStartDate: '', mitigationDueDate: '', inherentImpact: '3', inherentProbability: '4',
+      mitigationDueDate: '', inherentImpact: '3', inherentProbability: '4',
       residualImpact: '2', residualProbability: '2',
     })
 

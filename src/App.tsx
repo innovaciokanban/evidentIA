@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import { api, apiUpload, apiUrl, ApiError } from './api'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketEvidence, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -272,8 +272,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   }, [])
   useEffect(() => { void refreshInbox() }, [refreshInbox])
   // Abrir una notificación la marca como leída (optimista, con respaldo en el servidor) y navega
-  // a su destino; el parser decide si es una aprobación o un riesgo y, en ese caso, si hay que
-  // llevar a una sección concreta (p. ej. "risks/<processId>/<riskId>/residual").
+  // a su destino; el parser decide si es una aprobación, un riesgo (con su sección concreta, p. ej.
+  // "risks/<processId>/<riskId>/residual") o un ticket asignado ("tickets/<id>").
   async function openNotification(notification: AppNotification) {
     setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: item.readAt ?? new Date().toISOString() } : item))
     if (!notification.readAt) setUnreadNotifications((count) => Math.max(0, count - 1))
@@ -287,6 +287,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setRiskIntent({ processId: target.processId, riskId: target.riskId, section: target.section })
       navigateToView('processes')
     }
+    if (target?.kind === 'ticket') openTicket(target.ticketId)
   }
   function markAllNotificationsRead() {
     if (unreadNotifications === 0) return
@@ -1710,7 +1711,13 @@ function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }
       const payload = user.role === 'SUPERUSER' ? { ...draft, assignedToId: assignedToId || null } : draftWithoutAssignment
       const result = selected ? await api<{ ticket: Ticket }>(`/tickets/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) }) : await api<{ ticket: Ticket }>('/tickets', { method: 'POST', body: JSON.stringify(payload) })
       setShowForm(false); setSelected(result.ticket); await loadTickets()
-    } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.') } finally { setSaving(false) }
+    } catch (requestError) {
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.')
+      // El backend devuelve 409 con motivo MITIGATION_EVIDENCE_REQUIRED cuando una actividad de
+      // mitigación intenta cerrarse sin PDF: se cierra el formulario para dejar el detalle (y su
+      // sección de evidencia) a la vista, que es donde hay que subir el archivo.
+      if (requestError instanceof ApiError && requestError.reason === 'MITIGATION_EVIDENCE_REQUIRED') setShowForm(false)
+    } finally { setSaving(false) }
   }
   async function removeTicket(ticket: Ticket) { const confirmed = await askConfirm({ title: 'Eliminar ticket', message: `Se eliminará «${ticket.title}». Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
   return <div className="page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadTickets()} />}<section className="panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} onOpenRisk={onOpenRisk} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
@@ -1720,6 +1727,56 @@ function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmi
 function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; onOpenRisk: (processId: string, riskId: string) => void }) {
   // Los tickets generados por una aprobación traen el riesgo de origen para poder volver a él.
   const originRisk = ticket.riskApprovals?.[0]?.risk
+  // Evidencia PDF del ticket: se pide al servidor al abrir el detalle y se refresca tras cada
+  // subida. Un PDF adjunto es lo que el backend exige para dar por cerrada una actividad de
+  // mitigación, así que esta sección es también el destino del aviso 409 del gate.
+  const [evidence, setEvidence] = useState<TicketEvidence[]>([])
+  const [evidenceLoading, setEvidenceLoading] = useState(true)
+  const [evidenceError, setEvidenceError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const evidenceInput = useRef<HTMLInputElement>(null)
+  const loadEvidence = useCallback(async () => {
+    setEvidenceLoading(true)
+    setEvidenceError('')
+    try {
+      const result = await api<{ evidence: TicketEvidence[] }>(`/tickets/${ticket.id}/evidence`)
+      setEvidence(result.evidence)
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar la evidencia.')
+    } finally {
+      setEvidenceLoading(false)
+    }
+  }, [ticket.id])
+  // Se difiere un tick (mismo patrón que la lista de tickets) para no encadenar renders desde el
+  // propio efecto: la carga sigue siendo una reacción al cambio de ticket.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadEvidence() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadEvidence])
+  async function uploadEvidence(file: File) {
+    if (uploading) return
+    setUploading(true)
+    setEvidenceError('')
+    try {
+      await apiUpload(`/tickets/${ticket.id}/evidence`, file)
+      await loadEvidence()
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo subir el PDF.')
+    } finally {
+      setUploading(false)
+    }
+  }
+  async function removeEvidence(evidenceFile: TicketEvidence) {
+    const confirmed = await askConfirm({ title: 'Eliminar evidencia', message: `Se eliminará «${evidenceFile.filename}» y su archivo del servidor. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
+    if (!confirmed) return
+    setEvidenceError('')
+    try {
+      await api(`/tickets/${ticket.id}/evidence/${evidenceFile.id}`, { method: 'DELETE' })
+      setEvidence((current) => current.filter((item) => item.id !== evidenceFile.id))
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la evidencia.')
+    }
+  }
   return (
     <div className="drawer-backdrop"><aside className="drawer detail-drawer">
       <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div>
@@ -1734,6 +1791,49 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
         </div>
       )}
       <div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{originRisk ? 'Aprobación de riesgo' : ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div>
+      <section className="detail-section ticket-evidence-section" aria-label="Evidencia del ticket">
+        <p className="detail-label">EVIDENCIA (PDF)</p>
+        <p className="detail-description">Adjunta el PDF que respalda esta actividad. Para cerrar una actividad de mitigación el sistema exige al menos un PDF.</p>
+        <input
+          ref={evidenceInput}
+          type="file"
+          accept="application/pdf,.pdf"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file) void uploadEvidence(file)
+          }}
+        />
+        <div className="ticket-evidence-toolbar">
+          <button type="button" className="button secondary small-button" disabled={uploading} onClick={() => evidenceInput.current?.click()}>
+            {uploading ? 'Subiendo...' : '+ Adjuntar PDF'}
+          </button>
+          <span className="ticket-evidence-hint">Solo PDF · máximo 10 MB</span>
+        </div>
+        {evidenceError && <p className="form-error ticket-evidence-error" role="alert">{evidenceError}</p>}
+        {evidenceLoading
+          ? <div className="inline-loading"><span className="loader" />Cargando evidencia...</div>
+          : evidence.length === 0
+            ? <p className="ticket-evidence-empty">Sin evidencia adjunta.</p>
+            : (
+              <ul className="ticket-evidence-list">
+                {evidence.map((item) => (
+                  <li key={item.id} className="ticket-evidence-item">
+                    <span className="ticket-evidence-kind">PDF</span>
+                    <div className="ticket-evidence-info">
+                      <strong title={item.filename}>{item.filename}</strong>
+                      <small>{fileSize(item.size)} · {item.uploadedBy.name} · {relativeDate(item.createdAt)}</small>
+                    </div>
+                    <span className="ticket-evidence-actions">
+                      <a className="text-button" href={apiUrl(`/tickets/${ticket.id}/evidence/${item.id}`)}>Descargar</a>
+                      <button type="button" className="text-button ticket-evidence-remove" onClick={() => void removeEvidence(item)}>Eliminar</button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+      </section>
       <div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div>
     </aside></div>
   )
@@ -1756,6 +1856,13 @@ function initials(name: string) { return name.split(' ').map((part) => part[0]).
 function firstName(name: string) { return name.split(' ')[0] }
 
 function relativeDate(date: string) { const value = new Date(date); const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const target = new Date(value.getFullYear(), value.getMonth(), value.getDate()); const days = Math.round((target.getTime() - today.getTime()) / 86400000); if (days === 0) return 'Hoy'; if (days === -1) return 'Ayer'; if (days === 1) return 'Mañana'; if (days < 0 && days > -7) return `Hace ${Math.abs(days)} días`; if (days > 1 && days < 7) return `En ${days} días`; return value.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) }
+
+/** Tamaño legible de un archivo adjunto (B / KB / MB), para la lista de evidencia de un ticket. */
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, onStageChange }: { diagnostic: Diagnostic; user: User; onBack: () => void; onEdit: () => void; onDelete: () => void; stage: DiagStage; onStageChange: (stage: DiagStage) => void }) {
   const diagStage = stage

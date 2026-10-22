@@ -169,6 +169,8 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   let storedRecommendations: typeof recommendation[] = existingRecommendations
   type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; createdById: string; assignedToId: string | null; actionItemId: string | null; dueDate: Date | null }
   let storedTickets: StoredTicket[] = []
+  type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
+  const storedNotifications: StoredNotification[] = []
   let storedCheckyMessages: typeof checkyMessageFixture[] = []
   /** A qué diagnóstico pertenece cada sesión, que es el filtro que usa la priorización. */
   let storedCheckySessionOwners: Record<string, string> = { [checkySessionFixture.id]: diagnostic.id }
@@ -218,6 +220,27 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
         return { id: base.id, name: data.name ?? base.name, email: data.email ?? base.email, role: data.role ?? base.role, companyId: data.companyId !== undefined ? data.companyId : base.companyId }
       }),
       delete: vi.fn(),
+    },
+    // Notificaciones in-app: la campana de asignación y el aviso de plan completado se escriben
+    // con estos dos métodos y deduplican por (usuario, link), igual que en producción; los tests
+    // las revisan sobre las llamadas registradas y sobre el almacén guardado.
+    notification: {
+      findFirst: vi.fn(async ({ where }: { where: { userId: string; link: string } }) => storedNotifications.find((stored) => stored.userId === where.userId && stored.link === where.link) ?? null),
+      findMany: vi.fn(async () => storedNotifications),
+      create: vi.fn(async ({ data }: { data: { userId: string; title: string; body: string; link: string } }) => {
+        const notification = { id: `cmnotification${storedNotifications.length + 1}`, readAt: null, createdAt: new Date(), ...data }
+        storedNotifications.push(notification)
+        return notification
+      }),
+    },
+    // Evidencia PDF de los tickets: el gate 409 cuenta filas aquí y las rutas de evidencia las
+    // crean/borran. El arnés no guarda archivos: evidence.test.ts se ocupa del disco real.
+    ticketEvidenceFile: {
+      count: vi.fn(async () => 0),
+      findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async () => []),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmevidence${Date.now()}`, createdAt: new Date(), ...data })),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
     },
     session: {
       create: vi.fn(async () => { sessionActive = true; return { id: 'session-1', expiresAt: new Date(Date.now() + 86400000) } }),
@@ -905,6 +928,54 @@ describe('tickets API', () => {
     const list = await agent.get('/api/tickets?status=OPEN')
     expect(list.status).toBe(200)
     expect(list.body.tickets).toHaveLength(1)
+  })
+
+  it('notifies the assignee when a ticket is created or reassigned, and only when it really changes', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id)
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const notify = db.notification.create as unknown as { mock: { calls: Array<[{ data: { userId: string; link: string; title: string; body: string } }]> } }
+
+    const created = await agent.post('/api/tickets').send({ title: 'Ticket con responsable', description: 'Ticket que nace con responsable asignado', assignedToId: companyUser.id })
+    expect(created.status).toBe(201)
+    expect(notify.mock.calls).toHaveLength(1)
+    expect(notify.mock.calls[0][0].data).toMatchObject({
+      userId: companyUser.id,
+      link: `tickets/${created.body.ticket.id}`,
+      title: `Ticket asignado: ${created.body.ticket.title}`,
+    })
+
+    // El mismo responsable en la siguiente edición no vuelve a avisar.
+    expect((await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: companyUser.id })).status).toBe(200)
+    expect(notify.mock.calls).toHaveLength(1)
+
+    // Cambiar el responsable avisa solo al nuevo.
+    const reassigned = await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: uuidMember.id })
+    expect(reassigned.status).toBe(200)
+    expect(notify.mock.calls).toHaveLength(2)
+    expect(notify.mock.calls[1][0].data.userId).toBe(uuidMember.id)
+
+    // Quitar el responsable no genera aviso.
+    expect((await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: null })).status).toBe(200)
+    expect(notify.mock.calls).toHaveLength(2)
+  })
+
+  it('does not notify when a ticket is created without a responsible party', async () => {
+    const db = makeDb('COMPANY_USER')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const created = await agent.post('/api/tickets').send({ title: 'Ticket sin responsable', description: 'Ticket que nace sin responsable' })
+    expect(created.status).toBe(201)
+    expect(db.notification.create).not.toHaveBeenCalled()
+  })
+
+  it('does not notify when the acting user assigns the ticket to themselves', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id)
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const patched = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: member.id })
+    expect(patched.status).toBe(200)
+    expect(db.notification.create).not.toHaveBeenCalled()
   })
 })
 
@@ -1858,6 +1929,30 @@ describe('recommendations and action plans API', () => {
     expect(updated.status).toBe(200)
     expect(updated.body.item.status).toBe('IN_PROGRESS')
     expect((await agent.delete(`/api/action-items/${actionItem.id}`)).status).toBe(204)
+  })
+
+  it('notifies the responsible party when an action item is created or reassigned', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const notify = db.notification.create as unknown as { mock: { calls: Array<[{ data: { userId: string; link: string } }]> } }
+
+    const item = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'Actividad con responsable', description: 'Actividad que nace con responsable', priority: 'HIGH', responsibleId: member.id })
+    expect(item.status).toBe(201)
+    expect(notify.mock.calls).toHaveLength(1)
+    expect(notify.mock.calls[0][0].data.userId).toBe(member.id)
+    expect(notify.mock.calls[0][0].data.link).toBe(`tickets/${item.body.ticket.id}`)
+
+    // Reasignar avisa al nuevo responsable; el que ya lo era no recibe otro aviso.
+    const reassigned = await agent.patch(`/api/action-items/${item.body.item.id}`).send({ responsibleId: companyUser.id })
+    expect(reassigned.status).toBe(200)
+    expect(notify.mock.calls).toHaveLength(2)
+    expect(notify.mock.calls[1][0].data.userId).toBe(companyUser.id)
+
+    // Repetir la misma asignación no vuelve a avisar.
+    const same = await agent.patch(`/api/action-items/${item.body.item.id}`).send({ responsibleId: companyUser.id })
+    expect(same.status).toBe(200)
+    expect(notify.mock.calls).toHaveLength(2)
   })
 
   it('updates an action item and reassigns the responsible user', async () => {

@@ -71,6 +71,7 @@ Detalles en [docs/architecture.md](docs/architecture.md).
 | Autenticación | `server/auth.ts`, rutas `/api/auth/*` | Login, sesión, logout |
 | Usuarios | `/api/users` | Selección de responsables/asignados |
 | Tickets | `/api/tickets` | Vista Tickets (filtros, búsqueda) |
+| Evidencias de mitigación | `server/evidence-storage.ts`, `/api/tickets/:id/evidence`, `/api/processes/:id/risks/:riskId/plan-evidence` | Adjuntar PDF en el ticket; lista de evidencias PDF en el detalle del riesgo |
 | Empresas | `/api/companies` | Vista Empresas (CRUD, detalle) |
 | Diagnósticos | `/api/companies/:id/diagnostics`, `/api/diagnostics/*` | Detalle de diagnóstico, formularios |
 | DOFA | `/api/diagnostics/:id/swot/items`, `/api/swot/items/*` | Matriz de 4 cuadrantes |
@@ -93,6 +94,7 @@ El análisis IA solo recibe la información del diagnóstico (título, descripci
 - Contraseñas con `bcrypt` (cost 12) y **comparación contra un hash dummy** para no revelar si el correo existe.
 - Sesiones: token aleatorio (32 bytes) almacenado como **hash SHA-256**; cookie `HttpOnly`, `SameSite=Lax`, `Secure` en producción.
 - **RBAC**: rutas protegidas por rol (`SUPERUSER`/`USER`) y **por objeto** (empresas por consultor, tickets por creador/asignado, dashboard con alcances por rol) para bloquear **IDOR**.
+- **Evidencias PDF**: subida multipart validada antes de tocar disco (extensión `.pdf` + MIME + firma `%PDF-` + 10 MB), nombre aleatorio en `EVIDENCE_UPLOAD_DIR` (el path nunca sale de la API), descarga con `nosniff` y `no-store`, y **409 `MITIGATION_EVIDENCE_REQUIRED`** al intentar cerrar una actividad de mitigación sin PDF adjunto.
 - **Rate limiting** en login (10/15 min) y análisis IA (15/h); soporte para `TRUST_PROXY_HOPS` detrás de proxy.
 - **Validación Zod** en todos los cuerpos y consultas; respuestas de error sin exponer detalles internos.
 - **CORS** restringido a `FRONTEND_URL`; cabeceras `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `X-Permitted-Cross-Domain-Policies`, `Cache-Control: no-store`, HSTS en producción y `X-Powered-By` deshabilitada.
@@ -103,7 +105,7 @@ Detalles en [docs/security.md](docs/security.md).
 
 ## Testing
 
-- **47 tests** (Vitest + Supertest) sobre schemas de validación, autenticación/autorización, CRUD, alcances por rol, protección IDOR, respuesta IA (con cliente simulado, sin llamadas reales), rate limiting, importación de recomendaciones y planes de acción.
+- **638 tests** (Vitest + Supertest, 39 archivos) sobre schemas de validación, autenticación/autorización, CRUD, alcances por rol, protección IDOR, respuesta IA (con cliente simulado, sin llamadas reales), rate limiting, importación de recomendaciones, planes de acción, gate de evidencia al cerrar actividades y subida/almacenamiento de PDFs.
 - **E2E real (61/61 verificados)**: flujo completo contra PostgreSQL y OpenAI reales: login, empresa, diagnóstico, DOFA, análisis IA, persistencia, importación de recomendaciones, plan de acción, logout y permisos.
 
 ## Estructura del proyecto
@@ -169,6 +171,7 @@ cp .env.example .env
 | `SEED_PASSWORD` | Contraseña de los usuarios del seed | — |
 | `OPENAI_API_KEY` | Clave de OpenAI (opcional; sin ella la IA responde 503) | — |
 | `OPENAI_MODEL` | Modelo para el análisis IA | `gpt-4o-mini` |
+| `EVIDENCE_UPLOAD_DIR` | Carpeta de los PDF de evidencia (volumen persistente en producción) | `var/evidence` |
 
 > En **producción**, `DATABASE_URL` y `FRONTEND_URL` son obligatorias y no pueden ser los valores de desarrollo (el backend no arranca si lo son). No se requiere `SEED_PASSWORD` en producción (el seed la rechaza).
 
@@ -257,15 +260,16 @@ Detalles de despliegue en [docs/development.md](docs/development.md).
 **Implementado**
 
 - Autenticación por sesión con roles y control de acceso por objeto.
+- Evidencias PDF en tickets (subir, listar, descargar, eliminar) con gate `409` al cerrar actividades de mitigación sin PDF, más la lista de evidencias del plan en el detalle del riesgo y notificación in-app al asignar tickets.
 - Dashboard con métricas, tickets, empresas, diagnósticos DOFA, análisis IA, recomendaciones y planes de acción.
 - Seguridad integral (RBAC, IDOR, rate limiting, validación, cabeceras, secretos fuera del repositorio).
-- 47 tests unitarios/integración y E2E real verificado (61/61).
+- 638 tests unitarios/integración y E2E real verificado (61/61).
 - Build de producción para frontend y backend; `npm audit` con 0 vulnerabilidades.
 
 **Futuras mejoras (no implementadas)**
 
 - Módulo de **Reportes** (navegación ya lo sugiere como "Pronto" en la UI).
-- Notificaciones.
+- Notificaciones fuera de la aplicación (correo/push); hoy la campana es in-app.
 - Limpieza programada (TTL) de sesiones expiradas.
 - Refuerzos opcionales: 2FA, reCAPTCHA, panel de administración completo de usuarios.
 
@@ -279,6 +283,6 @@ Detalles de despliegue en [docs/development.md](docs/development.md).
 - **Integración con OpenAI** (Responses API) con **respuestas estructuradas** validadas por JSON Schema + Zod.
 - **Análisis DOFA** conectado a estrategias y recomendaciones trazables generadas por IA.
 - **RBAC** (roles `SUPERUSER`/`USER`) y **protección contra IDOR** verificada con tests.
-- **47 tests** (Vitest + Supertest) en schemas, auth, CRUD, permisos e IA.
+- **638 tests** (Vitest + Supertest) en schemas, auth, CRUD, permisos, IA y evidencias.
 - **E2E real** con 61/61 verificaciones contra PostgreSQL y OpenAI.
 - **`npm audit` con 0 vulnerabilidades** y endurecimiento de producción (HSTS, cookies `Secure`, guard de entorno, rate limiting).

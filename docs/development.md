@@ -48,8 +48,10 @@ cp .env.example .env
 | `SEED_PASSWORD` | Contraseña de los usuarios del seed | — |
 | `OPENAI_API_KEY` | Clave de OpenAI (opcional; sin ella la IA responde 503) | — |
 | `OPENAI_MODEL` | Modelo para el análisis IA | `gpt-4o-mini` |
+| `EVIDENCE_UPLOAD_DIR` | Carpeta de los PDF de evidencia de los tickets | `var/evidence` |
 
 > No se incluyen secretos reales en el repositorio. `.env` está en `.gitignore`.
+> `var/` (donde se guardan las evidencias) también está en `.gitignore`: en producción apunta a un volumen persistente con `EVIDENCE_UPLOAD_DIR`.
 
 ## Prisma
 
@@ -95,7 +97,7 @@ npm test          # Vitest (una ejecución)
 npm run test:watch
 ```
 
-**47 tests** cubren schemas de validación, autenticación/autorización, CRUD, alcances por rol, protección IDOR, respuestas de IA (con cliente simulado), rate limiting, importación de recomendaciones y planes de acción. Los tests no hacen llamadas reales a OpenAI.
+**649 tests** (39 archivos) cubren schemas de validación, autenticación/autorización, CRUD, alcances por rol, protección IDOR, respuestas de IA (con cliente simulado), rate limiting, importación de recomendaciones, planes de acción, flujo de mitigación (alta de actividades desde el panel de riesgos, gate de evidencia al cerrar actividades y notificación de tickets asignados) y subida/almacenamiento/descarga de evidencias PDF. Los tests no hacen llamadas reales a OpenAI.
 
 **E2E real (verificado, 61/61)**: flujo completo contra PostgreSQL y OpenAI reales (login, empresa, diagnóstico, DOFA, análisis IA, persistencia, importación, plan de acción, logout, permisos).
 

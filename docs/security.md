@@ -38,6 +38,7 @@ Todo recurso por ID se valida contra el alcance del usuario antes de leer/escrib
 - **Tickets**: `canAccessTicket` — creador, asignado o `SUPERUSER`.
 - **Empresas**: `canAccessCompany` — `consultantId` del usuario o `SUPERUSER`.
 - **Diagnósticos / DOFA / IA / recomendaciones / planes / ítems**: acceso indirecto mediante la empresa del diagnóstico (consultas con `include` para traer `company.consultantId`).
+- **Actividades de mitigación** (`GET`/`POST .../plan-activities`): sesión + proceso visible + riesgo exacto de ese proceso; el alta exige `userWriteGuard` (SUPERUSER o COMPANY_ADMIN) y que el responsable asignado pertenezca a la empresa del proceso (`403` si es de otra empresa). El plan nuevo se ancla al diagnóstico más reciente de la misma empresa.
 - **Dashboard**: `dashboardScopesFor` construye filtros por rol; `USER` solo ve sus propios datos (`Promise.all` de consultas con esos alcances).
 - Los recursos inexistentes **y** los no accesibles devuelven `404` para no revelar existencia.
 - Tests dedicados manipulan IDs de recursos de otros consultores y verifican `404`/`403`.
@@ -77,9 +78,23 @@ Aplicadas globalmente:
 
 - Único manejador en `server/app.ts`:
   - `SyntaxError` (JSON mal formado) → `400 { "error": "Invalid JSON body" }`.
+  - `MultipartError` / `EvidenceValidationError` (subida de evidencia) → su propio estado (`400`/`413`/`415`) con el mensaje en español.
+  - `MitigationEvidenceRequiredError` (actividad cerrándose sin PDF) → `409 { "error": ..., "reason": "MITIGATION_EVIDENCE_REQUIRED" }`.
   - `Prisma.P2002` (unicidad) → `409 { "error": "A resource with that value already exists" }`.
+  - **Compuerta por etapas** (respuesta directa en cada ruta de escritura, no desde este manejador): si el riesgo aún no supera la etapa (evaluación inherente completa, tratamiento definido y aceptación decidida y aceptada por el dueño), crear/editar controles, dueño y vencimiento del plan, actividades de mitigación, acciones ligadas al riesgo y su calificación residual responden `409 { "error": "<mensaje de la etapa>" }` en inglés; las lecturas, los `DELETE` y los cambios de estado de las acciones siguen permitidos.
   - Ruta desconocida → `404 { "error": "Not found" }`.
   - Resto → `500 { "error": "Internal server error" }`; se registra solo `error.message` en consola (nunca detalles internos ni datos sensibles en la respuesta).
+
+## Archivos de evidencia (PDF)
+
+- Subida en `multipart/form-data` leída a mano con tope de **11 MB por petición** (se corta y drena el resto) y **10 MB por archivo**.
+- Validación estricta **antes de tocar disco**: extensión `.pdf`, MIME `application/pdf`, firma `%PDF-` y tamaño > 0 (`server/evidence-storage.ts`); si algo falla no queda ni fila ni archivo.
+- **Sin path traversal**: el nombre en disco es `randomUUID().pdf`; el nombre original se sanea (solo `basename`, sin comillas ni caracteres de control, ≤150 caracteres) y la API solo expone ese nombre saneado.
+- **Fuera del árbol web**: los archivos viven en `EVIDENCE_UPLOAD_DIR` (default `var/evidence`, ignorado por git); en producción debe ser un volumen persistente.
+- **Autorización por ticket**: subir, listar, descargar y borrar exigen sesión + acceso al ticket (`canAccessTicket`); `plan-evidence` exige sesión + acceso al proceso y alcance del usuario sobre los tickets. El nombre en disco (`storedName`) jamás viaja en una respuesta.
+- Descarga con `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` y `Cache-Control: private, no-store`.
+- **Limpieza ordenada**: al subir se escribe el disco primero y se retira si falla la fila; al borrar se elimina la fila primero y después el archivo (un unlink fallido queda en `console.error`, nunca una fila que promete un archivo borrado). `DELETE /api/tickets/:id` elimina las evidencias en cascada.
+- **Gate de cierre**: cerrar una actividad cuyo plan está ligado a un riesgo sin PDF adjunto responde `409` con `MITIGATION_EVIDENCE_REQUIRED` y revierte la transacción; las canceladas no exigen evidencia.
 
 ## Secretos
 

@@ -55,6 +55,7 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   let nextApproval = 1
   let nextNotification = 1
   let nextAudit = 1
+  let nextTicket = 1
   const processFor = (id: string) => storedProcesses.find((item) => item.id === id) ?? null
   const processView = (item: TestProcess) => ({ ...item, company: { id: item.companyId }, responsible: null })
   const riskFor = (id: string) => storedRisks.find((item) => item.id === id) ?? null
@@ -223,6 +224,13 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findMany: vi.fn(async () => storedAuditEvents.map((event) => ({ ...event }))),
       count: vi.fn(async () => storedAuditEvents.length),
     },
+    // El ciclo APROBADO crea su ticket de seguimiento en la misma transacción: el arnés solo
+    // registra la fila. findUnique devuelve null a propósito (la vista del arnés pinta ticket:
+    // null y la ruta de decisión tolera la ausencia del objeto para responder).
+    ticket: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmticket${String(nextTicket++).padStart(12, '0')}`, ...data })),
+      findUnique: vi.fn(async () => null),
+    },
     notification: {
       create: vi.fn(async ({ data }: { data: Omit<StoredNotification, 'id' | 'readAt' | 'createdAt'> }) => {
         const notification: StoredNotification = { id: `cmnotification${String(nextNotification++).padStart(10, '0')}`, readAt: null, createdAt: new Date(), ...data }
@@ -262,10 +270,41 @@ const riskPayload = {
   inherentImpact: 3, inherentProbability: 4, residualImpact: 1, residualProbability: 1,
 }
 
+/**
+ * Mensajes del gate de etapas (espejo de `riskStageMessages` en server/app.ts): el mismo orden de
+ * comprobaciones que aplica la ruta —evaluación inherente → tratamiento → decisión de aceptación—
+ * y que la interfaz traduce al español en `riskStageMessages` de risk-flow.ts.
+ */
+const stageMessages = {
+  evaluation: 'Complete the inherent risk evaluation before managing controls, the mitigation plan and the residual risk',
+  treatment: 'Define the risk treatment before managing controls, the mitigation plan and the residual risk',
+  pending: 'Controls and mitigation management unlock once the risk owner accepts the risk',
+  rejected: 'The risk was rejected; a new authorized decision is required before managing controls, the mitigation plan and the residual risk',
+}
+
 async function loggedIn(db: PrismaClient, email: string) {
   const agent = request.agent(createApp(db))
   await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
   return agent
+}
+
+/**
+ * Paso 2 del flujo: evaluación inherente completa, tratamiento definido y riesgo ACEPTADO, el
+ * único estado que habilita controles, plan de mitigación y residual. El formulario ya no puede
+ * escribir la aceptación (ni el PATCH del riesgo), así que la decisión se obtiene por su única
+ * vía autorizada: se asigna dueño, se abre el ciclo de aprobación y el administrador de la empresa
+ * lo resuelve. Aquí se APRUEBA porque un rechazo deja el riesgo bloqueado (el veredicto debe ser
+ * ACCEPTED, no simplemente «decidido»).
+ */
+async function unlockControls(agent: Awaited<ReturnType<typeof loggedIn>>, riskId: string) {
+  const riskPath = `/api/processes/${processId}/risks/${riskId}`
+  const prepared = await agent.patch(riskPath).send({ treatment: 'MITIGATE', riskOwnerId: companyUser.id })
+  expect(prepared.status).toBe(200)
+  const cycle = await agent.post(`${riskPath}/approvals`)
+  expect(cycle.status).toBe(201)
+  const decision = await agent.post(`/api/approvals/${cycle.body.approval.id}/decision`).send({ decision: 'APPROVE', comment: 'Aceptación formal registrada para este caso de prueba.' })
+  expect(decision.status).toBe(200)
+  expect(decision.body.approval.status).toBe('APPROVED')
 }
 
 describe('process risk API', () => {
@@ -280,10 +319,15 @@ describe('process risk API', () => {
     expect(second.status).toBe(201)
     expect(second.body.risk.processId).toBe(processId)
     expect((await agent.get(`/api/processes/${processId}/risks`)).body.risks).toHaveLength(2)
-    // Sin controles el residual queda bloqueado, tanto en el alta como en la edición.
+    // Sin superar el paso 2 el residual no avanza: primero manda el gate de etapas (409)...
     const blocked = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
-    expect(blocked.status).toBe(400)
-    expect(blocked.body.error).toBe('Residual risk values require at least one control')
+    expect(blocked.status).toBe(409)
+    expect(blocked.body.error).toBe(stageMessages.treatment)
+    // ...y una vez aceptado, el residual sigue exigiendo al menos un control (400).
+    await unlockControls(agent, created.body.risk.id)
+    const withoutControls = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
+    expect(withoutControls.status).toBe(400)
+    expect(withoutControls.body.error).toBe('Residual risk values require at least one control')
     // Con al menos un control (cualquiera sirve, su evaluación no importa) el residual se edita.
     await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Revisión del plazo de entrega' })
     const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 5, residualProbability: 5 })
@@ -320,6 +364,7 @@ describe('process risk API', () => {
         residualLevel: 'LOW',
       })
       // El residual se evalúa recién cuando el riesgo tiene al menos un control.
+      await unlockControls(agent, created.body.risk.id)
       await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Control de la matriz de riesgo' })
       const patched = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({
         residualImpact: entry.probability,
@@ -344,6 +389,7 @@ describe('process risk API', () => {
     const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, inherentImpact: 5, inherentProbability: 5, residualImpact: 1, residualProbability: 1 })
     expect(created.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
     // El residual solo se toca con al menos un control asociado.
+    await unlockControls(agent, created.body.risk.id)
     await agent.post(`/api/processes/${processId}/risks/${created.body.risk.id}/controls`).send({ description: 'Control de independencia de niveles' })
     const updated = await agent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ residualImpact: 4, residualProbability: 4 })
     expect(updated.body.risk).toMatchObject({ inherentScore: 25, inherentLevel: 'HIGH', residualScore: 16, residualLevel: 'HIGH' })
@@ -482,6 +528,7 @@ describe('process risk API', () => {
     const { db } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
     const risk = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    await unlockControls(agent, risk.body.risk.id)
     const created = await agent.post(`/api/processes/${processId}/risks/${risk.body.risk.id}/controls`).send({ description: 'Validar datos antes de registrar', evaluation: 'PARTIAL' })
     expect(created.status).toBe(201)
     expect(created.body.control.riskId).toBe(risk.body.risk.id)
@@ -495,6 +542,7 @@ describe('process risk API', () => {
     const agent = await loggedIn(db, admin.email)
     const risk = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
     const riskId = risk.body.risk.id as string
+    await unlockControls(agent, riskId)
     const created = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Revisión periódica de accesos', evaluation: 'EFFECTIVE' })
     expect(created.status).toBe(201)
     expect(created.body.control.evaluation).toBe('EFFECTIVE')
@@ -517,6 +565,64 @@ describe('process risk API', () => {
     expect((await readOnlyAgent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Sin permiso para editar', evaluation: 'WEAK' })).status).toBe(403)
   })
 
+  it('blocks control writes until the risk owner accepts the risk in the approval cycle', async () => {
+    const { db, storedRisks } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const risk = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    const riskId = risk.body.risk.id as string
+    const riskPath = `/api/processes/${processId}/risks/${riskId}`
+    const controlPath = `${riskPath}/controls`
+    const stored = () => storedRisks.find((item) => item.id === riskId) as StoredRisk
+    // Recién creado (sin tratamiento y aceptación pendiente): el alta de controles no pasa y el
+    // mensaje nombra la primera causa que falta, que es el tratamiento.
+    const blockedCreate = await agent.post(controlPath).send({ description: 'Control temprano' })
+    expect(blockedCreate.status).toBe(409)
+    expect(blockedCreate.body.error).toBe(stageMessages.treatment)
+    // Con tratamiento elegido pero aceptación aún pendiente: sigue bloqueado, ahora por decisión.
+    expect((await agent.patch(riskPath).send({ treatment: 'MITIGATE' })).status).toBe(200)
+    const pendingAcceptance = await agent.post(controlPath).send({ description: 'Control sin decisión' })
+    expect(pendingAcceptance.status).toBe(409)
+    expect(pendingAcceptance.body.error).toBe(stageMessages.pending)
+    // La aceptación solo la escribe el ciclo autorizado: con dueño asignado y ciclo RECHAZADO el
+    // veredicto deja de estar pendiente, pero el riesgo no está aceptado, así que el paso 3 sigue
+    // cerrado (aquí es donde el orden anterior se invertía: REJECTED ya no habilitaba).
+    expect((await agent.patch(riskPath).send({ riskOwnerId: companyUser.id })).status).toBe(200)
+    const cycle = await agent.post(`${riskPath}/approvals`)
+    expect(cycle.status).toBe(201)
+    const rejectedDecision = await agent.post(`/api/approvals/${cycle.body.approval.id}/decision`).send({ decision: 'REJECT', comment: 'Falta documentar el control clave.' })
+    expect(rejectedDecision.status).toBe(200)
+    expect(stored().acceptanceStatus).toBe('REJECTED')
+    const rejectedControl = await agent.post(controlPath).send({ description: 'Control tras el rechazo' })
+    expect(rejectedControl.status).toBe(409)
+    expect(rejectedControl.body.error).toBe(stageMessages.rejected)
+    // Con la aceptación rechazada y el tratamiento retirado, la primera causa que falta vuelve a
+    // ser el tratamiento: el gate siempre nombra el requisito más próximo.
+    expect((await agent.patch(riskPath).send({ treatment: null })).status).toBe(200)
+    const noTreatment = await agent.post(controlPath).send({ description: 'Control sin tratamiento' })
+    expect(noTreatment.status).toBe(409)
+    expect(noTreatment.body.error).toBe(stageMessages.treatment)
+    // Reenviar y aprobar (la única vía hacia ACCEPTED) es lo que habilita altas y ediciones.
+    expect((await agent.patch(riskPath).send({ treatment: 'MITIGATE' })).status).toBe(200)
+    const reopened = await agent.post(`${riskPath}/approvals`)
+    expect(reopened.status).toBe(201)
+    const approved = await agent.post(`/api/approvals/${reopened.body.approval.id}/decision`).send({ decision: 'APPROVE', comment: 'Controles documentados.' })
+    expect(approved.status).toBe(200)
+    expect(stored().acceptanceStatus).toBe('ACCEPTED')
+    const created = await agent.post(controlPath).send({ description: 'Control tras la aceptación', evaluation: 'PENDING' })
+    expect(created.status).toBe(201)
+    expect((await agent.patch(`${controlPath}/${created.body.control.id}`).send({ evaluation: 'EFFECTIVE' })).status).toBe(200)
+    // Ningún PATCH puede alterar el veredicto: solo ese campo en el cuerpo ni siquiera es una
+    // edición válida, y mezclado con otros campos Zod descarta la clave antes de escribir.
+    expect((await agent.patch(riskPath).send({ acceptanceStatus: 'REJECTED' })).status).toBe(400)
+    const spoofed = await agent.patch(riskPath).send({ name: 'Riesgo con intento de aceptación', acceptanceStatus: 'REJECTED' })
+    expect(spoofed.status).toBe(200)
+    expect(spoofed.body.risk).toMatchObject({ name: 'Riesgo con intento de aceptación', acceptanceStatus: 'ACCEPTED' })
+    expect(stored().acceptanceStatus).toBe('ACCEPTED')
+    expect((await agent.patch(`${controlPath}/${created.body.control.id}`).send({ evaluation: 'WEAK' })).status).toBe(200)
+    // La baja nunca se bloquea: permite limpiar controles existentes aunque el orden no esté completo.
+    expect((await agent.delete(`${controlPath}/${created.body.control.id}`)).status).toBe(204)
+  })
+
   it('locks residual risk values until the risk has at least one control', async () => {
     const { db, storedRisks } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
@@ -528,11 +634,23 @@ describe('process risk API', () => {
     expect(created.status).toBe(201)
     const riskId = created.body.risk.id as string
     expect(created.body.risk).toMatchObject({ residualImpact: 1, residualProbability: 1, residualScore: 1, residualLevel: 'LOW' })
-    // Sin controles el residual no cambia, pero el resto de los campos sí se puede editar.
-    expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 3 })).status).toBe(400)
+    // Sin superar el paso 2 el residual ni siquiera llega a la comprobación de controles: manda el
+    // gate de etapas (409), con la causa que falta (aquí, el tratamiento).
+    const stageBlocked = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 3 })
+    expect(stageBlocked.status).toBe(409)
+    expect(stageBlocked.body.error).toBe(stageMessages.treatment)
+    // El resto de los campos sigue siendo editable sin controles: nombre, tratamiento y ecos del
+    // residual (que no varían) no disparan ningún gate.
     const otherFields = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Riesgo renombrado sin controles', treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', residualImpact: 1, residualProbability: 1 })
     expect(otherFields.status).toBe(200)
-    expect(otherFields.body.risk).toMatchObject({ name: 'Riesgo renombrado sin controles', treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', residualImpact: 1, residualProbability: 1 })
+    // El eco de acceptanceStatus que manda el cliente se descarta: el veredicto sigue intacto.
+    expect(otherFields.body.risk).toMatchObject({ name: 'Riesgo renombrado sin controles', treatment: 'MITIGATE', acceptanceStatus: 'PENDING', residualImpact: 1, residualProbability: 1 })
+    // Para escribir controles la aceptación debe venir del ciclo autorizado (aquí, aprobado).
+    await unlockControls(agent, riskId)
+    // Aceptado pero aún sin controles, el residual responde 400: el gate de etapas ya pasó.
+    const stillWithoutControls = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ residualImpact: 3 })
+    expect(stillWithoutControls.status).toBe(400)
+    expect(stillWithoutControls.body.error).toBe('Residual risk values require at least one control')
     // El primer control habilita la edición residual, sin importar su evaluación (aquí, PENDING).
     const control = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control inicial del riesgo', evaluation: 'PENDING' })
     expect(control.status).toBe(201)
@@ -548,6 +666,40 @@ describe('process risk API', () => {
     // El resto de los campos sigue siendo editable sin controles y el residual no se borra.
     expect((await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Riesgo tras quitar el control' })).status).toBe(200)
     expect((storedRisks.find((risk) => risk.id === riskId) as StoredRisk).residualImpact).toBe(4)
+  })
+
+  it('keeps the whole step 3 and step 4 locked for a rejected risk that already has saved controls', async () => {
+    const { db, storedRisks } = makeRiskDb()
+    const agent = await loggedIn(db, admin.email)
+    const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    const riskId = created.body.risk.id as string
+    const riskPath = `/api/processes/${processId}/risks/${riskId}`
+    // Ciclo rechazado: el veredicto queda decidido, pero el riesgo no está aceptado.
+    expect((await agent.patch(riskPath).send({ treatment: 'MITIGATE', riskOwnerId: companyUser.id })).status).toBe(200)
+    const cycle = await agent.post(`${riskPath}/approvals`)
+    expect(cycle.status).toBe(201)
+    const decision = await agent.post(`/api/approvals/${cycle.body.approval.id}/decision`).send({ decision: 'REJECT', comment: 'Pendiente de evidencias.' })
+    expect(decision.status).toBe(200)
+    // Datos heredados: un control y un plan ya guardados antes del bloqueo no habilitan nada.
+    const stored = storedRisks.find((risk) => risk.id === riskId) as StoredRisk
+    stored.controls.push({ id: 'cmcontrollegacy00000001', riskId, description: 'Control heredado', evaluation: 'EFFECTIVE', createdAt: new Date(), updatedAt: new Date() })
+    const controlPath = `${riskPath}/controls`
+    const blockedCreate = await agent.post(controlPath).send({ description: 'Control nuevo' })
+    expect(blockedCreate.status).toBe(409)
+    expect(blockedCreate.body.error).toBe(stageMessages.rejected)
+    expect((await agent.patch(`${controlPath}/cmcontrollegacy00000001`).send({ evaluation: 'WEAK' })).status).toBe(409)
+    const residual = await agent.patch(riskPath).send({ residualImpact: 4, residualProbability: 4 })
+    expect(residual.status).toBe(409)
+    expect(residual.body.error).toBe(stageMessages.rejected)
+    const plan = await agent.patch(riskPath).send({ mitigationDueDate: '2026-11-30', mitigationOwnerId: companyUser.id })
+    expect(plan.status).toBe(409)
+    expect(plan.body.error).toBe(stageMessages.rejected)
+    const activity = await agent.post(`${riskPath}/plan-activities`).send({ title: 'Actividad nueva del plan', responsibleId: companyUser.id, dueDate: '2026-11-30' })
+    expect(activity.status).toBe(409)
+    expect(activity.body.error).toBe(stageMessages.rejected)
+    // La baja de controles y la lectura del historial siguen permitidas: el bloqueo es de escritura.
+    expect((await agent.delete(`${controlPath}/cmcontrollegacy00000001`)).status).toBe(204)
+    expect((await agent.get(`${riskPath}/history`)).status).toBe(200)
   })
 
   it('isolates risks by process and company and preserves read-only permissions', async () => {
@@ -581,40 +733,75 @@ describe('process risk API', () => {
   })
 
   it('validates treatment and acceptance options without touching matrix levels', async () => {
-    const { db } = makeRiskDb()
+    const { db, storedRisks } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
+    const stored = (riskId: string) => storedRisks.find((risk) => risk.id === riskId) as StoredRisk
+    // El alta ignora el valor que manda el cliente: el riesgo nace PENDING en el servidor.
     const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', inherentImpact: 5, inherentProbability: 5, residualImpact: 1, residualProbability: 1 })
     expect(created.status).toBe(201)
-    expect(created.body.risk).toMatchObject({ treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
+    expect(created.body.risk).toMatchObject({ treatment: 'MITIGATE', acceptanceStatus: 'PENDING', inherentScore: 25, inherentLevel: 'HIGH', residualScore: 1, residualLevel: 'LOW' })
+    expect(stored(created.body.risk.id).acceptanceStatus).toBe('PENDING')
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Tratamiento inválido', treatment: 'Remediar' })).status).toBe(400)
+    // El enum sigue validándose para clientes antiguos, aunque el valor recibido no se usa nunca.
     expect((await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Aceptación inválida', acceptanceStatus: 'UNKNOWN' })).status).toBe(400)
     const defaults = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Riesgo sin tratamiento' })
     expect(defaults.status).toBe(201)
-    expect(defaults.body.risk).toMatchObject({ acceptanceStatus: 'PENDING', treatment: null, mitigationOwner: null, mitigationStartDate: null, mitigationDueDate: null, evidences: [] })
-    const patched = await agent.patch(`/api/processes/${processId}/risks/${defaults.body.risk.id}`).send({ acceptanceStatus: 'REJECTED', treatment: null })
+    expect(defaults.body.risk).toMatchObject({ acceptanceStatus: 'PENDING', treatment: null, mitigationOwner: null, mitigationDueDate: null, evidences: [] })
+    expect(defaults.body.risk).not.toHaveProperty('mitigationStartDate')
+    const riskPath = `/api/processes/${processId}/risks/${defaults.body.risk.id}`
+    // La edición general no puede decidir la aceptación: siendo el único campo, la petición ni
+    // siquiera constituye una edición válida...
+    const lone = await agent.patch(riskPath).send({ acceptanceStatus: 'REJECTED' })
+    expect(lone.status).toBe(400)
+    // ...y viajando junto a otros campos, Zod descarta la clave antes de escribir.
+    const patched = await agent.patch(riskPath).send({ acceptanceStatus: 'REJECTED', treatment: null })
     expect(patched.status).toBe(200)
-    expect(patched.body.risk).toMatchObject({ acceptanceStatus: 'REJECTED', treatment: null })
+    expect(patched.body.risk).toMatchObject({ acceptanceStatus: 'PENDING', treatment: null })
+    expect(stored(defaults.body.risk.id).acceptanceStatus).toBe('PENDING')
     expect(patched.body.risk.inherentLevel).toBe(defaults.body.risk.inherentLevel)
     expect(patched.body.risk.residualLevel).toBe(defaults.body.risk.residualLevel)
   })
 
-  it('persists the mitigation plan and rejects inverted date ranges', async () => {
-    const { db } = makeRiskDb()
+  it('accepts the legacy mitigation start date without persisting or exposing it', async () => {
+    const { db, storedRisks } = makeRiskDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, mitigationOwnerId: companyUser.id, mitigationStartDate: '2026-11-01', mitigationDueDate: '2026-11-30' })
+    // El paso 3 no se escribe en la misma petición que crea el riesgo: un riesgo nace PENDING y
+    // sin decisión autorizada, así que responsable y vencimiento del plan se rechazan con 409.
+    const withPlan = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, mitigationOwnerId: companyUser.id, mitigationStartDate: '2026-11-01', mitigationDueDate: '2026-11-30' })
+    expect(withPlan.status).toBe(409)
+    expect(withPlan.body.error).toBe(stageMessages.pending)
+    // Clientes antiguos siguen enviando mitigationStartDate: la petición no falla cuando no lleva
+    // datos del plan, pero el valor ni se persiste ni se expone (Zod descarta la clave y la
+    // columna de la base queda en null).
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, mitigationStartDate: '2026-11-01' })
     expect(created.status).toBe(201)
-    expect(created.body.risk.mitigationOwner).toEqual({ id: companyUser.id, name: companyUser.name })
-    expect(created.body.risk.mitigationStartDate).not.toBeNull()
-    expect(created.body.risk.mitigationDueDate).not.toBeNull()
-    const inverted = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Fechas invertidas', mitigationStartDate: '2026-11-30', mitigationDueDate: '2026-11-01' })
-    expect(inverted.status).toBe(400)
+    expect(created.body.risk.mitigationOwner).toBeNull()
+    expect(created.body.risk.mitigationDueDate).toBeNull()
+    expect(created.body.risk).not.toHaveProperty('mitigationStartDate')
     const riskId = created.body.risk.id as string
-    const overlappingPatch = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: '2026-10-01' })
-    expect(overlappingPatch.status).toBe(400)
-    const cleared = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationStartDate: null, mitigationDueDate: null, mitigationOwnerId: null })
+    expect((storedRisks.find((risk) => risk.id === riskId) as StoredRisk).mitigationStartDate).toBeNull()
+    // El eco de la fecha en edición (junto a campos reales del formulario) se descarta igual.
+    const echoed = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Entrega tardía de información (con eco de fecha)', mitigationStartDate: '2026-11-15' })
+    expect(echoed.status).toBe(200)
+    expect(echoed.body.risk).not.toHaveProperty('mitigationStartDate')
+    expect((storedRisks.find((risk) => risk.id === riskId) as StoredRisk).mitigationStartDate).toBeNull()
+    // El plan también sigue bloqueado en edición: mientras falte el paso 2 la causa es el
+    // tratamiento, y después de aprobarlo el vencimiento y el responsable sí se escriben.
+    const lockedPlan = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: '2026-11-30', mitigationOwnerId: companyUser.id })
+    expect(lockedPlan.status).toBe(409)
+    expect(lockedPlan.body.error).toBe(stageMessages.treatment)
+    await unlockControls(agent, riskId)
+    const plan = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: '2026-11-30', mitigationOwnerId: companyUser.id })
+    expect(plan.status).toBe(200)
+    expect(plan.body.risk.mitigationOwner).toEqual({ id: companyUser.id, name: companyUser.name })
+    expect(plan.body.risk.mitigationDueDate).not.toBeNull()
+    // El eco de una fecha ya guardada (el mismo valor, otra representación) no vuelve a bloquear.
+    const dueDateEcho = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: '2026-11-30' })
+    expect(dueDateEcho.status).toBe(200)
+    // Y el plan se limpia igual, ya aceptado el riesgo.
+    const cleared = await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ mitigationDueDate: null, mitigationOwnerId: null })
     expect(cleared.status).toBe(200)
     expect(cleared.body.risk.mitigationOwner).toBeNull()
-    expect(cleared.body.risk.mitigationStartDate).toBeNull()
     expect(cleared.body.risk.mitigationDueDate).toBeNull()
     const crossCompanyOwner = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, name: 'Plan con dueño ajeno', mitigationOwnerId: foreignAdmin.id })
     expect(crossCompanyOwner.status).toBe(403)

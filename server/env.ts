@@ -15,6 +15,9 @@ const envSchema = z
     TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
     OPENAI_API_KEY: z.string().min(1).optional(),
     OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+    // Directorio privado (fuera de la raíz pública y de Vite) donde se guardan los PDF de
+    // evidencia de los tickets. En producción debe apuntar a un volumen persistente.
+    EVIDENCE_UPLOAD_DIR: z.string().min(1).default('var/evidence'),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV !== 'production') return

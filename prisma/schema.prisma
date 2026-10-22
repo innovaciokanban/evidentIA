@@ -244,6 +244,7 @@ model User {
   riskApprovalRequests RiskApproval[] @relation("RiskApprovalRequesters")
   riskApprovalDecisions RiskApproval[] @relation("RiskApprovalDeciders")
   notifications Notification[]
+  evidenceUploads TicketEvidenceFile[] @relation("TicketEvidenceUploaders")
   processChanges  ProcessChange[] @relation("ProcessChangeActors")
   riskAuditEvents RiskAuditEvent[] @relation("RiskAuditActors")
   reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
@@ -287,6 +288,7 @@ model Ticket {
   assignedTo  User?          @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
   actionItem  ActionItem?    @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
   riskApprovals RiskApproval[]
+  evidenceFiles TicketEvidenceFile[]
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -294,6 +296,34 @@ model Ticket {
   @@index([assignedToId])
   @@index([status])
   @@index([priority])
+}
+
+/**
+ * Evidencia PDF adjunta al ticket de una actividad de mitigación. El archivo vive en disco fuera
+ * de cualquier directorio público (EVIDENCE_UPLOAD_DIR) con un nombre aleatorio generado por el
+ * servidor: aquí solo se guarda la referencia, nunca la ruta física. `filename` es el nombre
+ * original saneado (solo el basename, sin controles ni rutas), `storedName` es el nombre con el
+ * que quedó escrito el bytes en disco y `mimeType`/`size` son los valores validados en la subida
+ * (extensión .pdf, MIME declarado, firma %PDF real y tope de 10 MB).
+ *
+ * La baja del ticket borra sus evidencias en cascada (la limpieza física se hace después de
+ * confirmar la escritura en base de datos). El uploader queda referenciado con Restrict, igual que
+ * Ticket.createdBy: la evidencia nunca pierde a quien la registró.
+ */
+model TicketEvidenceFile {
+  id           String   @id @default(cuid())
+  ticketId     String
+  filename     String
+  storedName   String   @unique
+  mimeType     String
+  size         Int
+  uploadedById String
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  uploadedBy   User     @relation("TicketEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime @default(now())
+
+  @@index([ticketId])
+  @@index([uploadedById])
 }
 
 model Company {
@@ -781,6 +811,8 @@ model Risk {
   acceptanceStatus     RiskAcceptanceStatus @default(PENDING)
   treatment            RiskTreatmentType?
   mitigationOwnerId    String?
+  // Deprecado: la fecha de inicio del plan ya no se captura ni se expone en la API; la columna
+  // se conserva por compatibilidad con los datos existentes (sin migración destructiva).
   mitigationStartDate  DateTime?
   mitigationDueDate    DateTime?
   inherentImpact       Int

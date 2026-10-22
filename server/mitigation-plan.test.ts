@@ -16,8 +16,23 @@ type StoredUser = { id: string; email: string; name: string; role: Role; company
 type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
 type StoredItem = { id: string; actionPlanId: string; title: string; description: string; priority: string; status: string; responsibleId: string | null; dueDate: Date | null }
 type StoredPlan = { id: string; diagnosticId: string; riskId: string | null; title: string; description: string; status: string; createdById: string }
-type StoredTicket = { id: string; status: string; actionItemId: string | null }
-type SeedRisk = { id: string; processId: string; code: string | null; name: string; riskOwnerId: string | null; createdById: string | null }
+// title/assignedToId son opcionales: los tickets sembrados por los tests antiguos solo cargaban
+// estado; los que nacen en un endpoint sí llevan el título que el aviso de asignación publica.
+type StoredTicket = { id: string; status: string; actionItemId: string | null; title?: string; assignedToId?: string | null }
+type SeedRisk = {
+  id: string
+  processId: string
+  code: string | null
+  name: string
+  riskOwnerId: string | null
+  createdById: string | null
+  mitigationOwnerId?: string | null
+  /** Paso 2 del flujo: el gate de etapas exige tratamiento y riesgo aceptado para escribir. */
+  treatment: string | null
+  acceptanceStatus: string
+  inherentImpact: number
+  inherentProbability: number
+}
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -27,10 +42,12 @@ const diagnosticId = 'cmdiagnostic000000000001'
 const admin = { id: 'cmadmin0000000000000000001', email: 'admin@mitigation.test', name: 'Ben Admin', role: 'COMPANY_ADMIN' as Role, companyId }
 const creator = { id: 'cmcreator000000000000000001', email: 'creator@mitigation.test', name: 'Ana Creadora', role: 'COMPANY_USER' as Role, companyId }
 const owner = { id: 'cmowner0000000000000000001', email: 'owner@mitigation.test', name: 'Cleo Dueña', role: 'COMPANY_USER' as Role, companyId }
-const users: StoredUser[] = [admin, creator, owner]
+const mitigator = { id: 'cmmigitator00000000000001', email: 'mitigator@mitigation.test', name: 'Maya Mitigadora', role: 'COMPANY_USER' as Role, companyId }
+const outsider = { id: 'cmoutsider00000000000001', email: 'outsider@mitigation.test', name: 'Otto Ajeno', role: 'COMPANY_USER' as Role, companyId: otherCompanyId }
+const users: StoredUser[] = [admin, creator, owner, mitigator, outsider]
 const passwordHash = bcrypt.hashSync('Password123!', 4)
 
-const defaultRisk: SeedRisk = { id: 'cmrisk000000000000000001', processId, code: 'MIS-R1', name: 'Entrega tardía de información', riskOwnerId: owner.id, createdById: creator.id }
+const defaultRisk: SeedRisk = { id: 'cmrisk000000000000000001', processId, code: 'MIS-R1', name: 'Entrega tardía de información', riskOwnerId: owner.id, createdById: creator.id, treatment: 'MITIGATE', acceptanceStatus: 'ACCEPTED', inherentImpact: 3, inherentProbability: 4 }
 const defaultPlan: StoredPlan = { id: 'cmactionplan000000000001', diagnosticId, riskId: defaultRisk.id, title: 'Plan de mitigación MIS-R1', description: 'Acciones de mitigación del riesgo MIS-R1', status: 'ACTIVE', createdById: creator.id }
 const seedItem = (id: string, status: string, actionPlanId = defaultPlan.id): StoredItem => ({ id, actionPlanId, title: `Actividad ${id}`, description: 'Actividad del plan de mitigación', priority: 'HIGH', status, responsibleId: null, dueDate: null })
 
@@ -43,6 +60,10 @@ function makeMitigationDb(options: {
   plans?: StoredPlan[]
   items?: StoredItem[]
   failNotifications?: boolean
+  /** El gate de evidencia exige al menos un PDF: por defecto el arnés da por hecho que lo hay. */
+  withoutEvidence?: boolean
+  /** Sin diagnóstico la empresa no tiene dónde anclar un plan de mitigación nuevo (400). */
+  withoutDiagnostic?: boolean
 } = {}) {
   const sessions = new Map<string, string>()
   const risk = options.risk === undefined ? defaultRisk : options.risk
@@ -66,8 +87,15 @@ function makeMitigationDb(options: {
       diagnostic: { companyId: processForCompanyId(processId), company: { id: companyId, name: 'Acme' } },
     },
     recommendation: null,
-    responsible: null,
+    responsible: item.responsibleId
+      ? (() => { const user = users.find((entry) => entry.id === item.responsibleId); return user ? { id: user.id, name: user.name, email: user.email } : null })()
+      : null,
     ticket: storedTickets.find((ticket) => ticket.actionItemId === item.id) ? { id: storedTickets.find((ticket) => ticket.actionItemId === item.id)!.id } : null,
+  })
+  // Misma inclusión que pide GET .../plan-activities: el ticket además lleva su estado.
+  const itemWithActivityInclude = (item: StoredItem) => ({
+    ...itemWithInclude(item),
+    ticket: (() => { const ticket = storedTickets.find((entry) => entry.actionItemId === item.id); return ticket ? { id: ticket.id, status: ticket.status } : null })(),
   })
   const planWithInclude = (plan: StoredPlan) => ({
     ...plan,
@@ -112,6 +140,9 @@ function makeMitigationDb(options: {
     },
     qualityDiagnostic: {
       findUnique: vi.fn(async () => ({ id: diagnosticId, companyId, company: { id: companyId, name: 'Acme' } })),
+      // Diagnóstico más reciente de la empresa, para anclar el plan que se crea al agregar la
+      // primera actividad de un riesgo todavía sin plan.
+      findFirst: vi.fn(async () => (options.withoutDiagnostic ? null : { id: diagnosticId })),
     },
     process: {
       // findAccessibleProcess pide el proceso con su empresa: los dos ids del arnés cubren una
@@ -135,26 +166,58 @@ function makeMitigationDb(options: {
           name: risk.name,
           processId: risk.processId,
           riskOwnerId: risk.riskOwnerId,
+          mitigationOwnerId: risk.mitigationOwnerId ?? null,
+          // Datos del gate de etapas (POST/PUT del paso 3): el arnés devuelve lo que el select real
+          // pida, incluida la aceptación del riesgo.
+          treatment: risk.treatment,
+          acceptanceStatus: risk.acceptanceStatus,
+          inherentImpact: risk.inherentImpact,
+          inherentProbability: risk.inherentProbability,
           process: { companyId: processForCompanyId(risk.processId) },
           auditEvents: creatorEvent,
           mitigationPlans: storedPlans
             .filter((plan) => plan.riskId === risk.id)
-            .map((plan) => ({ id: plan.id, items: storedItems.filter((item) => item.actionPlanId === plan.id).map((item) => ({ status: item.status })) })),
+            .map((plan) => ({
+              id: plan.id,
+              items: storedItems
+                .filter((item) => item.actionPlanId === plan.id)
+                .map((item) => ({
+                  status: item.status,
+                  // El select real de notifyMitigationPlanCompleted trae el ticket de la actividad
+                  // para corroborar que su estado real también está cerrado.
+                  ticket: (() => { const ticket = storedTickets.find((entry) => entry.actionItemId === item.id); return ticket ? { status: ticket.status } : null })(),
+                })),
+            })),
         }
       }),
     },
     actionPlan: {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const plan = planFor(where.id); return plan ? planWithInclude(plan) : null }),
+      // Plan primario del riesgo (POST .../plan-activities): el más antiguo con riskId; el arnés
+      // no tiene createdAt, así que devuelve el primero en orden de inserción.
+      findFirst: vi.fn(async ({ where }: { where: { riskId?: string | null } }) => {
+        const plan = storedPlans.find((item) => item.riskId === where.riskId)
+        return plan ? planWithInclude(plan) : null
+      }),
       // Listado de candidatos a vincular (GET /processes/:id/action-plans): solo planes de la
-      // empresa de la sesión, con su progreso y el riesgo al que apuntan hoy.
-      findMany: vi.fn(async ({ where }: { where?: { diagnostic?: { companyId?: string } } } = {}) => {
-        if (where?.diagnostic?.companyId !== companyId) return []
-        return storedPlans.map((plan) => ({
-          id: plan.id,
-          title: plan.title,
-          riskId: plan.riskId,
-          items: storedItems.filter((item) => item.actionPlanId === plan.id).map((item) => ({ status: item.status })),
-        }))
+      // empresa de la sesión, con su progreso y el riesgo al que apuntan hoy. La otra forma de
+      // llamada (where.riskId) es GET .../plan-activities, que devuelve los ítems completos.
+      findMany: vi.fn(async ({ where }: { where?: { diagnostic?: { companyId?: string }; riskId?: string } } = {}) => {
+        if (where?.diagnostic?.companyId !== undefined) {
+          if (where.diagnostic.companyId !== companyId) return []
+          return storedPlans.map((plan) => ({
+            id: plan.id,
+            title: plan.title,
+            riskId: plan.riskId,
+            items: storedItems.filter((item) => item.actionPlanId === plan.id).map((item) => ({ status: item.status })),
+          }))
+        }
+        return storedPlans
+          .filter((plan) => plan.riskId === where?.riskId)
+          .map((plan) => ({
+            id: plan.id,
+            items: storedItems.filter((item) => item.actionPlanId === plan.id).map(itemWithActivityInclude),
+          }))
       }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         const created: StoredPlan = { id: 'cmactionplancreated0001', diagnosticId: String(data.diagnosticId), riskId: (data.riskId as string | null) ?? null, title: String(data.title), description: String(data.description), status: String(data.status ?? 'ACTIVE'), createdById: String(data.createdById) }
@@ -169,7 +232,21 @@ function makeMitigationDb(options: {
       }),
     },
     actionItem: {
-      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const item = itemFor(where.id); return item ? itemWithInclude(item) : null }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const item = itemFor(where.id); return item ? itemWithActivityInclude(item) : null }),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const created: StoredItem = {
+          id: `cmactionitemcreated${String(storedItems.length + 1).padStart(10, '0')}`,
+          actionPlanId: String(data.actionPlanId),
+          title: String(data.title),
+          description: String(data.description),
+          priority: String(data.priority ?? 'MEDIUM'),
+          status: String(data.status ?? 'PENDING'),
+          responsibleId: (data.responsibleId as string | null) ?? null,
+          dueDate: (data.dueDate as Date | null) ?? null,
+        }
+        storedItems.push(created)
+        return itemWithActivityInclude(created)
+      }),
       update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const item = itemFor(where.id)
         if (!item) throw new Error('Record to update not found.')
@@ -185,7 +262,7 @@ function makeMitigationDb(options: {
         return ticket ? { ...ticket, createdBy: { id: admin.id, companyId }, assignedTo: null, actionItem: null, riskApprovals: [] } : null
       }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        const ticket: StoredTicket = { id: `cmticketmitigation${String(nextTicket).padStart(4, '0')}`, status: String(data.status ?? 'OPEN'), actionItemId: (data.actionItemId as string | null) ?? null }
+        const ticket: StoredTicket = { id: `cmticketmitigation${String(nextTicket).padStart(4, '0')}`, status: String(data.status ?? 'OPEN'), actionItemId: (data.actionItemId as string | null) ?? null, title: String(data.title ?? 'Ticket'), assignedToId: (data.assignedToId as string | null) ?? null }
         nextTicket += 1
         storedTickets.push(ticket)
         return { ...ticket, createdBy: { id: admin.id, companyId }, assignedTo: null, actionItem: null, riskApprovals: [] }
@@ -209,6 +286,11 @@ function makeMitigationDb(options: {
         storedNotifications.push(notification)
         return { ...notification }
       }),
+    },
+    // Conteo de evidencias PDF del ticket, único dato que el gate 409 lee del modelo.
+    ticketEvidenceFile: {
+      count: vi.fn(async () => (options.withoutEvidence ? 0 : 1)),
+      findMany: vi.fn(async () => []),
     },
     $transaction: vi.fn(async (operation: (client: unknown) => Promise<unknown>) => {
       const backup = snapshot()
@@ -234,6 +316,7 @@ async function loggedIn(db: PrismaClient, email: string) {
 
 const patchItemPath = (itemId: string) => `/api/action-items/${itemId}`
 const patchTicketPath = (ticketId: string) => `/api/tickets/${ticketId}`
+const planActivitiesPath = `/api/processes/${processId}/risks/${defaultRisk.id}/plan-activities`
 const expectedLink = `risks/${processId}/${defaultRisk.id}/residual`
 const expectedCopy = mitigationCompletedNotification({ code: defaultRisk.code, name: defaultRisk.name })
 
@@ -259,12 +342,34 @@ describe('reglas puras del plan de mitigación', () => {
     expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED' }, { status: 'CANCELLED' }] }])).toBe(false)
   })
 
+  it('corrobora el estado real del ticket: COMPLETED con el ticket abierto no es terminado', () => {
+    // La actividad sin ticket (null o campo ausente) no tiene estado que corroborar.
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED', ticketStatus: null }] }])).toBe(true)
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED' }] }])).toBe(true)
+    // Con ticket, el estado del ticket manda: RESOLVED/CLOSED confirman, OPEN/IN_PROGRESS bloquean.
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED', ticketStatus: 'RESOLVED' }] }])).toBe(true)
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED', ticketStatus: 'CLOSED' }] }])).toBe(true)
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED', ticketStatus: 'OPEN' }] }])).toBe(false)
+    expect(mitigationPlansCompleted([{ id: 'plan', items: [{ status: 'COMPLETED', ticketStatus: 'IN_PROGRESS' }] }])).toBe(false)
+    expect(mitigationPlansCompleted([{
+      id: 'plan',
+      items: [
+        { status: 'COMPLETED', ticketStatus: 'RESOLVED' },
+        { status: 'COMPLETED', ticketStatus: 'OPEN' },
+      ],
+    }])).toBe(false)
+  })
+
   it('arma el enlace de la sección residual y los destinatarios sin duplicar ni inventar', () => {
     expect(riskResidualSectionLink(processId, defaultRisk.id)).toBe(expectedLink)
-    expect(mitigationNotificationRecipients(creator.id, owner.id)).toEqual([creator.id, owner.id])
-    expect(mitigationNotificationRecipients(creator.id, creator.id)).toEqual([creator.id])
-    expect(mitigationNotificationRecipients(null, owner.id)).toEqual([owner.id])
-    expect(mitigationNotificationRecipients(undefined, undefined)).toEqual([])
+    // Sin responsable de mitigación se conserva el destinatario de siempre: creador y dueño.
+    expect(mitigationNotificationRecipients(null, owner.id, creator.id)).toEqual([creator.id, owner.id])
+    expect(mitigationNotificationRecipients(null, creator.id, creator.id)).toEqual([creator.id])
+    expect(mitigationNotificationRecipients(undefined, owner.id, null)).toEqual([owner.id])
+    expect(mitigationNotificationRecipients(null, undefined, undefined)).toEqual([])
+    // Con responsable de mitigación el aviso es solo para él, aunque tenga dueño y creador.
+    expect(mitigationNotificationRecipients('cmitigationowner0000001', owner.id, creator.id)).toEqual(['cmitigationowner0000001'])
+    expect(mitigationNotificationRecipients('cmitigationowner0000001', 'cmitigationowner0000001', 'cmitigationowner0000001')).toEqual(['cmitigationowner0000001'])
   })
 
   it('arma el texto del aviso con el código del riesgo, y con su nombre si no tiene código', () => {
@@ -435,6 +540,85 @@ describe('aviso al cerrar la última actividad del plan de mitigación', () => {
     expect(response.status).toBe(200)
     expect(harness.state.storedNotifications).toHaveLength(0)
   })
+
+  it('con responsable de mitigación el aviso es solo para él, no para el creador ni el dueño', async () => {
+    const harness = makeMitigationDb({
+      risk: { ...defaultRisk, mitigationOwnerId: mitigator.id },
+      items: [seedItem('cmactionitem000000000001', 'PENDING')],
+    })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.patch(patchItemPath('cmactionitem000000000001')).send({ status: 'COMPLETED' })
+    expect(response.status).toBe(200)
+    expect(harness.state.storedNotifications).toHaveLength(1)
+    expect(harness.state.storedNotifications[0]?.userId).toBe(mitigator.id)
+    expect(harness.state.storedNotifications[0]?.link).toBe(expectedLink)
+  })
+})
+
+describe('gate de evidencia al cerrar una actividad de mitigación', () => {
+  it('responde 409 al cerrar el ticket sin evidencia y no cambia ni el ticket ni la actividad', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'IN_PROGRESS')], withoutEvidence: true })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'IN_PROGRESS', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.patch(patchTicketPath('cmticketmitigacion001')).send({ status: 'RESOLVED' })
+    expect(response.status).toBe(409)
+    expect(response.body.reason).toBe('MITIGATION_EVIDENCE_REQUIRED')
+    expect(response.body.error).toContain('PDF')
+    // Rollback completo: ni el estado del ticket ni el de la actividad avanzan sin evidencia.
+    expect(harness.state.storedTickets[0]?.status).toBe('IN_PROGRESS')
+    expect(harness.state.storedItems[0]?.status).toBe('IN_PROGRESS')
+    expect(harness.state.storedNotifications).toHaveLength(0)
+  })
+
+  it('responde 409 al completar la actividad cuando su ticket no tiene evidencia', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'PENDING')], withoutEvidence: true })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'OPEN', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.patch(patchItemPath('cmactionitem000000000001')).send({ status: 'COMPLETED' })
+    expect(response.status).toBe(409)
+    expect(response.body.reason).toBe('MITIGATION_EVIDENCE_REQUIRED')
+    expect(harness.state.storedItems[0]?.status).toBe('PENDING')
+    expect(harness.state.storedNotifications).toHaveLength(0)
+  })
+
+  it('cancelar la actividad no exige evidencia (no afirma que la mitigación se ejecutara)', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'IN_PROGRESS')], withoutEvidence: true })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'IN_PROGRESS', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.patch(patchItemPath('cmactionitem000000000001')).send({ status: 'CANCELLED' })
+    expect(response.status).toBe(200)
+    expect(harness.state.storedItems[0]?.status).toBe('CANCELLED')
+  })
+
+  it('un ticket manual (sin actividad) y un plan sin riesgo se cierran sin evidencia', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'IN_PROGRESS')], withoutEvidence: true })
+    harness.state.storedTickets.push({ id: 'cmticketmanual000001', status: 'OPEN', actionItemId: null })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const manual = await agent.patch(patchTicketPath('cmticketmanual000001')).send({ status: 'CLOSED' })
+    expect(manual.status).toBe(200)
+
+    // Plan sin riesgo asociado: la actividad no forma parte de ninguna mitigación.
+    const harnessWithoutRisk = makeMitigationDb({ plans: [{ ...defaultPlan, riskId: null }], items: [seedItem('cmactionitem000000000001', 'PENDING')], withoutEvidence: true })
+    harnessWithoutRisk.state.storedTickets.push({ id: 'cmticketmitigacion002', status: 'OPEN', actionItemId: 'cmactionitem000000000001' })
+    const otherAgent = await loggedIn(harnessWithoutRisk.db, admin.email)
+    const unlinked = await otherAgent.patch(patchTicketPath('cmticketmitigacion002')).send({ status: 'RESOLVED' })
+    expect(unlinked.status).toBe(200)
+  })
+
+  it('con evidencia registrada el cierre pasa sin bloquear', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'IN_PROGRESS')] })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'IN_PROGRESS', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const closed = await agent.patch(patchTicketPath('cmticketmitigacion001')).send({ status: 'RESOLVED' })
+    expect(closed.status).toBe(200)
+    expect(harness.state.storedItems[0]?.status).toBe('COMPLETED')
+  })
 })
 
 describe('asociar un plan de acción al riesgo que mitiga', () => {
@@ -512,5 +696,193 @@ describe('asociar un plan de acción al riesgo que mitiga', () => {
     const secondClose = await agent.patch(patchTicketPath('cmticketmitigacion001')).send({ status: 'RESOLVED' })
     expect(secondClose.status).toBe(200)
     expect(harness.state.storedNotifications).toHaveLength(2)
+  })
+})
+
+describe('actividades de mitigación desde el panel del riesgo', () => {
+  it('agrega una actividad al plan vinculado, crea su ticket y avisa al responsable', async () => {
+    const harness = makeMitigationDb()
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.post(planActivitiesPath).send({
+      title: 'Actualizar procedimiento de entrega',
+      description: 'Revisar y actualizar el procedimiento de entrega de información',
+      responsibleId: mitigator.id,
+      dueDate: '2026-11-01',
+    })
+    expect(response.status).toBe(201)
+    expect(response.body.activity).toMatchObject({
+      title: 'Actualizar procedimiento de entrega',
+      description: 'Revisar y actualizar el procedimiento de entrega de información',
+      status: 'PENDING',
+      responsible: { id: mitigator.id, name: mitigator.name },
+    })
+    expect(response.body.activity.ticket).toMatchObject({ status: 'OPEN' })
+
+    // La actividad entra al plan ya vinculado: no se crea un plan duplicado.
+    expect(harness.state.storedPlans).toHaveLength(1)
+    expect(harness.state.storedItems).toHaveLength(2)
+    const created = harness.state.storedItems[1]!
+    expect(created.actionPlanId).toBe(defaultPlan.id)
+    expect(created.responsibleId).toBe(mitigator.id)
+
+    // El ticket nace en la misma transacción y el responsable recibe el aviso con su link.
+    expect(harness.state.storedTickets).toHaveLength(1)
+    expect(harness.state.storedTickets[0]).toMatchObject({ actionItemId: created.id, status: 'OPEN', assignedToId: mitigator.id })
+    expect(harness.state.storedNotifications).toHaveLength(1)
+    expect(harness.state.storedNotifications[0]).toMatchObject({ userId: mitigator.id, link: `tickets/${harness.state.storedTickets[0]!.id}` })
+  })
+
+  it('crea el plan del riesgo cuando todavía no tiene uno, y usa el título como descripción por defecto', async () => {
+    const harness = makeMitigationDb({ plans: [{ ...defaultPlan, riskId: null }], items: [] })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.post(planActivitiesPath).send({ title: 'Capacitar al equipo en el nuevo procedimiento', responsibleId: owner.id, dueDate: '2026-11-15' })
+    expect(response.status).toBe(201)
+    expect(response.body.activity.description).toBe('Capacitar al equipo en el nuevo procedimiento')
+
+    expect(harness.state.storedPlans).toHaveLength(2)
+    const createdPlan = harness.state.storedPlans[1]!
+    expect(createdPlan.riskId).toBe(defaultRisk.id)
+    expect(createdPlan.diagnosticId).toBe(diagnosticId)
+    expect(createdPlan.title).toContain(defaultRisk.code!)
+    expect(harness.state.storedItems).toHaveLength(1)
+    expect(harness.state.storedItems[0]?.actionPlanId).toBe(createdPlan.id)
+  })
+
+  it('responde 400 si la empresa no tiene diagnóstico donde anclar el plan nuevo', async () => {
+    const harness = makeMitigationDb({ plans: [], items: [], withoutDiagnostic: true })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.post(planActivitiesPath).send({ title: 'Actividad sin dónde anclarse', responsibleId: mitigator.id, dueDate: '2026-11-01' })
+    expect(response.status).toBe(400)
+    expect(harness.state.storedPlans).toHaveLength(0)
+    expect(harness.state.storedItems).toHaveLength(0)
+    expect(harness.state.storedTickets).toHaveLength(0)
+  })
+
+  it('lista las actividades con responsable, vencimiento y ticket, y devuelve vacío sin plan', async () => {
+    const harness = makeMitigationDb({
+      items: [{ ...seedItem('cmactionitem000000000001', 'PENDING'), responsibleId: mitigator.id, dueDate: new Date('2026-11-01T00:00:00.000Z') }],
+    })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'OPEN', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.get(planActivitiesPath)
+    expect(response.status).toBe(200)
+    expect(response.body.activities).toHaveLength(1)
+    expect(response.body.activities[0]).toMatchObject({
+      id: 'cmactionitem000000000001',
+      title: 'Actividad cmactionitem000000000001',
+      status: 'PENDING',
+      responsible: { id: mitigator.id, name: mitigator.name },
+      ticket: { id: 'cmticketmitigacion001', status: 'OPEN' },
+    })
+    expect(response.body.activities[0].dueDate).toBeTruthy()
+
+    // Un riesgo cuyo plan no está vinculado no tiene actividades que mostrar.
+    const harnessWithoutLink = makeMitigationDb({ plans: [{ ...defaultPlan, riskId: null }], items: [seedItem('cmactionitem000000000001', 'PENDING')] })
+    const otherAgent = await loggedIn(harnessWithoutLink.db, admin.email)
+    const empty = await otherAgent.get(planActivitiesPath)
+    expect(empty.status).toBe(200)
+    expect(empty.body.activities).toEqual([])
+  })
+
+  it('rechaza procesos y riesgos ajenos en el listado y el alta', async () => {
+    const harness = makeMitigationDb({ risk: { ...defaultRisk, processId: foreignProcessId } })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const foreignProcess = await agent.get(`/api/processes/${foreignProcessId}/risks/${defaultRisk.id}/plan-activities`)
+    expect(foreignProcess.status).toBe(404)
+
+    // El proceso es visible, pero el riesgo no pertenece a ese proceso.
+    const wrongRisk = await agent.get(planActivitiesPath)
+    expect(wrongRisk.status).toBe(404)
+
+    const post = await agent.post(planActivitiesPath).send({ title: 'Actividad de un riesgo ajeno', responsibleId: mitigator.id, dueDate: '2026-11-01' })
+    expect(post.status).toBe(404)
+    expect(harness.state.storedItems).toHaveLength(1)
+  })
+
+  it('rechaza un responsable de otra empresa y no escribe la actividad', async () => {
+    const harness = makeMitigationDb()
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.post(planActivitiesPath).send({ title: 'Actividad con responsable ajeno', responsibleId: outsider.id, dueDate: '2026-11-01' })
+    expect(response.status).toBe(403)
+    expect(harness.state.storedItems).toHaveLength(1)
+    expect(harness.state.storedTickets).toHaveLength(0)
+  })
+
+  it('un usuario sin rol de escritura no puede agregar actividades', async () => {
+    const harness = makeMitigationDb()
+    const agent = await loggedIn(harness.db, creator.email)
+
+    const response = await agent.post(planActivitiesPath).send({ title: 'Actividad sin permiso de escritura', responsibleId: creator.id, dueDate: '2026-11-01' })
+    expect(response.status).toBe(403)
+    expect(harness.state.storedItems).toHaveLength(1)
+  })
+
+  it('valida los datos de la actividad (título, responsable y fecha son obligatorios)', async () => {
+    const harness = makeMitigationDb()
+    const agent = await loggedIn(harness.db, admin.email)
+
+    expect((await agent.post(planActivitiesPath).send({ title: 'x', responsibleId: mitigator.id, dueDate: '2026-11-01' })).status).toBe(400)
+    expect((await agent.post(planActivitiesPath).send({ title: 'Título válido de actividad', responsibleId: mitigator.id })).status).toBe(400)
+    expect((await agent.post(planActivitiesPath).send({ title: 'Título válido de actividad', dueDate: '2026-11-01' })).status).toBe(400)
+    expect(harness.state.storedItems).toHaveLength(1)
+  })
+
+  it('bloquea el alta y el contenido del plan mientras el riesgo no esté aceptado, y deja cerrar', async () => {
+    const stage = (acceptanceStatus: string) => ({ ...defaultRisk, acceptanceStatus })
+    // PENDING (sin decisión autorizada): el paso 3 no escribe nada, ni altas ni contenido.
+    const pendingHarness = makeMitigationDb({ risk: stage('PENDING') })
+    const pendingAgent = await loggedIn(pendingHarness.db, admin.email)
+    const blockedActivity = await pendingAgent.post(planActivitiesPath).send({ title: 'Actividad bloqueada', responsibleId: mitigator.id, dueDate: '2026-11-01' })
+    expect(blockedActivity.status).toBe(409)
+    expect(blockedActivity.body.error).toBe('Controls and mitigation management unlock once the risk owner accepts the risk')
+    expect(pendingHarness.state.storedItems).toHaveLength(1)
+    expect(pendingHarness.state.storedTickets).toHaveLength(0)
+    const blockedEdit = await pendingAgent.patch(patchItemPath('cmactionitem000000000001')).send({ title: 'Título cambiado sin aceptar', dueDate: new Date('2026-11-05') })
+    expect(blockedEdit.status).toBe(409)
+    // La finalización sigue permitida: es cerrar trabajo ya asignado, con la compuerta de
+    // evidencia PDF de siempre, y no depende de la aceptación.
+    const completed = await pendingAgent.patch(patchItemPath('cmactionitem000000000001')).send({ status: 'COMPLETED' })
+    expect(completed.status).toBe(200)
+    expect(pendingHarness.state.storedItems[0]?.status).toBe('COMPLETED')
+    // REJECTED tampoco desbloquea el paso 3: hace falta una nueva decisión autorizada.
+    const rejectedHarness = makeMitigationDb({ risk: stage('REJECTED') })
+    const rejectedAgent = await loggedIn(rejectedHarness.db, admin.email)
+    const rejectedActivity = await rejectedAgent.post(planActivitiesPath).send({ title: 'Otra actividad bloqueada', responsibleId: mitigator.id, dueDate: '2026-11-01' })
+    expect(rejectedActivity.status).toBe(409)
+    expect(rejectedActivity.body.error).toBe('The risk was rejected; a new authorized decision is required before managing controls, the mitigation plan and the residual risk')
+    expect(rejectedHarness.state.storedItems).toHaveLength(1)
+    // Con el riesgo aceptado (la semilla por defecto) el paso 3 vuelve a escribir.
+    const acceptedHarness = makeMitigationDb()
+    const acceptedAgent = await loggedIn(acceptedHarness.db, admin.email)
+    expect((await acceptedAgent.post(planActivitiesPath).send({ title: 'Actividad habilitada', responsibleId: mitigator.id, dueDate: '2026-11-01' })).status).toBe(201)
+    expect(acceptedHarness.state.storedItems).toHaveLength(2)
+  })
+
+  it('si el aviso de asignación falla, no quedan ni actividad ni ticket', async () => {
+    const harness = makeMitigationDb({ failNotifications: true })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.post(planActivitiesPath).send({ title: 'Actividad que no debe quedar', responsibleId: mitigator.id, dueDate: '2026-11-01' })
+    expect(response.status).toBe(500)
+    expect(harness.state.storedItems).toHaveLength(1)
+    expect(harness.state.storedTickets).toHaveLength(0)
+    expect(harness.state.storedNotifications).toHaveLength(0)
+  })
+
+  it('no avisa del plan completo si una actividad COMPLETED conserva su ticket abierto', async () => {
+    const harness = makeMitigationDb({ items: [seedItem('cmactionitem000000000001', 'COMPLETED'), seedItem('cmactionitem000000000002', 'PENDING')] })
+    harness.state.storedTickets.push({ id: 'cmticketmitigacion001', status: 'OPEN', actionItemId: 'cmactionitem000000000001' })
+    const agent = await loggedIn(harness.db, admin.email)
+
+    const response = await agent.patch(patchItemPath('cmactionitem000000000002')).send({ status: 'COMPLETED' })
+    expect(response.status).toBe(200)
+    // Las dos actividades están COMPLETED, pero el ticket de la primera sigue OPEN.
+    expect(harness.state.storedNotifications).toHaveLength(0)
   })
 })

@@ -24,11 +24,17 @@ describe('parseNotificationLink', () => {
     })
   })
 
+  it('interpreta el enlace de una asignación de ticket como apertura de ese ticket', () => {
+    expect(parseNotificationLink('tickets/cmticket000000000000001')).toEqual({ kind: 'ticket', ticketId: 'cmticket000000000000001' })
+  })
+
   it('ignora secciones desconocidas o enlaces incompletos en vez de adivinar', () => {
     expect(parseNotificationLink('')).toBeNull()
     expect(parseNotificationLink('risks')).toBeNull()
     expect(parseNotificationLink('risks/cmprocess000000000000000001')).toBeNull()
     expect(parseNotificationLink('approvals')).toBeNull()
+    expect(parseNotificationLink('tickets')).toBeNull()
+    expect(parseNotificationLink('tickets/')).toBeNull()
     expect(parseNotificationLink('dashboard/cmcompany00000000000000001')).toBeNull()
   })
 })

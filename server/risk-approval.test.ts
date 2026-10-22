@@ -483,15 +483,19 @@ describe('risk approval flow', () => {
     expect(rejected.body.approval.comment).toBe('Falta documentar el control clave.')
     expect(rejected.body.ticket).toBeNull()
     expect(state.storedTickets).toHaveLength(0)
-    // El rechazo no toca el veredicto formal: la aceptación sigue pendiente.
+    // El rechazo escribe el veredicto formal REJECTED en la misma transacción del ciclo: es una
+    // de las dos únicas vías (junto con APPROVE) que pueden cambiar acceptanceStatus.
     const risks = await adminAgent.get(`/api/processes/${processId}/risks`)
-    expect(risks.body.risks[0].acceptanceStatus).toBe('PENDING')
+    expect(risks.body.risks[0].acceptanceStatus).toBe('REJECTED')
     const requesterNote = state.storedNotifications.find((item) => item.userId === admin.id && item.title.includes('rechazado'))
     expect(requesterNote!.body).toContain('Motivo: Falta documentar el control clave.')
 
     const resent = await ownerAgent.post(`/api/processes/${processId}/risks/${riskId}/approvals`)
     expect(resent.status).toBe(201)
     expect(resent.body.approval.status).toBe('PENDING')
+    // El reenvío abre un ciclo nuevo pero no restablece el veredicto anterior a PENDING.
+    const afterResend = await adminAgent.get(`/api/processes/${processId}/risks`)
+    expect(afterResend.body.risks[0].acceptanceStatus).toBe('REJECTED')
 
     const superAgent = await loggedIn(db, superuser.email)
     const history = await superAgent.get('/api/approvals')

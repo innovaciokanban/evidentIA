@@ -14,7 +14,6 @@ const makeRisk = (overrides: Partial<ProcessRisk> = {}): ProcessRisk => ({
   acceptanceStatus: 'PENDING',
   treatment: null,
   mitigationOwner: null,
-  mitigationStartDate: null,
   mitigationDueDate: null,
   inherentImpact: 4,
   inherentProbability: 5,

@@ -18,7 +18,10 @@ import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPai
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
 import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
+import { EvidenceValidationError, nextStoredName, readEvidenceFile, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
+import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -106,6 +109,23 @@ const ticketInclude = {
   riskApprovals: { select: { id: true, riskId: true, risk: { select: { id: true, code: true, name: true, processId: true } } } },
 } as const
 const ticketView = (ticket: Prisma.TicketGetPayload<{ include: typeof ticketInclude }>) => ticket
+// Vista de una evidencia PDF de ticket. No expone storedName (el nombre en disco es interno del
+// servidor y no aporta nada al cliente), y trae el ticket y el subidor para poder mostrar la
+// evidencia también desde la lista por plan de mitigación.
+const evidenceInclude = {
+  uploadedBy: { select: { id: true, name: true } },
+  ticket: { select: { id: true, title: true } },
+} as const
+const evidenceView = (evidence: Prisma.TicketEvidenceFileGetPayload<{ include: typeof evidenceInclude }>) => ({
+  id: evidence.id,
+  ticketId: evidence.ticketId,
+  filename: evidence.filename,
+  mimeType: evidence.mimeType,
+  size: evidence.size,
+  createdAt: evidence.createdAt,
+  uploadedBy: evidence.uploadedBy,
+  ticket: evidence.ticket,
+})
 const crossInclude = { factor1: true, factor2: true } as const
 const crossFactorView = (item: { id: string; swotId: string; type: string; description: string; createdAt: Date }) => ({ id: item.id, swotId: item.swotId, type: item.type, description: item.description, createdAt: item.createdAt })
 const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof crossInclude }>) => ({
@@ -710,7 +730,6 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
     acceptanceStatus: risk.acceptanceStatus,
     treatment: risk.treatment,
     mitigationOwner: risk.mitigationOwner,
-    mitigationStartDate: risk.mitigationStartDate,
     mitigationDueDate: risk.mitigationDueDate,
     inherentImpact: risk.inherentImpact,
     inherentProbability: risk.inherentProbability,
@@ -737,13 +756,10 @@ const riskView = (risk: Prisma.RiskGetPayload<{ include: typeof riskInclude }>) 
 }
 
 /**
- * El plan de mitigación no admite vencimiento anterior a la fecha de inicio. En PATCH solo viene
- * una de las dos fechas, así que el cruce se valida contra el valor guardado del riesgo.
+ * La fecha de inicio del plan de mitigación se retiró del formulario y de la API: el backend ya
+ * no la expone ni la valida. La columna Risk.mitigationStartDate se conserva en la base de datos
+ * (sin migración destructiva) pero es un dato legado del que la aplicación ya no lee ni escribe.
  */
-const mitigationDatesError = (startDate: Date | null | undefined, dueDate: Date | null | undefined): string | null =>
-  startDate && dueDate && dueDate.getTime() < startDate.getTime()
-    ? 'Mitigation due date cannot be before the start date'
-    : null
 
 // Prefijos del código automático por categoría; la secuencia global es independiente por prefijo.
 const riskCodePrefix = { ESTRATEGICO: 'EST', MISIONAL: 'MIS', APOYO: 'APO' } as const
@@ -777,11 +793,59 @@ const residualBaselineImpact = 1
 const residualBaselineProbability = 1
 const residualRequiresControlsError = 'Residual risk values require at least one control'
 
+/**
+ * Etapas de la gestión del riesgo (espejo de `riskStageReason` del front): controles, plan de
+ * mitigación (responsable, vencimiento y actividades) y evaluación residual solo se escriben
+ * cuando la evaluación inherente está completa, hay tratamiento definido y el riesgo quedó
+ * ACEPTADO por el ciclo de aprobación. PENDING es «sin decisión» y REJECTED exige una nueva
+ * decisión autorizada: ninguno de los dos desbloquea, aunque el riesgo ya tenga controles o
+ * actividades guardados. La comprobación vive en el servidor porque `disabled` en el navegador no
+ * es una defensa; la interfaz solo la replica para no ofrecer acciones que van a rechazarse.
+ *
+ * La regla se aplica con HTTP 409 (conflicto de estado, no de validación): el cuerpo ya es
+ * válido, lo que falta es avanzar en el flujo. La baja de controles y el cierre/baja de
+ * actividades quedan FUERA de este gate (limpieza de datos heredados y finalización del trabajo
+ * ya asignado), igual que la lectura de listas y evidencias.
+ */
+type RiskStageInput = { treatment: string | null; acceptanceStatus: string; inherentImpact: number; inherentProbability: number }
+
+type RiskStageReason = 'evaluation' | 'treatment' | 'acceptance-pending' | 'acceptance-rejected'
+
+const riskStageMessages: Record<RiskStageReason, string> = {
+  evaluation: 'Complete the inherent risk evaluation before managing controls, the mitigation plan and the residual risk',
+  treatment: 'Define the risk treatment before managing controls, the mitigation plan and the residual risk',
+  'acceptance-pending': 'Controls and mitigation management unlock once the risk owner accepts the risk',
+  'acceptance-rejected': 'The risk was rejected; a new authorized decision is required before managing controls, the mitigation plan and the residual risk',
+}
+
+const inInherentScale = (value: number) => Number.isInteger(value) && value >= 1 && value <= 5
+
+const riskStageLockReason = (risk: RiskStageInput): RiskStageReason | null => {
+  if (!inInherentScale(risk.inherentImpact) || !inInherentScale(risk.inherentProbability)) return 'evaluation'
+  if (risk.treatment === null) return 'treatment'
+  if (risk.acceptanceStatus === 'PENDING') return 'acceptance-pending'
+  if (risk.acceptanceStatus === 'REJECTED') return 'acceptance-rejected'
+  return null
+}
+
+/** Mensaje para el 409, o `null` cuando la escritura del paso 3/4 está habilitada. */
+const riskStageLockError = (risk: RiskStageInput): string | null => {
+  const reason = riskStageLockReason(risk)
+  return reason ? riskStageMessages[reason] : null
+}
+
+/** Campos que el gate de etapas mira para decidir si un PATCH toca el paso 3 (plan) o el 4. */
+const riskStageSelect = { treatment: true, acceptanceStatus: true, inherentImpact: true, inherentProbability: true } as const
+
 // Etiquetas del nivel de riesgo para notificaciones y tickets (misma matriz 5×5 de siempre).
 const riskLevelNames: Record<'LOW' | 'MEDIUM' | 'HIGH', string> = { LOW: 'Bajo', MEDIUM: 'Medio', HIGH: 'Alto' }
 
 // El link de una notificación apunta a la bandeja "Mis aprobaciones"; la campana lo interpreta.
 const approvalNotificationLink = (approvalId: string) => `approvals/${approvalId}`
+
+// Enlace de una notificación de asignación de ticket: la campana lo abre en el detalle del
+// ticket, con el mismo patrón de segmentos que los links de aprobaciones y de riesgos.
+const ticketAssignmentNotificationLink = (ticketId: string) => `tickets/${ticketId}`
 
 const riskApprovalInclude = {
   requestedBy: { select: { id: true, name: true } },
@@ -1022,8 +1086,8 @@ const updatedRiskChanges = (existing: RiskWithInclude, data: Prisma.RiskUnchecke
   pushIfChanged('residualImpact', 'Impacto residual', existing.residualImpact, data.residualImpact)
   pushIfChanged('residualProbability', 'Probabilidad residual', existing.residualProbability, data.residualProbability)
   pushIfChanged('treatment', 'Tratamiento', existing.treatment, data.treatment)
-  pushIfChanged('acceptanceStatus', 'Aceptación', existing.acceptanceStatus, data.acceptanceStatus)
-  pushIfChanged('mitigationStartDate', 'Fecha de inicio del plan', existing.mitigationStartDate, data.mitigationStartDate)
+  // acceptanceStatus queda fuera: no es editable desde la edición general del riesgo, así que aquí
+  // nunca hay un valor nuevo que comparar ni registrar en el historial.
   pushIfChanged('mitigationDueDate', 'Fecha de vencimiento del plan', existing.mitigationDueDate, data.mitigationDueDate)
   if (data.riskOwnerId !== undefined && data.riskOwnerId !== existing.riskOwnerId) {
     changes.push({ field: 'riskOwnerId', label: 'Dueño del riesgo', previousValue: existing.riskOwner?.name ?? null, newValue: owners.riskOwner ?? null })
@@ -1404,6 +1468,9 @@ const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlan
       name: true,
       processId: true,
       riskOwnerId: true,
+      // Quien se comprometió con ejecutar la mitigación: si el riesgo lo tiene, el aviso es solo
+      // para él (los destinatarios resuelven el resto: sin responsable, creador + dueño).
+      mitigationOwnerId: true,
       // El creador no es una columna del riesgo: queda en el historial como RISK_CREATED.
       auditEvents: {
         where: { eventType: RiskAuditEventType.RISK_CREATED },
@@ -1412,13 +1479,18 @@ const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlan
         select: { actorId: true },
       },
       // El estado se lee de las relaciones persistidas: si el riesgo no tiene planes, o uno de
-      // sus planes quedó sin actividades, no hay nada completado.
-      mitigationPlans: { select: { id: true, items: { select: { status: true } } } },
+      // sus planes quedó sin actividades, no hay nada completado. El ticket de cada actividad
+      // viaja junto (cuando existe) para corroborar que su estado real también está cerrado.
+      mitigationPlans: { select: { id: true, items: { select: { status: true, ticket: { select: { status: true } } } } } },
     },
   })
   if (!risk) return
-  if (!mitigationPlansCompleted(risk.mitigationPlans)) return
-  const candidateIds = mitigationNotificationRecipients(risk.auditEvents[0]?.actorId, risk.riskOwnerId)
+  const plansSnapshot = risk.mitigationPlans.map((plan) => ({
+    id: plan.id,
+    items: plan.items.map((item) => ({ status: item.status, ticketStatus: item.ticket?.status ?? null })),
+  }))
+  if (!mitigationPlansCompleted(plansSnapshot)) return
+  const candidateIds = mitigationNotificationRecipients(risk.mitigationOwnerId, risk.riskOwnerId, risk.auditEvents[0]?.actorId)
   if (candidateIds.length === 0) return
   const recipients = await client.user.findMany({ where: { id: { in: candidateIds } }, select: { id: true } })
   const link = riskResidualSectionLink(risk.processId, risk.id)
@@ -1428,6 +1500,32 @@ const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlan
     if (existing) continue
     await client.notification.create({ data: { userId: recipient.id, title, body, link } })
   }
+}
+
+/**
+ * Aviso "tu asignaste un ticket": cuando una actividad (o un ticket manual) queda con
+ * responsable, esa persona recibe el aviso in-app con enlace directo al ticket. Idempotente por
+ * diseño, igual que el resto de avisos: el link es "tickets/<id>", así que si el ticket se
+ * reasigna (o vuelve a alguien ya avisado) no se acumulan copias del mismo aviso, y el que se
+ * asigna a sí mismo no se avisa.
+ *
+ * Se invoca dentro de la transacción que escribe la asignación: si la petición acaba fallando,
+ * el aviso tampoco queda suelto apuntando a un cambio que no llegó a ocurrir. El creador del
+ * ticket no recibe aviso propio (ya está viendo lo que hizo).
+ */
+const notifyTicketAssigned = async (client: RiskAuditClient, ticket: { id: string; title: string }, assigneeId: string | null, actorId: string): Promise<void> => {
+  if (!assigneeId || assigneeId === actorId) return
+  const link = ticketAssignmentNotificationLink(ticket.id)
+  const existing = await client.notification.findFirst({ where: { userId: assigneeId, link }, select: { id: true } })
+  if (existing) return
+  await client.notification.create({
+    data: {
+      userId: assigneeId,
+      title: `Ticket asignado: ${ticket.title}`,
+      body: `Se te asignó el ticket «${ticket.title}». Ábrelo para revisar el detalle y trabajar en él.`,
+      link,
+    },
+  })
 }
 
 const ticketDataFromActionItem = (item: { title: string; description: string; status: ActionItemStatus; priority: Priority; responsibleId: string | null; dueDate: Date | null; actionItemId: string; createdById: string }) => ({
@@ -2346,17 +2444,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(mitigationOwner.status).json({ error: mitigationOwner.error })
       return
     }
-    const dateError = mitigationDatesError(parsed.data.mitigationStartDate, parsed.data.mitigationDueDate)
-    if (dateError) {
-      response.status(400).json({ error: dateError })
-      return
-    }
     // La categoría sale del proceso, nunca del cuerpo. El riskType del cliente se acepta solo como
     // guarda de compatibilidad con clientes antiguos: si no coincide con la categoría del proceso,
     // el alta se rechaza en lugar de guardar un riesgo con una categoría incompatible.
     const riskCategory = processTypeToRiskCategory[process.type]
     if (parsed.data.riskType !== undefined && parsed.data.riskType !== riskCategory) {
       response.status(400).json({ error: `Risk type must match the process category (${riskCategory})` })
+      return
+    }
+    // Un riesgo nace PENDING y sin decisión autorizada, así que el paso 3 (plan de mitigación) no
+    // puede escribirse en la misma petición que lo crea: responsable y vencimiento se registran
+    // recién cuando el dueño acepta el riesgo. Sin este gate, el 409 de edición se eludiría con un
+    // alta manipulada. El mensaje nombra lo que falta para el paso 3, que es la aceptación.
+    if (parsed.data.mitigationOwnerId || parsed.data.mitigationDueDate) {
+      response.status(409).json({ error: riskStageMessages['acceptance-pending'] })
       return
     }
     // Un riesgo nace sin controles, así que en el alta solo se admite el residual neutro (1×1).
@@ -2374,6 +2475,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       // Se escribe después del spread para que la categoría derivada del proceso pase siempre por
       // encima de cualquier riskType recibido.
       riskType: riskCategory,
+      // Igual regla para la aceptación: un riesgo siempre nace PENDING («Pendiente») y el valor
+      // enviado por el cliente, exista o no, se descarta. El veredicto formal solo lo escribe la
+      // decisión autorizada del ciclo de aprobación.
+      acceptanceStatus: 'PENDING',
       bpmnActivity: parsed.data.bpmnActivity ?? legacyBpmnActivityValue,
       riskOwnerId: riskOwner.userId,
       mitigationOwnerId: mitigationOwner.userId,
@@ -2430,29 +2535,45 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       }
       data.mitigationOwnerId = mitigationOwner.userId
     }
-    const nextStart = data.mitigationStartDate !== undefined ? data.mitigationStartDate : existing.mitigationStartDate
-    const nextDue = data.mitigationDueDate !== undefined ? data.mitigationDueDate : existing.mitigationDueDate
-    const dateError = mitigationDatesError(nextStart, nextDue)
-    if (dateError) {
-      response.status(400).json({ error: dateError })
-      return
-    }
     // El tipo de riesgo se deriva del proceso y no es editable. Si el cliente aún lo envía, solo se
-    // acepta cuando coincide con la categoría del proceso o con el valor ya almacenado (eco de un
+    // acepta cuando coincide con la categoría del proceso o con el valor almacenado (eco de un
     // cliente antiguo); en ningún caso se persiste el valor recibido y una categoría incompatible
     // con el proceso rechaza la edición.
+    // La aceptación (acceptanceStatus) no pasa por este camino en absoluto: riskUpdateSchema la
+    // omite, así que aunque el cuerpo la traiga Zod la descarta antes de llegar aquí y `data` no la
+    // contiene. Ningún PATCH puede alterar el veredicto; solo lo hace la decisión del ciclo de
+    // aprobación (APPROVE → ACCEPTED, REJECT → REJECTED).
     const riskCategory = processTypeToRiskCategory[process.type]
     if (data.riskType !== undefined && data.riskType !== riskCategory && data.riskType !== existing.riskType) {
       response.status(400).json({ error: `Risk type is derived from the process and cannot be changed (${riskCategory})` })
       return
     }
     delete data.riskType
+    // Escrituras del paso 3 (responsable/vencimiento del plan) y del paso 4 (residual): el gate de
+    // etapas se comprueba ANTES de que nada de lo anterior, porque un riesgo sin evaluar, sin
+    // tratamiento o sin aceptar no admite ninguno de esos avances. Un eco de los valores guardados
+    // (el formulario completo que mandan los clientes antiguos) no cuenta como cambio y no bloquea
+    // la edición de los campos de los pasos 1 y 2, que siguen siendo editables siempre.
+    const planOwnerChanged = data.mitigationOwnerId !== undefined && data.mitigationOwnerId !== existing.mitigationOwnerId
+    // El vencimiento se compara a nivel de día (como lo captura el formulario, `input type=date`):
+    // así un eco del mismo día nunca se confunde con un cambio y no dispara el gate sin motivo.
+    const planDueDateChanged = data.mitigationDueDate !== undefined
+      && (data.mitigationDueDate === null
+        ? existing.mitigationDueDate !== null
+        : existing.mitigationDueDate === null || existing.mitigationDueDate.toISOString().slice(0, 10) !== data.mitigationDueDate.toISOString().slice(0, 10))
     // El residual solo es editable con al menos un control asociado. Un eco del valor almacenado
     // (clientes antiguos que envían el formulario completo) no cuenta como cambio y no bloquea la
     // edición de otros campos. Al eliminar el último control los valores ya guardados se
     // conservan (columnas NOT NULL): quedan bloqueados hasta que exista de nuevo un control.
     const residualChanged = (data.residualImpact !== undefined && data.residualImpact !== existing.residualImpact)
       || (data.residualProbability !== undefined && data.residualProbability !== existing.residualProbability)
+    if (planOwnerChanged || planDueDateChanged || residualChanged) {
+      const stageLock = riskStageLockError(existing)
+      if (stageLock) {
+        response.status(409).json({ error: stageLock })
+        return
+      }
+    }
     if (residualChanged && existing.controls.length === 0) {
       response.status(400).json({ error: residualRequiresControlsError })
       return
@@ -2585,6 +2706,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
           await tx.riskApproval.update({ where: { id: approval.id }, data: { ticketId: ticket.id } })
           createdTicketId = ticket.id
+        } else {
+          // "Rechazar": el veredicto formal queda REJECTED en la MISMA transacción que el ciclo.
+          // Es la única vía (junto con APPROVE) para escribir acceptanceStatus: ningún alta ni
+          // PATCH del riesgo puede tocarlo, de modo que el formulario siempre pinta lo persistido.
+          await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'REJECTED' } })
         }
         // Decisión y ticket quedan en el historial dentro de la MISMA transacción que los cambió:
         // si la transacción revierte, tampoco se registran (nunca hay evento sin operación ni
@@ -2731,6 +2857,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Risk not found' })
       return
     }
+    // Orden de gestión: el paso 3 solo se habilita con evaluación inherente completa, tratamiento
+    // y riesgo aceptado por el ciclo autorizado.
+    const stageLock = riskStageLockError(risk)
+    if (stageLock) {
+      response.status(409).json({ error: stageLock })
+      return
+    }
     const control = await db.$transaction(async (tx) => {
       const created = await tx.riskControl.create({ data: { riskId: risk.id, ...parsed.data } })
       await riskAuditWrite(tx, {
@@ -2760,6 +2893,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, include: riskInclude })
     if (!risk || risk.processId !== process.id) {
       response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    // La edición comparte el gate del alta: el orden evaluación → tratamiento → aceptación →
+    // controles rige también para modificar un control ya existente. La baja (DELETE) no pasa por
+    // este filtro, de modo que un control heredado siempre se puede retirar.
+    const stageLock = riskStageLockError(risk)
+    if (stageLock) {
+      response.status(409).json({ error: stageLock })
       return
     }
     const existing = await db.riskControl.findUnique({ where: { id: String(request.params.controlId) } })
@@ -2914,6 +3055,185 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       })
     })
     response.status(204).send()
+  }))
+
+  /**
+   * Evidencia PDF del plan de mitigación de un riesgo: los PDF de TODOS los tickets de las
+   * actividades de sus planes (los tickets de un plan existen mientras exista la actividad; el
+   * enlace es ticket.actionItemId -> actionItem.actionPlan.riskId). Alimenta la sección de
+   * evidencias del panel de riesgo, donde antes se listaba RiskEvidence: esos registros manuales
+   * se conservan en base de datos y su API de más arriba no cambia.
+   *
+   * Visibilidad: primero el proceso (empresa) y después la de cada ticket (scopeForUser), igual
+   * que el resto de rutas de tickets: cada fila que aparece aquí es una fila cuyo ticket el
+   * usuario puede abrir y descargar, de modo que nunca se cuelan archivos de tickets ajenos.
+   */
+  app.get('/api/processes/:processId/risks/:riskId/plan-evidence', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, select: { id: true, processId: true } })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const evidence = await db.ticketEvidenceFile.findMany({
+      where: { ticket: { AND: [scopeForUser(request), { actionItem: { actionPlan: { riskId: risk.id } } }] } },
+      include: evidenceInclude,
+      orderBy: { createdAt: 'desc' },
+    })
+    response.json({ evidence: evidence.map(evidenceView) })
+  }))
+
+  /**
+   * Actividades del plan de mitigación de un riesgo, para el paso 3 del panel de riesgos. Una
+   * actividad es un ActionItem de un plan de acción vinculado al riesgo (ActionPlan.riskId); el
+   * modelo permite varios planes por riesgo, así que la lista concatena los ítems de todos ellos
+   * en orden de creación. El acceso es el mismo que plan-evidence: proceso visible para la sesión
+   * y riesgo que pertenezca exactamente a ese proceso.
+   */
+  const mitigationActivityInclude = {
+    responsible: { select: { id: true, name: true } },
+    ticket: { select: { id: true, status: true } },
+  } as const
+
+  const mitigationActivityView = (item: Prisma.ActionItemGetPayload<{ include: typeof mitigationActivityInclude }>) => ({
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    status: item.status,
+    dueDate: item.dueDate,
+    responsible: item.responsible,
+    ticket: item.ticket,
+    createdAt: item.createdAt,
+  })
+
+  app.get('/api/processes/:processId/risks/:riskId/plan-activities', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, select: { id: true, processId: true } })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    const plans = await db.actionPlan.findMany({
+      where: { riskId: risk.id },
+      select: { id: true, items: { include: mitigationActivityInclude, orderBy: { createdAt: 'asc' } } },
+      orderBy: { createdAt: 'asc' },
+    })
+    response.json({ activities: plans.flatMap((plan) => plan.items).map(mitigationActivityView) })
+  }))
+
+  /**
+   * Agrega una actividad al plan de mitigación del riesgo desde el paso 3 del panel, sin pasar
+   * por la vinculación manual de planes. El plan "primario" del riesgo es el más antiguo con
+   * riskId = riesgo (el modelo permite varios; la lista de actividades los concatena igual). Si
+   * el riesgo todavía no tiene plan, se crea uno nuevo ligado al riesgo (ActionPlan.diagnosticId
+   * es NOT NULL en el modelo, así que el plan nace bajo el diagnóstico más reciente de la
+   * empresa; sin diagnóstico no hay dónde anclarlo y la petición se rechaza con 400). Los planes
+   * existentes nunca se renombran ni se duplican.
+   *
+   * La actividad nace PENDING con prioridad MEDIUM y su ticket en la MISMA transacción, más el
+   * aviso de asignación al responsable (link idempotente tickets/<id>): si el aviso falla, no
+   * queda actividad sin ticket ni ticket sin actividad. Como empieza PENDING, no puede cerrar la
+   * mitigación, así que aquí no corre notifyMitigationPlanCompleted.
+   */
+  app.post('/api/processes/:processId/risks/:riskId/plan-activities', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = mitigationActivityCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid mitigation activity data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const risk = await db.risk.findUnique({ where: { id: String(request.params.riskId) }, select: { id: true, processId: true, code: true, name: true, ...riskStageSelect } })
+    if (!risk || risk.processId !== process.id) {
+      response.status(404).json({ error: 'Risk not found' })
+      return
+    }
+    // Gate de etapas: mientras el riesgo no esté aceptado no se agregan actividades de su plan
+    // (alta que además crea un ActionPlan cuando todavía no existe ninguno).
+    const stageLock = riskStageLockError(risk)
+    if (stageLock) {
+      response.status(409).json({ error: stageLock })
+      return
+    }
+    const responsible = await resolveUserInCompany(parsed.data.responsibleId, process.companyId, 'responsible')
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const existingPlan = await db.actionPlan.findFirst({ where: { riskId: risk.id }, orderBy: { createdAt: 'asc' }, select: { id: true } })
+    let actionPlanId: string
+    if (existingPlan) {
+      actionPlanId = existingPlan.id
+    } else {
+      const diagnostic = await db.qualityDiagnostic.findFirst({
+        where: { companyId: process.companyId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      if (!diagnostic) {
+        response.status(400).json({ error: 'No diagnostic available for this company' })
+        return
+      }
+      const reference = risk.code ?? risk.name
+      const plan = await db.actionPlan.create({
+        data: {
+          diagnosticId: diagnostic.id,
+          riskId: risk.id,
+          title: `Plan de mitigación ${reference}`,
+          description: `Actividades de mitigación del riesgo ${reference}.`,
+          status: 'ACTIVE',
+          createdById: request.user!.id,
+        },
+        select: { id: true },
+      })
+      actionPlanId = plan.id
+    }
+    const { item } = await db.$transaction(async (tx) => {
+      const created = await tx.actionItem.create({
+        data: {
+          actionPlanId,
+          title: parsed.data.title,
+          description: parsed.data.description ?? parsed.data.title,
+          priority: Priority.MEDIUM,
+          status: ActionItemStatus.PENDING,
+          responsibleId: responsible.userId,
+          dueDate: parsed.data.dueDate,
+        },
+        include: mitigationActivityInclude,
+      })
+      const ticket = await tx.ticket.create({
+        data: ticketDataFromActionItem({
+          title: created.title,
+          description: created.description,
+          status: created.status,
+          priority: created.priority,
+          responsibleId: created.responsibleId,
+          dueDate: created.dueDate,
+          actionItemId: created.id,
+          createdById: request.user!.id,
+        }),
+        include: ticketInclude,
+      })
+      // Aviso de asignación: la actividad nace con responsable, así que ese responsable se entera
+      // aquí mismo (mismo link idempotente tickets/<id> que el resto del sistema).
+      await notifyTicketAssigned(tx, ticket, ticket.assignedToId, request.user!.id)
+      // Relectura tras crear el ticket: la actividad recién escrita se leyó antes de que el
+      // ticket existiera, y la respuesta debe mostrarlo ya asociado.
+      const refreshed = await tx.actionItem.findUnique({ where: { id: created.id }, include: mitigationActivityInclude })
+      return { item: refreshed ?? created }
+    })
+    response.status(201).json({ activity: mitigationActivityView(item) })
   }))
 
   app.get('/api/processes/:processId/kpis', authMiddleware, asyncHandler(async (request, response) => {
@@ -5154,10 +5474,26 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(400).json({ error: 'Invalid action item data', details: parsed.error.issues })
       return
     }
-    const actionPlan = await db.actionPlan.findUnique({ where: { id: String(request.params.id) }, select: { id: true, diagnosticId: true, diagnostic: { select: { company: { select: { id: true } } } } } })
+    const actionPlan = await db.actionPlan.findUnique({ where: { id: String(request.params.id) }, select: { id: true, diagnosticId: true, riskId: true, diagnostic: { select: { company: { select: { id: true } } } } } })
     if (!actionPlan || !canAccessCompany(request, actionPlan.diagnostic.company)) {
       response.status(404).json({ error: 'Action plan not found' })
       return
+    }
+    // Gate de etapas: un plan de acción que ejecuta el plan de mitigación de un riesgo no admite
+    // actividades nuevas mientras ese riesgo no esté aceptado. Los planes de diagnóstico (sin
+    // riskId) siguen siendo libres, y la edición/baja de las actividades existentes pasa por la
+    // ruta de action-items, que aplica el mismo gate solo al contenido.
+    if (actionPlan.riskId) {
+      const risk = await db.risk.findUnique({ where: { id: actionPlan.riskId }, select: riskStageSelect })
+      if (!risk) {
+        response.status(404).json({ error: 'Risk not found' })
+        return
+      }
+      const stageLock = riskStageLockError(risk)
+      if (stageLock) {
+        response.status(409).json({ error: stageLock })
+        return
+      }
     }
     if (parsed.data.recommendationId) {
       const recommendation = await db.recommendation.findUnique({ where: { id: parsed.data.recommendationId }, select: { diagnosticId: true } })
@@ -5186,6 +5522,9 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       }
       const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
       const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
+      // Aviso de asignación: si la actividad nace con responsable, ese responsable se entera aquí
+      // mismo (mismo link idempotente que el resto de reasignaciones: tickets/<id>).
+      await notifyTicketAssigned(tx, linkedTicket, linkedTicket.assignedToId, request.user!.id)
       return { item: created, ticket: linkedTicket }
     })
     response.status(201).json({ item: actionItemView(item), ticket: ticketView(ticket) })
@@ -5220,11 +5559,40 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
+    // Gate de etapas del riesgo: el CONTENIDO de una actividad del plan de mitigación (título,
+    // descripción, prioridad, responsable, vencimiento o recomendación) solo se edita con el
+    // riesgo aceptado, aunque la actividad ya exista. El cierre queda FUERA del gate: completar o
+    // cancelar es la finalización de trabajo ya asignado, con la compuerta de evidencia PDF de
+    // siempre (mismo criterio que la baja de controles), y un plan de diagnóstico (sin riskId) no
+    // se ve afectado.
+    const contentChanged = ['title', 'description', 'priority', 'recommendationId', 'responsibleId', 'dueDate'].some((field) => parsed.data[field as keyof typeof parsed.data] !== undefined)
+    if (contentChanged && existing.actionPlan.riskId) {
+      const risk = await db.risk.findUnique({ where: { id: existing.actionPlan.riskId }, select: riskStageSelect })
+      const stageLock = risk ? riskStageLockError(risk) : riskStageMessages['acceptance-pending']
+      if (stageLock) {
+        response.status(409).json({ error: stageLock })
+        return
+      }
+    }
     // Transición de estado que cierra la mitigación: solo cuando la actividad pasa a COMPLETED
     // desde otro estado se reevalúa el plan de mitigación del riesgo. Editar un ítem ya
     // completado sin tocar su estado, o marcarlo CANCELLED, no dispara el aviso.
     const justCompleted = parsed.data.status === ActionItemStatus.COMPLETED && existing.status !== ActionItemStatus.COMPLETED
     const item = await db.$transaction(async (tx) => {
+      // Gate de evidencia: cerrar una actividad de un plan de mitigación de un riesgo exige tener
+      // al menos un PDF en el ticket que la representa. Se comprueba ANTES de escribir y dentro de
+      // la misma transacción (si falla, no cambia ni el estado ni el ticket). Solo corre sobre
+      // transiciones nuevas a COMPLETED: CANCELLED no afirma que la mitigación se ejecutara, y una
+      // actividad ya completada se puede reescribir sin volver a exigir evidencia.
+      if (parsed.data.status !== undefined) {
+        const gateTicket = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, select: { id: true } })
+        await assertMitigationEvidence(tx, {
+          ticketId: gateTicket?.id ?? null,
+          actionItemId: existing.id,
+          willCompleteActivity: parsed.data.status === ActionItemStatus.COMPLETED,
+          wasActivityCompleted: existing.status === ActionItemStatus.COMPLETED,
+        })
+      }
       const updated = await tx.actionItem.update({ where: { id: existing.id }, data: parsed.data, include: actionItemInclude })
       const linked = await tx.ticket.findUnique({ where: { actionItemId: updated.id }, select: { id: true } })
       const ticketData: Prisma.TicketUncheckedUpdateInput = {}
@@ -5234,12 +5602,20 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       if (parsed.data.responsibleId !== undefined) ticketData.assignedToId = parsed.data.responsibleId
       if (parsed.data.dueDate !== undefined) ticketData.dueDate = parsed.data.dueDate
       if (parsed.data.status !== undefined) ticketData.status = actionItemToTicketStatus[parsed.data.status]
+      let linkedTicketId: string
       if (linked) {
+        linkedTicketId = linked.id
         if (Object.keys(ticketData).length > 0) {
           await tx.ticket.update({ where: { id: linked.id }, data: ticketData })
         }
       } else {
-        await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
+        const linkedTicket = await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
+        linkedTicketId = linkedTicket.id
+      }
+      // Aviso de asignación: solo cuando el responsable cambia de verdad (y no a "sin responsable");
+      // el link idempotente evita repetir el aviso si se reasigna a alguien ya avisado.
+      if (parsed.data.responsibleId !== undefined && parsed.data.responsibleId !== existing.responsibleId && parsed.data.responsibleId) {
+        await notifyTicketAssigned(tx, { id: linkedTicketId, title: updated.title }, parsed.data.responsibleId, request.user!.id)
       }
       if (justCompleted) {
         await notifyMitigationPlanCompleted(tx, updated.actionPlanId)
@@ -5255,13 +5631,26 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Action item not found' })
       return
     }
-    await db.$transaction(async (tx) => {
+    // Orden de limpieza: primero se confirma en base de datos (borrar el ticket borra en cascada
+    // sus filas de evidencia) y solo después se toca el disco. Un archivo que no se pueda borrar
+    // queda huérfano y se registra, nunca al revés: no se borra nada del disco sin haber borrado
+    // la fila que lo referenciaba.
+    const evidenceStoredNames = await db.$transaction(async (tx) => {
       const linked = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, select: { id: true } })
+      const evidenceFiles = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { storedName: true } }) : []
+      const storedNames = evidenceFiles.map((evidenceFile) => evidenceFile.storedName)
       if (linked) {
         await tx.ticket.delete({ where: { id: linked.id } })
       }
       await tx.actionItem.delete({ where: { id: existing.id } })
+      return storedNames
     })
+    if (evidenceStoredNames.length > 0) {
+      const { failed } = await removeEvidenceFiles(evidenceStoredNames)
+      if (failed.length > 0) {
+        console.error('[evidence] no se pudieron borrar archivos tras eliminar la actividad', { actionItemId: existing.id, failed })
+      }
+    }
     response.status(204).send()
   }))
 
@@ -5301,7 +5690,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const ticket = await db.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: ticketInclude })
+    const ticket = await db.$transaction(async (tx) => {
+      const created = await tx.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: ticketInclude })
+      // Aviso de asignación: un ticket manual con responsable avisa a ese responsable con el mismo
+      // link idempotente (tickets/<id>) que usan las reasignaciones. El aviso vive en la misma
+      // transacción que la creación, para que nunca quede un aviso de un ticket que no se creó.
+      await notifyTicketAssigned(tx, created, created.assignedToId, request.user!.id)
+      return created
+    })
     response.status(201).json({ ticket: ticketView(ticket) })
   }))
 
@@ -5312,6 +5708,125 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       return
     }
     response.json({ ticket: ticketView(ticket) })
+  }))
+
+  // ---- Evidencia PDF de los tickets ----
+  // Los archivos viven en el directorio privado EVIDENCE_UPLOAD_DIR con nombre generado por el
+  // servidor; aquí solo se guardan/sirven metadatos y referencias. Todas las operaciones pasan
+  // antes por la misma comprobación de acceso al ticket (canAccessTicket), así un usuario que no
+  // puede abrir el ticket tampoco ve, descarga ni borra su evidencia. La lista por plan respeta la
+  // misma visibilidad, de modo que cada fila mostrada es una fila que efectivamente se puede abrir.
+  const findAccessibleTicket = async (request: Request, ticketId: string) => {
+    const ticket = await db.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
+    return ticket && canAccessTicket(request, ticket) ? ticket : null
+  }
+
+  app.post('/api/tickets/:id/evidence', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    // El cuerpo se lee a mano: express.json solo procesa application/json y aquí llega binario.
+    const contentTypeHeader = String(request.headers['content-type'] ?? '')
+    if (!/^multipart\/form-data\b/i.test(contentTypeHeader.trim())) {
+      throw new MultipartError(415, 'La evidencia debe subirse como multipart/form-data con el campo "file"')
+    }
+    const raw = await readRequestBuffer(request, MAX_UPLOAD_REQUEST_BYTES)
+    const file = findMultipartFile(parseMultipartFormData(raw, contentTypeHeader), 'file')
+    if (!file) {
+      throw new MultipartError(400, 'Falta el archivo PDF en el campo "file"')
+    }
+    // Toda la validación (extensión, MIME declarado, firma %PDF y tamaño) ocurre ANTES de tocar
+    // disco: si algo falla, no queda ni fila ni archivo.
+    const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
+    const storedName = nextStoredName()
+    await writeEvidenceFile(storedName, file.data)
+    let created: Prisma.TicketEvidenceFileGetPayload<{ include: typeof evidenceInclude }>
+    try {
+      created = await db.ticketEvidenceFile.create({
+        data: {
+          ticketId: ticket.id,
+          filename: upload.filename,
+          storedName,
+          mimeType: upload.mimeType,
+          size: upload.size,
+          uploadedById: request.user!.id,
+        },
+        include: evidenceInclude,
+      })
+    } catch (error) {
+      // Se escribió el archivo y falló la fila: se retira el bytes para no dejar basura en disco.
+      const { failed } = await removeEvidenceFiles([storedName])
+      if (failed.length > 0) {
+        console.error('[evidence] no se pudo retirar el archivo tras fallar la escritura de la fila', { ticketId: ticket.id, storedName, failed })
+      }
+      throw error
+    }
+    response.status(201).json({ evidence: evidenceView(created) })
+  }))
+
+  app.get('/api/tickets/:id/evidence', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const evidence = await db.ticketEvidenceFile.findMany({ where: { ticketId: ticket.id }, include: evidenceInclude, orderBy: { createdAt: 'desc' } })
+    response.json({ evidence: evidence.map(evidenceView) })
+  }))
+
+  app.get('/api/tickets/:id/evidence/:evidenceId', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, include: evidenceInclude })
+    if (!record) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    let data: Buffer
+    try {
+      data = await readEvidenceFile(record.storedName)
+    } catch (error) {
+      // Fila sin archivo detrás (limpieza incompleta): se informa como no disponible, no como 500.
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        response.status(404).json({ error: 'El archivo de evidencia ya no está disponible' })
+        return
+      }
+      throw error
+    }
+    response.setHeader('Content-Type', record.mimeType)
+    response.setHeader('Content-Length', String(data.length))
+    // El nombre ya vino saneado de la subida; se vuelve a sanear por si la fila viniera de otra
+    // vía, para que no haya comillas ni saltos de línea en la cabecera.
+    response.setHeader('Content-Disposition', `attachment; filename="${sanitizeUploadFilename(record.filename)}"`)
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('Cache-Control', 'private, no-store')
+    response.send(data)
+  }))
+
+  app.delete('/api/tickets/:id/evidence/:evidenceId', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, storedName: true } })
+    if (!record) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    // Base de datos primero y disco después: si el unlink falla queda un archivo huérfano (que se
+    // registra), nunca una fila que promete un archivo ya borrado.
+    await db.ticketEvidenceFile.delete({ where: { id: record.id } })
+    const { failed } = await removeEvidenceFiles([record.storedName])
+    if (failed.length > 0) {
+      console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: record.storedName, failed })
+    }
+    response.status(204).send()
   }))
 
   app.patch('/api/tickets/:id', authMiddleware, asyncHandler(async (request, response) => {
@@ -5342,6 +5857,19 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     const newStatus = parsed.data.status
     const ticket = await db.$transaction(async (tx) => {
+      // Gate de evidencia: cerrar (RESOLVED/CLOSED) la actividad de un plan de mitigación de un
+      // riesgo exige al menos un PDF en el ticket. Los estados se traducen con el mismo mapa que
+      // sincroniza la actividad: si la transición deja la actividad COMPLETED y no lo estaba, el
+      // gate corre; un ticket ya cerrado que se reescribe no vuelve a exigir evidencia. Al lanzar
+      // dentro de la transacción, el 409 invierte también cualquier escritura previa de aquí.
+      if (newStatus !== undefined) {
+        await assertMitigationEvidence(tx, {
+          ticketId: existing.id,
+          actionItemId: existing.actionItemId,
+          willCompleteActivity: ticketStatusToActionItemStatus[newStatus] === ActionItemStatus.COMPLETED,
+          wasActivityCompleted: ticketStatusToActionItemStatus[existing.status] === ActionItemStatus.COMPLETED,
+        })
+      }
       const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
       if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
         // La tarea es la fuente de verdad del progreso del plan; el estado antes de escribirlo
@@ -5371,6 +5899,11 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
           },
         })
       }
+      // Aviso de asignación: solo cuando el responsable cambia de verdad (asignar al que ya
+      // estaba, o dejarlo sin responsable, no genera aviso).
+      if (parsed.data.assignedToId !== undefined && parsed.data.assignedToId !== existing.assignedToId && parsed.data.assignedToId) {
+        await notifyTicketAssigned(tx, updated, parsed.data.assignedToId, request.user!.id)
+      }
       return updated
     })
     response.json({ ticket: ticketView(ticket) })
@@ -5389,7 +5922,18 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(403).json({ error: 'Only the creator or a superuser can delete a ticket' })
       return
     }
+    // Orden de limpieza: se leen los nombres en disco, se borra la fila del ticket (y en cascada
+    // sus evidencias) y SOLO entonces se borran los archivos. Un archivo que no salga se registra
+    // como huérfano; nunca se borra primero el disco, porque si la escritura fallara quedarían filas
+    // de evidencia apuntando a un archivo ya borrado.
+    const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true } })
     await db.ticket.delete({ where: { id: existing.id } })
+    if (evidenceFiles.length > 0) {
+      const { failed } = await removeEvidenceFiles(evidenceFiles.map((evidenceFile) => evidenceFile.storedName))
+      if (failed.length > 0) {
+        console.error('[evidence] no se pudieron borrar archivos tras eliminar el ticket', { ticketId: existing.id, failed })
+      }
+    }
     response.status(204).send()
   }))
 
@@ -5401,6 +5945,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
   app.use((_request, response) => response.status(404).json({ error: 'Not found' }))
   app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
     void next
+    // Subida de evidencia: formato/tamaño/tipo del archivo, ya con su estado (400/413/415).
+    if (error instanceof MultipartError || error instanceof EvidenceValidationError) {
+      response.status(error.status).json({ error: error.message })
+      return
+    }
+    // Gate de evidencia: la actividad de mitigación intenta cerrarse sin PDF adjunto.
+    if (error instanceof MitigationEvidenceRequiredError) {
+      response.status(409).json({ error: error.message, reason: error.reason })
+      return
+    }
     if (error instanceof SyntaxError) {
       response.status(400).json({ error: 'Invalid JSON body' })
       return

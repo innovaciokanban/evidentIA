@@ -8,6 +8,7 @@
 export type NotificationTarget =
   | { kind: 'approval'; approvalId: string }
   | { kind: 'risk'; processId: string; riskId: string; section: 'residual' | null }
+  | { kind: 'ticket'; ticketId: string }
 
 export const parseNotificationLink = (link: string): NotificationTarget | null => {
   const [section, firstId, secondId, subsection] = link.split('/').map((segment) => segment.trim()).filter((segment) => segment.length > 0)
@@ -15,5 +16,7 @@ export const parseNotificationLink = (link: string): NotificationTarget | null =
   if (section === 'risks' && firstId && secondId) {
     return { kind: 'risk', processId: firstId, riskId: secondId, section: subsection === 'residual' ? 'residual' : null }
   }
+  // Asignación de una actividad de mitigación: "tickets/<id>" abre ese ticket en su vista.
+  if (section === 'tickets' && firstId) return { kind: 'ticket', ticketId: firstId }
   return null
 }

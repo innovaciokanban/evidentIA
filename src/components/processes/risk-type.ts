@@ -21,10 +21,10 @@ export type RiskDraft = {
   name: string
   description: string
   riskOwnerId: string
+  /** Solo lectura: se pinta desde lo persistido (o «Pendiente» si es nuevo) y no viaja al backend. */
   acceptanceStatus: ProcessRisk['acceptanceStatus']
   treatment: string
   mitigationOwnerId: string
-  mitigationStartDate: string
   mitigationDueDate: string
   inherentImpact: string
   inherentProbability: string
@@ -33,7 +33,7 @@ export type RiskDraft = {
 }
 
 export const emptyRiskDraft: RiskDraft = {
-  name: '', description: '', riskOwnerId: '', acceptanceStatus: 'PENDING', treatment: '', mitigationOwnerId: '', mitigationStartDate: '', mitigationDueDate: '', inherentImpact: '3', inherentProbability: '3', residualImpact: '1', residualProbability: '1',
+  name: '', description: '', riskOwnerId: '', acceptanceStatus: 'PENDING', treatment: '', mitigationOwnerId: '', mitigationDueDate: '', inherentImpact: '3', inherentProbability: '3', residualImpact: '1', residualProbability: '1',
 }
 
 export const draftFromRisk = (risk: ProcessRisk): RiskDraft => ({
@@ -43,7 +43,6 @@ export const draftFromRisk = (risk: ProcessRisk): RiskDraft => ({
   acceptanceStatus: risk.acceptanceStatus,
   treatment: risk.treatment ?? '',
   mitigationOwnerId: risk.mitigationOwner?.id ?? '',
-  mitigationStartDate: risk.mitigationStartDate ? risk.mitigationStartDate.slice(0, 10) : '',
   mitigationDueDate: risk.mitigationDueDate ? risk.mitigationDueDate.slice(0, 10) : '',
   inherentImpact: String(risk.inherentImpact),
   inherentProbability: String(risk.inherentProbability),
@@ -52,18 +51,18 @@ export const draftFromRisk = (risk: ProcessRisk): RiskDraft => ({
 })
 
 /**
- * Cuerpo enviado al guardar. Nunca incluye riskType: la categoría la resuelve el backend a partir
- * del proceso, de modo que un formulario manipulado no puede registrar un tipo incompatible.
+ * Cuerpo enviado al guardar. Nunca incluye riskType (la categoría la resuelve el backend a partir
+ * del proceso) ni acceptanceStatus: el veredicto formal solo lo escribe el ciclo de aprobación y
+ * el servidor lo inicializa en PENDING por su cuenta, de modo que un formulario manipulado no
+ * puede decidir la aceptación.
  */
 export function riskPayloadFromDraft(draft: RiskDraft): Record<string, unknown> {
   return {
     name: draft.name,
     description: draft.description,
     riskOwnerId: draft.riskOwnerId || null,
-    acceptanceStatus: draft.acceptanceStatus,
     treatment: draft.treatment || null,
     mitigationOwnerId: draft.mitigationOwnerId || null,
-    mitigationStartDate: draft.mitigationStartDate || null,
     mitigationDueDate: draft.mitigationDueDate || null,
     inherentImpact: Number(draft.inherentImpact),
     inherentProbability: Number(draft.inherentProbability),

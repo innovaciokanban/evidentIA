@@ -485,8 +485,13 @@ describe('risk audit history', () => {
   it('registra controles y evidencias con sus diferencias campo a campo', async () => {
     const { db, state } = makeAuditDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    // El alta no puede decidir la aceptación: el ciclo lo resuelve el dueño (APPROVE → ACCEPTED),
+    // que es lo que habilita la escritura de controles del paso 3.
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, treatment: 'MITIGATE', riskOwnerId: owner.id })
     const riskId = created.body.risk.id
+    const ownerAgent = await loggedIn(db, owner.email)
+    const decision = await ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'APPROVE', comment: 'Aprobado con revisión documental.' })
+    expect(decision.status).toBe(200)
 
     const control = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Revisión del plazo de entrega', evaluation: 'PARTIAL' })
     expect(control.status).toBe(201)
@@ -503,8 +508,11 @@ describe('risk audit history', () => {
     expect(renamed.status).toBe(200)
 
     const history = await agent.get(historyPath(riskId))
+    // De más reciente a más antiguo: alta (+ envío a aprobación), decisión con su ticket, controles
+    // y evidencias. El orden por fecha sale del reloj determinista del arnés.
     expect(history.body.events.map((event: { eventType: string }) => event.eventType)).toEqual([
-      'EVIDENCE_UPDATED', 'EVIDENCE_CREATED', 'CONTROL_DELETED', 'CONTROL_UPDATED', 'CONTROL_CREATED', 'RISK_CREATED',
+      'EVIDENCE_UPDATED', 'EVIDENCE_CREATED', 'CONTROL_DELETED', 'CONTROL_UPDATED', 'CONTROL_CREATED',
+      'TICKET_CREATED', 'APPROVAL_DECIDED', 'APPROVAL_REQUESTED', 'RISK_CREATED',
     ])
     const byType = (type: string) => eventsOfType(history.body, type)[0]
     expect(byType('CONTROL_CREATED').summary).toBe('Control agregado')
@@ -579,7 +587,8 @@ describe('risk audit history', () => {
     })
     expect(eventsOfType(history.body, 'TICKET_CREATED')).toHaveLength(0)
     expect(state.storedTickets).toHaveLength(0)
-    expect(state.storedRisks[0].acceptanceStatus).toBe('PENDING')
+    // El rechazo escribe el veredicto formal en la misma transacción que el ciclo y su evento.
+    expect(state.storedRisks[0].acceptanceStatus).toBe('REJECTED')
   })
 
   it('marca OUTDATED con su evento al cambiar campos relevantes, no en los cosméticos', async () => {
@@ -655,21 +664,30 @@ describe('risk audit history', () => {
   it('ordena el historial de más reciente a más antiguo, pagina y filtra por tipo', async () => {
     const { db } = makeAuditDb()
     const agent = await loggedIn(db, admin.email)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send(riskPayload)
+    // El control exige la aceptación decidida: se aprueba por el ciclo antes de escribir nada más.
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, treatment: 'MITIGATE', riskOwnerId: owner.id })
     const riskId = created.body.risk.id
+    const ownerAgent = await loggedIn(db, owner.email)
+    const decision = await ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'APPROVE' })
+    expect(decision.status).toBe(200)
     await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control de trazabilidad' })
-    await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ name: 'Entrega tardía de información (revisado)' })
+    // Cambio cosmético (no marca OUTDATED): el historial solo gana el evento de la edición.
+    await agent.patch(`/api/processes/${processId}/risks/${riskId}`).send({ treatment: 'TRANSFER' })
 
     const firstPage = await agent.get(`${historyPath(riskId)}?page=1&pageSize=2`)
     expect(firstPage.status).toBe(200)
-    expect(firstPage.body.total).toBe(3)
+    expect(firstPage.body.total).toBe(6)
     expect(firstPage.body.page).toBe(1)
     expect(firstPage.body.pageSize).toBe(2)
     expect(firstPage.body.events.map((event: { eventType: string }) => event.eventType)).toEqual(['RISK_UPDATED', 'CONTROL_CREATED'])
 
     const secondPage = await agent.get(`${historyPath(riskId)}?page=2&pageSize=2`)
-    expect(secondPage.body.events.map((event: { eventType: string }) => event.eventType)).toEqual(['RISK_CREATED'])
-    expect(secondPage.body.total).toBe(3)
+    expect(secondPage.body.events.map((event: { eventType: string }) => event.eventType)).toEqual(['TICKET_CREATED', 'APPROVAL_DECIDED'])
+    expect(secondPage.body.total).toBe(6)
+
+    const thirdPage = await agent.get(`${historyPath(riskId)}?page=3&pageSize=2`)
+    expect(thirdPage.body.events.map((event: { eventType: string }) => event.eventType)).toEqual(['APPROVAL_REQUESTED', 'RISK_CREATED'])
+    expect(thirdPage.body.total).toBe(6)
 
     const filtered = await agent.get(`${historyPath(riskId)}?eventType=CONTROL_CREATED`)
     expect(filtered.body.total).toBe(1)
@@ -754,25 +772,23 @@ describe('risk audit history', () => {
     expect(state.storedAuditEvents).toHaveLength(0)
 
     setAuditFailure(false)
-    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    // El alta no decide la aceptación: el riesgo nace PENDING con su ciclo de aprobación abierto.
+    const created = await agent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id, treatment: 'MITIGATE' })
     expect(created.status).toBe(201)
+    expect(created.body.risk.acceptanceStatus).toBe('PENDING')
     const riskId = created.body.risk.id as string
     const approvalId = created.body.risk.approval.id as string
     const eventsAfterCreate = state.storedAuditEvents.length
 
-    // Control: el evento es posterior al alta del control; si falla, la transacción revierte todo.
+    // Decisión: si el evento no entra, la decisión tampoco (ciclo sigue PENDING, sin ticket y
+    // el veredicto del riesgo sin escribir).
     setAuditFailure(true)
-    const failedControl = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control que no debe persistir' })
-    expect(failedControl.status).toBe(500)
-    expect(state.storedRisks[0].controls).toHaveLength(0)
-    expect(state.storedAuditEvents).toHaveLength(eventsAfterCreate)
-
-    // Decisión: si el evento no entra, la decisión tampoco (ciclo sigue PENDING, sin ticket).
     const ownerAgent = await loggedIn(db, owner.email)
     const failedDecision = await ownerAgent.post(`/api/approvals/${approvalId}/decision`).send({ decision: 'APPROVE' })
     expect(failedDecision.status).toBe(500)
     expect(failedDecision.body.error).toBe('The approval decision could not be saved; it can be retried')
     expect(state.storedRisks[0].approvals[0].status).toBe('PENDING')
+    expect(state.storedRisks[0].acceptanceStatus).toBe('PENDING')
     expect(state.storedTickets).toHaveLength(0)
     expect(state.storedAuditEvents).toHaveLength(eventsAfterCreate)
 
@@ -781,12 +797,23 @@ describe('risk audit history', () => {
     const retried = await ownerAgent.post(`/api/approvals/${approvalId}/decision`).send({ decision: 'APPROVE' })
     expect(retried.status).toBe(200)
     expect(state.storedRisks[0].approvals[0].status).toBe('APPROVED')
+    expect(state.storedRisks[0].acceptanceStatus).toBe('ACCEPTED')
     expect(state.storedTickets).toHaveLength(1)
     const history = await agent.get(historyPath(riskId))
     expect(eventsOfType(history.body, 'APPROVAL_DECIDED')).toHaveLength(1)
     expect(eventsOfType(history.body, 'TICKET_CREATED')).toHaveLength(1)
+    const eventsAfterDecision = state.storedAuditEvents.length
 
-    // El control sigue sin existir: la escritura fallida no dejó residuos.
+    // Control: solo con la aceptación decidida se habilita el paso 3; si la escritura del
+    // historial falla, el control y su evento revierten juntos.
+    setAuditFailure(true)
+    const failedControl = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control que no debe persistir' })
+    expect(failedControl.status).toBe(500)
+    expect(state.storedRisks[0].controls).toHaveLength(0)
+    expect(state.storedAuditEvents).toHaveLength(eventsAfterDecision)
+
+    // Con la auditoría restaurada, el control definitivo entra junto con su evento.
+    setAuditFailure(false)
     const controlAfter = await agent.post(`/api/processes/${processId}/risks/${riskId}/controls`).send({ description: 'Control definitivo' })
     expect(controlAfter.status).toBe(201)
     expect(eventsOfType((await agent.get(historyPath(riskId))).body, 'CONTROL_CREATED')).toHaveLength(1)

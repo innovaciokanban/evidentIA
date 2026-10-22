@@ -265,6 +265,37 @@ export type Ticket = {
   riskApprovals?: Array<{ id: string; riskId: string; risk: { id: string; code: string | null; name: string; processId: string } }>
 }
 
+/**
+ * PDF de evidencia adjunto al ticket de una actividad de mitigación. El archivo vive en el
+ * directorio privado del servidor: aquí solo hay metadatos y la descarga pasa por el endpoint
+ * autenticado (`storedName` nunca sale de la API).
+ */
+export type TicketEvidence = {
+  id: string
+  ticketId: string
+  filename: string
+  mimeType: string
+  size: number
+  createdAt: string
+  uploadedBy: Pick<User, 'id' | 'name'>
+  ticket: Pick<Ticket, 'id' | 'title'> | null
+}
+
+/**
+ * Actividad del plan de mitigación de un riesgo: un ítem de un plan de acción vinculado al riesgo
+ * (ActionPlan.riskId), con su ticket asociado para abrir el detalle desde el panel de riesgos.
+ */
+export type MitigationActivity = {
+  id: string
+  title: string
+  description: string
+  status: ActionItemStatus
+  dueDate: string | null
+  responsible: Pick<User, 'id' | 'name'> | null
+  ticket: { id: string; status: TicketStatus } | null
+  createdAt: string
+}
+
 export type ProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
 /** Estado que guarda el backend. El mapa pinta su equivalente visual con ProcessStatus de la tarjeta. */
 export type ProcessState = 'ACTIVE' | 'INACTIVE'
@@ -603,7 +634,6 @@ export type ProcessRisk = {
   acceptanceStatus: RiskAcceptanceStatus
   treatment: RiskTreatment | null
   mitigationOwner: Pick<User, 'id' | 'name'> | null
-  mitigationStartDate: string | null
   mitigationDueDate: string | null
   inherentImpact: number
   inherentProbability: number

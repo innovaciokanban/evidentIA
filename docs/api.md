@@ -86,7 +86,49 @@ Actualiza campos permitidos (título, descripción, estado, prioridad, asignaci�
 
 ### `DELETE /api/tickets/:id`
 
-Elimina el ticket. Solo el creador o un `SUPERUSER`. `204`.
+Elimina el ticket. Solo el creador o un `SUPERUSER`. `204` (las evidencias PDF se eliminan en cascada).
+
+## Evidencias de mitigación (PDF)
+
+Archivos PDF que respaldan el cierre de las actividades de mitigación. Se guardan con nombre aleatorio (`uuid.pdf`) dentro de `EVIDENCE_UPLOAD_DIR` (default `var/evidence`); la API nunca expone el nombre en disco, solo el nombre original del archivo. Toda la validación (extensión, MIME declarado, firma `%PDF-`, tamaño) ocurre antes de tocar disco. Límites: 10 MB por archivo y 11 MB por petición.
+
+### `POST /api/tickets/:id/evidence`
+
+Sube un PDF. Cuerpo `multipart/form-data` con el campo `file`. Requiere sesión y acceso al ticket, así que también puede subirlo el dueño del riesgo aunque no sea dueño ni creador del ticket.
+
+- `201` `{ "evidence": ... }` con `uploadedBy` y `ticket`.
+- `400` sin campo `file`, archivo vacío o multipart mal formado; `413` si supera 10 MB (o la petición 11 MB); `415` si no es `application/pdf` válido; `404` si el ticket no es visible.
+
+### `GET /api/tickets/:id/evidence`
+
+Lista la evidencia del ticket, de más reciente a más antigua: `{ "evidence": [...] }`.
+
+### `GET /api/tickets/:id/evidence/:evidenceId`
+
+Descarga el PDF (`Content-Type: application/pdf`, `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`). `404` si la fila o el archivo ya no existen.
+
+### `DELETE /api/tickets/:id/evidence/:evidenceId`
+
+Elimina la evidencia para cualquier usuario con acceso al ticket. `204`. La fila se borra primero y después el archivo del disco (un unlink fallido queda registrado, nunca con la fila viva).
+
+### `GET /api/processes/:processId/risks/:riskId/plan-evidence`
+
+Evidencia visible de un riesgo: los PDF de los tickets de las actividades de los planes de acción vinculados a ese riesgo, con el alcance del usuario sobre los tickets. `{ "evidence": [...] }`.
+
+**Gate de cierre (`409`):** `PATCH /api/tickets/:id` y `PATCH /api/action-items/:id` responden `409` con `{ "error": "...PDF...", "reason": "MITIGATION_EVIDENCE_REQUIRED" }` cuando la transición marca la actividad como completada y su plan está ligado a un riesgo, pero el ticket aún no tiene ningún PDF. Las actividades canceladas no exigen evidencia, y el ticket se cierra normalmente si el plan no está ligado a un riesgo.
+
+### `GET /api/processes/:processId/risks/:riskId/plan-activities`
+
+Actividades de mitigación de un riesgo: los ítems de todos los planes de acción vinculados a ese riesgo, con responsable, vencimiento y ticket. `{ "activities": [...] }`. Requiere sesión con acceso al proceso y a ese riesgo exacto.
+
+### `POST /api/processes/:processId/risks/:riskId/plan-activities`
+
+Agrega una actividad al plan de mitigación del riesgo (SUPERUSER o COMPANY_ADMIN), sin vincular planes a mano. Cuerpo: `{ "title", "description?", "responsibleId", "dueDate" }` (la descripción, si falta, se rellena con el título).
+
+- El plan «primario» del riesgo es el más antiguo con `riskId` = riesgo; si el riesgo todavía no tiene plan, se crea uno nuevo «Plan de mitigación <código>» bajo el diagnóstico más reciente de la empresa (`400` si la empresa no tiene diagnóstico). Los planes existentes no se renombran ni se duplican.
+- La actividad nace `PENDING`/`MEDIUM` con su ticket y el aviso de asignación al responsable en la misma transacción (si el aviso falla, no queda ni actividad ni ticket).
+- `400` con datos inválidos o responsable inexistente; `403` si el responsable pertenece a otra empresa; `404` si el proceso o el riesgo no son accesibles; `201` `{ "activity": ... }`.
+- `409` si el riesgo no supera la compuerta por etapas (evaluación inherente completa, tratamiento definido y aceptado por el dueño del riesgo); el mensaje indica la etapa que falta. El bloqueo escribe: los controles, planes y actividades ya guardados siguen siendo consultables con `GET`.
 
 ## Companies
 
@@ -215,11 +257,14 @@ Agrega un ítem al plan.
 Cuerpo: `{ "title", "description", "priority", "status?", "recommendationId?", "responsibleId?", "dueDate?" }`.
 
 - `400` si la recomendación no pertenece al diagnóstico del plan o si el responsable no existe.
+- `409` si el plan pertenece a un riesgo que no supera la compuerta por etapas (mismo mensaje que el resto de la gestión de controles y mitigación).
 - `201` `{ "item": ... }`.
 
 ### `PATCH /api/action-items/:id`
 
 Actualiza un ítem (mismas validaciones de recomendación/responsable).
+
+- `409` si cambia el contenido (título, descripción, prioridad, responsable, vencimiento o recomendación) de una acción ligada a un riesgo bloqueado por etapas. Cambiar el estado (completada/cancelada) y eliminar el ítem siguen permitidos: son cerrar trabajo ya asignado y mantienen el gate de evidencia PDF.
 
 ### `DELETE /api/action-items/:id`
 
@@ -254,6 +299,6 @@ Métricas de gestión de calidad filtradas por rol y consultor.
 | `401` | Sesión ausente, inválida o expirada |
 | `403` | Rol sin permiso o asignación no permitida |
 | `404` | Recurso inexistente o no accesible para el usuario |
-| `409` | Conflicto de unicidad (P2002) o estado inválido |
+| `409` | Conflicto de unicidad (P2002), estado inválido, bloqueo por etapas del riesgo (evaluación/tratamiento/aceptación) o cierre de actividad sin evidencia PDF (`MITIGATION_EVIDENCE_REQUIRED`) |
 | `429` | Rate limit excedido |
 | `500` | Error interno (se registra el mensaje, no los detalles) |
