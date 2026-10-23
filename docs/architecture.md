@@ -23,7 +23,7 @@ Descripción técnica de la arquitectura de **Kanban Consultoria**: un monorepo 
 - **SPA** construida con **Vite + React 19 + TypeScript** en `src/`.
 - Cliente HTTP propio en `src/api.ts` (`fetch` con `credentials: 'include'` y manejo de errores `ApiError`).
 - En desarrollo, Vite proxya `/api` a `http://localhost:4000` (`vite.config.ts`). En producción, frontend y API se sirven bajo la misma URL pública (CORS restringido a `FRONTEND_URL`).
-- Vistas: Login, Resumen (dashboard), Tickets y Empresas. La vista Empresas incluye el detalle de la empresa, los diagnósticos, la matriz DOFA, el análisis IA, las recomendaciones y los planes de acción.
+- Vistas: Login, Resumen (dashboard), Tickets, Empresas, Gestión por Procesos y Aseguramiento de Calidad. La vista Empresas incluye el detalle de la empresa, los diagnósticos, la matriz DOFA, el análisis IA, las recomendaciones y los planes de acción. La vista Aseguramiento de Calidad gestiona auditorías con listas de verificación, hallazgos, acciones correctivas y evidencias PDF.
 - Búsqueda con debounce (350 ms) en tickets y empresas.
 
 ## Backend
@@ -80,6 +80,7 @@ Modelos principales:
 | Análisis IA | `server/ai-service.ts` | Generación y persistencia del análisis |
 | Recomendaciones | rutas de recommendations | Importación desde IA y estado |
 | Planes de acción | rutas de action-plans/items | Planes e ítems vinculados |
+| Aseguramiento de Calidad | rutas `/api/audits*` en `app.ts`, `src/components/quality/` | Auditorías de calidad con checklists, hallazgos, acciones correctivas y evidencias PDF |
 | Dashboard | `server/dashboard-service.ts` | Métricas y listas con alcance por rol |
 
 ## Flujo de datos

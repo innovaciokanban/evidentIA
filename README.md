@@ -78,6 +78,7 @@ Detalles en [docs/architecture.md](docs/architecture.md).
 | Análisis IA | `server/ai-service.ts`, `/api/diagnostics/:id/ai-analysis` | Botón "Analizar con IA" y panel |
 | Recomendaciones | `/api/diagnostics/:id/recommendations`, `/api/recommendations/*` | Panel de recomendaciones e importación |
 | Planes de acción | `/api/diagnostics/:id/action-plans`, `/api/action-plans/*` | Panel de planes e ítems |
+| Aseguramiento de Calidad | rutas `/api/audits*` (checklists, hallazgos, acciones, evidencias PDF) | Vista Aseguramiento de Calidad (lista, detalle, historial) |
 | Dashboard | `server/dashboard-service.ts`, `/api/dashboard` | Resumen con métricas y listas |
 
 ## IA y análisis DOFA

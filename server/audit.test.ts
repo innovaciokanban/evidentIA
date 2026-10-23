@@ -14,6 +14,7 @@ const process = { id: processId, companyId, name: 'Gestión Comercial', code: 'P
 
 const payload = {
   title: 'Auditoría interna de cumplimiento',
+  auditType: 'Interna' as const,
   scope: 'Procesos comerciales de la empresa.',
   criteria: 'Manual de calidad v2 y normativa aplicable.',
   leadAuditorId: admin.id,
@@ -159,6 +160,12 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
           resolution: null,
           verifiedById: null,
           verifiedAt: null,
+          itemId: null,
+          processId: null,
+          procedureId: null,
+          efficacyVerification: null,
+          efficacyVerifiedById: null,
+          efficacyVerifiedAt: null,
           createdAt: new Date(),
           updatedAt: new Date(),
           ...data,
@@ -239,6 +246,43 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         }
         return { count: before - storedEvents.length }
       }),
+    },
+    // Modelos del módulo de aseguramiento: los gates de cierre consultan contadores; el arnés
+    // devuelve vacío para que las auditorías de este archivo se cierren sin ítems pendientes.
+    auditChecklistItem: {
+      count: vi.fn(async () => 0),
+      findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async () => []),
+    },
+    auditCorrectiveAction: {
+      count: vi.fn(async () => 0),
+      findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async () => []),
+    },
+    auditEvidenceFile: {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+      updateMany: vi.fn(async () => ({ count: 0 })),
+    },
+    auditProcess: {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+      createMany: vi.fn(async () => ({ count: 0 })),
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    auditProcedure: {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+      createMany: vi.fn(async () => ({ count: 0 })),
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    auditChecklist: {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+    },
+    auditActionProgress: {
+      findMany: vi.fn(async () => []),
     },
   }
   db.$queryRaw = vi.fn(async () => [{ locked: true }])
@@ -405,6 +449,15 @@ describe('process audit API', () => {
     const resolved = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
     expect(resolved.status).toBe(200)
     expect(resolved.body.finding).toMatchObject({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
+
+    // Una No conformidad exige verificar la eficacia antes de VERIFIED (regla del servidor).
+    const verifiedWithoutEfficacy = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'VERIFIED' })
+    expect(verifiedWithoutEfficacy.status).toBe(400)
+    expect(verifiedWithoutEfficacy.body.error).toContain('efficacy verification')
+
+    const withEfficacy = await agent.patch(`${findingPath}/${findingId}`).send({ efficacyVerification: 'Auditoría de seguimiento confirma la capacitación registrada.' })
+    expect(withEfficacy.status).toBe(200)
+    expect(withEfficacy.body.finding.efficacyVerification).toContain('capacitación')
 
     const verified = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'VERIFIED' })
     expect(verified.status).toBe(200)

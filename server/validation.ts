@@ -216,7 +216,7 @@ export const procedureHistoryQuerySchema = z.object({
   action: procedureHistoryActionSchema.optional(),
 })
 
-// ---- Módulo Auditorías de calidad (Trazabilidad y Control) ----
+// ---- Módulo Aseguramiento de Calidad (Auditorías de calidad) ----
 
 // Espejo de AuditStatus. PLANNED e IN_PROGRESS son los estados operativos; CLOSED y CANCELLED son
 // terminales y bloquean toda escritura posterior (la máquina de transiciones se valida en el servidor).
@@ -224,37 +224,64 @@ export const auditStatusSchema = z.enum(['PLANNED', 'IN_PROGRESS', 'CLOSED', 'CA
 export const auditFindingTypeSchema = z.enum(['NONCONFORMITY', 'OBSERVATION', 'OPPORTUNITY'])
 export const auditFindingSeveritySchema = z.enum(['CRITICAL', 'MAJOR', 'MINOR'])
 export const auditFindingStatusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'VERIFIED'])
+// Tipo de auditoría: catálogo cerrado de interfaz. El formulario lo muestra como select
+// obligatorio; en el modelo sigue siendo String para no romper auditorías legadas con otros textos
+// (al editarlas la API exige elegir uno de estos tres valores).
+export const auditKindSchema = z.enum(['Interna', 'Externa', 'Mixta'])
+export const auditChecklistResultSchema = z.enum(['PENDING', 'CONFORM', 'NON_CONFORM', 'NOT_APPLICABLE'])
+export const auditCorrectiveActionStatusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'])
+export const auditCorrectiveActionPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])
 
 const auditText = (max: number) => z.string().trim().min(1).max(max)
 // El responsable/auditor se valida contra la empresa en la API; la base existente también contiene
 // UUIDs (mismo criterio que kpiResponsibleId y procedureResponsibleId).
 const auditUserId = z.string().trim().min(1).max(64).nullable().optional()
+const auditIdList = z.array(idReference).max(50)
 
-export const auditCreateSchema = z.object({
+const auditFields = {
   title: auditText(160).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
-  auditType: z.string().trim().max(80).nullable().optional(),
+  auditType: auditKindSchema,
   scope: auditText(2000),
   objectives: z.string().trim().max(2000).nullable().optional(),
   criteria: auditText(2000),
   plannedDate: z.coerce.date().nullable().optional(),
   leadAuditorId: auditUserId,
   responsibleId: auditUserId,
+}
+
+export const auditCreateSchema = z.object({
+  ...auditFields,
+  // Procesos y procedimientos adicionales que quedan vinculados en la MISMA transacción del alta.
+  // El proceso principal viaja en la ruta (o en processId para la variante /api/audits) y no se
+  // duplica aquí; la API valida que todos pertenezcan a la empresa de la auditoría.
+  processIds: auditIdList.optional(),
+  procedureIds: auditIdList.optional(),
 })
 
-export const auditUpdateSchema = auditCreateSchema.partial().refine(
+export const auditUpdateSchema = z.object(auditFields).partial().refine(
   (value) => Object.keys(value).length > 0,
   'At least one audit field is required',
 )
 
+// Vínculos de una auditoría con procesos y procedimientos adicionales. La ruta sustituye el conjunto
+// completo (sin duplicados: la clave primaria compuesta lo impide y la API deduplica antes de tocar
+// la base). Los ids se validan contra la empresa de la auditoría antes de escribir.
+export const auditRelationsUpdateSchema = z.object({
+  processIds: auditIdList,
+  procedureIds: auditIdList,
+})
+
 export const auditQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   status: auditStatusSchema.optional(),
+  processId: z.string().trim().min(1).max(64).optional(),
 })
 
 /**
  * Transición de estado de la auditoría. La máquina de transiciones permitidas se valida en el
  * servidor; aquí solo se acota la forma. Cerrarse exige resumen (se valida en el handler con el
- * estado guardado, porque en PATCH no viene el estado actual).
+ * estado guardado, porque en PATCH no viene el estado actual) y que no queden ítems obligatorios
+ * de las listas de verificación en PENDING (también se valida en el servidor con el estado real).
  */
 export const auditStatusChangeSchema = z.object({
   status: auditStatusSchema,
@@ -268,16 +295,27 @@ export const auditFindingCreateSchema = z.object({
   severity: auditFindingSeveritySchema,
   dueDate: z.coerce.date().nullable().optional(),
   responsibleId: auditUserId,
+  // Vínculos opcionales: ítem de checklist, proceso (principal o relacionado de la auditoría) y
+  // procedimiento (de la empresa de la auditoría). La ruta valida cada pertenencia.
+  itemId: z.string().trim().min(1).max(64).nullable().optional(),
+  processId: z.string().trim().min(1).max(64).nullable().optional(),
+  procedureId: z.string().trim().min(1).max(64).nullable().optional(),
 })
 
-export const auditFindingUpdateSchema = auditFindingCreateSchema.partial().refine(
+export const auditFindingUpdateSchema = auditFindingCreateSchema.extend({
+  // Verificación de eficacia de la acción correctiva: exigida por el servidor al verificar un
+  // hallazgo de tipo No conformidad (cuando corresponde), nunca inventada en el cliente.
+  efficacyVerification: z.string().trim().max(5000).nullable().optional(),
+}).partial().refine(
   (value) => Object.keys(value).length > 0,
   'At least one finding field is required',
 )
 
 /**
- * Transición de estado de un hallazgo. RESOLVED exige resolución con contenido; VERIFIED la pone
- * en el servidor con el actor de sesión y la fecha actual (nunca llegan del cliente).
+ * Transición de estado de un hallazgo. RESOLVED exige resolución con contenido y que no queden
+ * acciones correctivas obligatorias sin estado final (ambas reglas se re-validan en el servidor
+ * dentro de la transacción); VERIFIED exige haber sido resuelto previamente y, para las No
+ * conformidades, tener registrada la verificación de eficacia.
  */
 export const auditFindingStatusChangeSchema = z.object({
   status: auditFindingStatusSchema,
@@ -305,12 +343,75 @@ export const auditEvidenceUpdateSchema = auditEvidenceCreateSchema.partial().ref
   'At least one evidence field is required',
 )
 
+// ---- Listas de verificación ----
+
+export const auditChecklistCreateSchema = z.object({
+  name: auditText(160),
+})
+
+export const auditChecklistUpdateSchema = auditChecklistCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one checklist field is required',
+)
+
+export const auditChecklistItemCreateSchema = z.object({
+  description: auditText(2000),
+  criteria: auditText(2000),
+  required: z.boolean().optional(),
+  // Posición de ordenación; si no viene, la ruta la coloca al final de la lista.
+  position: z.coerce.number().int().min(0).max(10000).optional(),
+})
+
+export const auditChecklistItemUpdateSchema = z.object({
+  description: auditText(2000).optional(),
+  criteria: auditText(2000).optional(),
+  result: auditChecklistResultSchema.optional(),
+  observations: z.string().trim().max(2000).nullable().optional(),
+  required: z.boolean().optional(),
+  position: z.coerce.number().int().min(0).max(10000).optional(),
+}).refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one checklist item field is required',
+)
+
+// ---- Acciones correctivas ----
+
+export const auditCorrectiveActionCreateSchema = z.object({
+  title: auditText(200).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
+  description: auditText(5000),
+  responsibleId: auditUserId,
+  priority: auditCorrectiveActionPrioritySchema.optional(),
+  required: z.boolean().optional(),
+  dueDate: z.coerce.date().nullable().optional(),
+})
+
+export const auditCorrectiveActionUpdateSchema = auditCorrectiveActionCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one corrective action field is required',
+)
+
+// Transición de estado de una acción correctiva. La máquina permitida (solo avances hacia estados
+// finales, con reapertura limitada) se valida en el servidor con el estado guardado.
+export const auditCorrectiveActionStatusChangeSchema = z.object({
+  status: auditCorrectiveActionStatusSchema,
+})
+
+export const auditActionProgressCreateSchema = z.object({
+  note: auditText(2000),
+  percent: z.coerce.number().int().min(0).max(100).nullable().optional(),
+})
+
 // Consulta paginada del historial de una auditoría, mismo formato que riskAuditQuerySchema. El
 // listado de tipos es cerrado: solo el backend los emite, el cliente solo puede filtrar.
 export const auditEventTypeSchema = z.enum([
   'AUDIT_CREATED', 'AUDIT_UPDATED', 'STATUS_CHANGED',
   'FINDING_CREATED', 'FINDING_UPDATED', 'FINDING_STATUS_CHANGED', 'FINDING_DELETED',
   'EVIDENCE_CREATED', 'EVIDENCE_UPDATED', 'EVIDENCE_DELETED',
+  'AUDIT_RELATIONS_UPDATED',
+  'CHECKLIST_CREATED', 'CHECKLIST_UPDATED', 'CHECKLIST_DELETED',
+  'CHECKLIST_ITEM_CREATED', 'CHECKLIST_ITEM_UPDATED', 'CHECKLIST_ITEM_DELETED',
+  'EVIDENCE_FILE_CREATED', 'EVIDENCE_FILE_DELETED',
+  'ACTION_CREATED', 'ACTION_UPDATED', 'ACTION_STATUS_CHANGED', 'ACTION_PROGRESS_ADDED',
 ])
 export const auditHistoryQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),

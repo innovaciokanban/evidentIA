@@ -86,7 +86,6 @@ describe('ProcessForm embebido', () => {
         onOpenRisks={vi.fn()}
         onOpenChangeHistory={vi.fn()}
         onOpenProcedures={vi.fn()}
-        onOpenAudits={vi.fn()}
       />,
     )
 
@@ -96,5 +95,6 @@ describe('ProcessForm embebido', () => {
     expect(markup).not.toContain('Guardar proceso')
     expect(markup).toContain('<fieldset disabled')
     expect(markup).toContain('Riesgos')
+    expect(markup).not.toContain('<strong>Auditoría</strong>')
   })
 })

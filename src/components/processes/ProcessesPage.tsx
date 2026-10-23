@@ -9,7 +9,6 @@ import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ProcessRiskPanel } from './ProcessRiskPanel'
 import { ProcessChangeHistory } from './ProcessChangeHistory'
 import { ProcessProcedurePanel } from './ProcessProcedurePanel'
-import { ProcessAuditPanel } from './ProcessAuditPanel'
 import { ArrowDownIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
 import type { Company, Process, ProcessType, User } from '../../types'
@@ -123,7 +122,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
   const [showRisks, setShowRisks] = useState(false)
   const [showChangeHistory, setShowChangeHistory] = useState(false)
   const [showProcedures, setShowProcedures] = useState(false)
-  const [showAudits, setShowAudits] = useState(false)
   const [editing, setEditing] = useState<Process | null>(null)
   const [readOnly, setReadOnly] = useState(false)
   const [draft, setDraft] = useState<ProcessDraft>(emptyProcessDraft)
@@ -200,7 +198,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
     setDraft({ ...emptyProcessDraft, type, companyId: draft.companyId || user.companyId || companies[0]?.id || '' })
     setShowForm(true)
     void ensureUsers()
@@ -216,7 +213,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
     void ensureUsers()
@@ -235,7 +231,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
     setDraft(draftFromProcess(process))
     setShowForm(true)
   }
@@ -249,7 +244,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
   }
 
   function openRisks(process: Process) {
@@ -261,7 +255,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(true)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
   }
 
   function openChangeHistory(process: Process) {
@@ -273,7 +266,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(true)
     setShowProcedures(false)
-    setShowAudits(false)
   }
 
   function openProcedures(process: Process) {
@@ -285,19 +277,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(true)
-    setShowAudits(false)
-  }
-
-  function openAudits(process: Process) {
-    setFormError('')
-    setNotice('')
-    setEditing(process)
-    setShowForm(false)
-    setShowKpis(false)
-    setShowRisks(false)
-    setShowChangeHistory(false)
-    setShowProcedures(false)
-    setShowAudits(true)
   }
 
   function returnToCharacterization() {
@@ -305,7 +284,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
     setShowForm(true)
   }
 
@@ -315,7 +293,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setShowRisks(false)
     setShowChangeHistory(false)
     setShowProcedures(false)
-    setShowAudits(false)
     setEditing(null)
     setReadOnly(false)
     setFormError('')
@@ -392,7 +369,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
 
   return (
     <div className="page processes-page">
-       {!showKpis && !showRisks && !showChangeHistory && !showProcedures && !showAudits && <div className="page-heading">
+       {!showKpis && !showRisks && !showChangeHistory && !showProcedures && <div className="page-heading">
          <div>
            <p className="eyebrow">GESTIÓN DE CALIDAD</p>
            <h1>Gestión por procesos</h1>
@@ -400,7 +377,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
          </div>
         </div>}
 
-        {!showForm && !showKpis && !showRisks && !showChangeHistory && !showProcedures && !showAudits && <ProcessMapFeedback notice={notice} error={formError} />}
+        {!showForm && !showKpis && !showRisks && !showChangeHistory && !showProcedures && <ProcessMapFeedback notice={notice} error={formError} />}
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
@@ -409,8 +386,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showProcedures && editing ? (
           <ProcessProcedurePanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
-        ) : showAudits && editing ? (
-          <ProcessAuditPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showForm ? (
           <ProcessForm
            draft={draft}
@@ -427,7 +402,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
             onOpenRisks={editing ? () => openRisks(editing) : undefined}
             onOpenChangeHistory={editing ? () => openChangeHistory(editing) : undefined}
             onOpenProcedures={editing ? () => openProcedures(editing) : undefined}
-            onOpenAudits={editing ? () => openAudits(editing) : undefined}
             processId={editing?.id}
          />
        ) : <>

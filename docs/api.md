@@ -291,6 +291,56 @@ Métricas de gestión de calidad filtradas por rol y consultor.
 }
 ```
 
+## Aseguramiento de Calidad (Auditorías)
+
+Módulo de auditorías de calidad sobre procesos. Rutas anidadas bajo `/api/processes/:processId/audits` y variantes top-level equivalentes bajo `/api/audits/:auditId` (el parámetro `processId` se resuelve en el servidor a partir de la auditoría).
+
+### Auditorías
+
+- `GET /api/audits` — lista auditorías de la empresa con indicadores (`findings`, `openFindings`, `checklistTotal`, `checklistRequiredPending`, `openRequiredActions`). Query: `status`, `search`, `processId`.
+- `POST /api/audits` — crea una auditoría (`processId`, `title`, `auditType` Interna/Externa/Mixta, `scope`, `criteria`, `objectives?`, `plannedDate?`, `leadAuditorId?`, `responsibleId?`, `processIds?`, `procedureIds?`). Código automático `AUD-NNN`.
+- `GET /api/audits/:auditId` — detalle completo (checklists con ítems, hallazgos con acciones y progreso, evidencias, relaciones, progreso de checklist).
+- `PATCH /api/audits/:auditId` — actualiza campos de la auditoría.
+- `PUT /api/audits/:auditId/relations` — sustituye los vínculos de procesos/procedimientos relacionados.
+- `POST /api/audits/:auditId/status` — máquina de estados (`PLANNED` → `IN_PROGRESS` → `CLOSED` / `CANCELLED`). Cerrar exige `summary` (≥3 chars) y que **ningún ítem obligatorio** siga en `PENDING` (`409 reason: CHECKLIST_PENDING`).
+- `GET /api/audits/:auditId/history` — historial paginado (`AuditEvent`).
+- `DELETE /api/audits/:auditId` — elimina la auditoría y sus archivos de evidencia en disco (`204`). Bloqueado si tiene hallazgos.
+
+### Hallazgos
+
+- `GET|POST /api/audits/:auditId/findings` — lista/crea hallazgos (`title`, `description`, `type` NONCONFORMITY/OBSERVATION/OPPORTUNITY, `severity` CRITICAL/MAJOR/MINOR, `dueDate?`, `responsibleId?`, `itemId?`, `processId?`, `procedureId?`).
+- `PATCH /api/audits/:auditId/findings/:findingId` — actualiza campos del hallazgo, incluyendo `efficacyVerification?` para la verificación de eficacia.
+- `DELETE /api/audits/:auditId/findings/:findingId` — elimina el hallazgo. Borrar un hallazgo con acciones correctivas responde `409`.
+- `POST /api/audits/:auditId/findings/:findingId/status` — máquina de estados (`OPEN` → `IN_PROGRESS` → `RESOLVED` → `VERIFIED`). `RESOLVED` exige `resolution` (≥3 chars) y que **ninguna acción obligatoria** siga abierta (`409 reason: ACTIONS_PENDING`). `VERIFIED` sobre una `NONCONFORMITY` exige `efficacyVerification` (≥3 chars) ya registrada en el hallazgo.
+
+### Listas de verificación (Checklists)
+
+- `GET|POST /api/audits/:auditId/checklists` — lista/crea listas (`name`).
+- `PATCH|DELETE /api/audits/:auditId/checklists/:checklistId` — edita/elimina (cascade de ítems).
+- `POST|PATCH|DELETE /api/audits/:auditId/checklists/:checklistId/items` — CRUD de ítems (`description`, `criteria`, `required?`, `position?`, `result?` PENDING/CONFORM/NON_CONFORM/NOT_APPLICABLE, `observations?`).
+
+### Acciones correctivas
+
+- `GET /api/audits/:auditId/actions` — lista las acciones correctivas de la auditoría.
+- `POST /api/audits/:auditId/findings/:findingId/actions` — crea una acción (`title`, `description`, `responsibleId`, `priority?` LOW/MEDIUM/HIGH/CRITICAL, `required?`, `dueDate?`).
+- `PATCH|DELETE /api/audits/:auditId/actions/:actionId` — edita/elimina. Borrar una acción con progreso responde `409`.
+- `POST /api/audits/:auditId/actions/:actionId/status` — máquina de estados (`OPEN` → `IN_PROGRESS` → `COMPLETED` / `CANCELLED`).
+- `POST /api/audits/:auditId/actions/:actionId/progress` — registra un avance (`note`, `percent?`).
+
+### Evidencias documentales (links)
+
+- `GET|POST /api/audits/:auditId/evidences` — evidencias con URL (`name`, `description?`, `url`, `findingId?`).
+- `PATCH|DELETE /api/audits/:auditId/evidences/:evidenceId` — edita/elimina.
+
+### Evidencias PDF (archivos)
+
+- `POST /api/audits/:auditId/evidence-files` — sube un PDF (multipart, campos opcionales `findingId` / `actionId` / `itemId` para anclar). Validación: extensión `.pdf`, MIME, firma `%PDF-`, ≤10 MB.
+- `GET /api/audits/:auditId/evidence-files` — lista los archivos.
+- `GET /api/audits/:auditId/evidence-files/:fileId` — descarga el PDF (`nosniff`, `no-store`).
+- `DELETE /api/audits/:auditId/evidence-files/:fileId` — elimina el registro y el archivo del disco.
+
+Errores de dominio relevantes: `409` con `reason: CHECKLIST_PENDING` o `ACTIONS_PENDING` al intentar cerrar/resolver con pendientes; `409` al borrar hallazgos con acciones o acciones con progreso; `400` al verificar una no conformidad sin verificación de eficacia.
+
 ## Errores comunes
 
 | Código | Caso |

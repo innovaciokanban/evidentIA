@@ -447,9 +447,13 @@ export type ProcedureVersion = {
 // No confundir con RiskAuditEvent (auditoría del sistema del ciclo de vida de un riesgo).
 
 export type AuditStatus = 'PLANNED' | 'IN_PROGRESS' | 'CLOSED' | 'CANCELLED'
+export type AuditKind = 'Interna' | 'Externa' | 'Mixta'
 export type AuditFindingType = 'NONCONFORMITY' | 'OBSERVATION' | 'OPPORTUNITY'
 export type AuditFindingSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR'
 export type AuditFindingStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'VERIFIED'
+export type AuditChecklistResult = 'PENDING' | 'CONFORM' | 'NON_CONFORM' | 'NOT_APPLICABLE'
+export type AuditCorrectiveActionStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type AuditCorrectiveActionPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 export type AuditEventType =
   | 'AUDIT_CREATED'
   | 'AUDIT_UPDATED'
@@ -461,6 +465,19 @@ export type AuditEventType =
   | 'EVIDENCE_CREATED'
   | 'EVIDENCE_UPDATED'
   | 'EVIDENCE_DELETED'
+  | 'AUDIT_RELATIONS_UPDATED'
+  | 'CHECKLIST_CREATED'
+  | 'CHECKLIST_UPDATED'
+  | 'CHECKLIST_DELETED'
+  | 'CHECKLIST_ITEM_CREATED'
+  | 'CHECKLIST_ITEM_UPDATED'
+  | 'CHECKLIST_ITEM_DELETED'
+  | 'EVIDENCE_FILE_CREATED'
+  | 'EVIDENCE_FILE_DELETED'
+  | 'ACTION_CREATED'
+  | 'ACTION_UPDATED'
+  | 'ACTION_STATUS_CHANGED'
+  | 'ACTION_PROGRESS_ADDED'
 
 export type AuditFinding = {
   id: string
@@ -475,8 +492,79 @@ export type AuditFinding = {
   resolution: string | null
   verifiedBy: Pick<User, 'id' | 'name'> | null
   verifiedAt: string | null
+  itemId: string | null
+  item: { id: string; description: string; checklistId: string } | null
+  processId: string | null
+  process: Pick<Process, 'id' | 'name' | 'code'> | null
+  procedureId: string | null
+  procedure: Pick<Procedure, 'id' | 'code' | 'name'> | null
+  efficacyVerification: string | null
+  efficacyVerifiedBy: Pick<User, 'id' | 'name'> | null
+  efficacyVerifiedAt: string | null
+  actions?: AuditCorrectiveAction[]
   createdAt: string
   updatedAt: string
+}
+
+export type AuditActionProgressEntry = {
+  id: string
+  actionId: string
+  note: string
+  percent: number | null
+  createdBy: Pick<User, 'id' | 'name'> | null
+  createdAt: string
+}
+
+export type AuditCorrectiveAction = {
+  id: string
+  findingId: string
+  title: string
+  description: string
+  responsible: Pick<User, 'id' | 'name'> | null
+  priority: AuditCorrectiveActionPriority
+  status: AuditCorrectiveActionStatus
+  required: boolean
+  dueDate: string | null
+  completedAt: string | null
+  progress: AuditActionProgressEntry[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditChecklistItem = {
+  id: string
+  checklistId: string
+  position: number
+  description: string
+  criteria: string
+  result: AuditChecklistResult
+  observations: string | null
+  required: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditChecklist = {
+  id: string
+  auditId: string
+  name: string
+  items: AuditChecklistItem[]
+  progress?: { total: number; completed: number; requiredPending: number }
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditEvidenceFile = {
+  id: string
+  auditId: string
+  findingId: string | null
+  actionId: string | null
+  itemId: string | null
+  filename: string
+  mimeType: string
+  size: number
+  uploadedBy: Pick<User, 'id' | 'name'> | null
+  createdAt: string
 }
 
 export type AuditEvidence = {
@@ -494,9 +582,10 @@ export type Audit = {
   id: string
   processId: string
   companyId: string
+  process: Pick<Process, 'id' | 'name' | 'code'>
   code: string
   title: string
-  auditType: string | null
+  auditType: AuditKind | string | null
   scope: string
   objectives: string | null
   criteria: string
@@ -509,6 +598,18 @@ export type Audit = {
   responsible: Pick<User, 'id' | 'name'> | null
   findings: AuditFinding[]
   evidences: AuditEvidence[]
+  relatedProcesses?: Pick<Process, 'id' | 'name' | 'code' | 'companyId'>[]
+  procedures?: Pick<Procedure, 'id' | 'code' | 'name' | 'processId'>[]
+  checklists?: AuditChecklist[]
+  checklistProgress?: { total: number; completed: number; requiredPending: number }
+  evidenceFiles?: AuditEvidenceFile[]
+  indicators?: {
+    findings: number
+    openFindings: number
+    checklistTotal: number
+    checklistRequiredPending: number
+    openRequiredActions: number
+  }
   createdAt: string
   updatedAt: string
 }

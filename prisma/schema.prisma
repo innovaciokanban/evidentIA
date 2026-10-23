@@ -255,7 +255,11 @@ model User {
   auditResponsibles Audit[] @relation("AuditResponsibles")
   auditFindingResponsibles AuditFinding[] @relation("AuditFindingResponsibles")
   auditFindingVerifiers AuditFinding[] @relation("AuditFindingVerifiers")
+  auditFindingEfficacyVerifiers AuditFinding[] @relation("AuditFindingEfficacyVerifiers")
   auditEvents AuditEvent[] @relation("AuditEventActors")
+  auditActionResponsibles AuditCorrectiveAction[] @relation("AuditActionResponsibles")
+  auditActionProgressCreators AuditActionProgress[] @relation("AuditActionProgressCreators")
+  auditEvidenceUploaders AuditEvidenceFile[] @relation("AuditEvidenceUploaders")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -634,6 +638,8 @@ model Process {
   risks          Risk[]
   procedures     Procedure[]
   audits         Audit[]
+  auditProcesses AuditProcess[]
+  findingAudits  AuditFinding[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -710,6 +716,8 @@ model Procedure {
   process       Process         @relation(fields: [processId], references: [id], onDelete: Restrict)
   responsible   User?           @relation("ProcedureResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
   versions      ProcedureVersion[]
+  auditProcedures AuditProcedure[]
+  findingAudits AuditFinding[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
@@ -991,6 +999,19 @@ enum AuditEventType {
   EVIDENCE_CREATED
   EVIDENCE_UPDATED
   EVIDENCE_DELETED
+  AUDIT_RELATIONS_UPDATED
+  CHECKLIST_CREATED
+  CHECKLIST_UPDATED
+  CHECKLIST_DELETED
+  CHECKLIST_ITEM_CREATED
+  CHECKLIST_ITEM_UPDATED
+  CHECKLIST_ITEM_DELETED
+  EVIDENCE_FILE_CREATED
+  EVIDENCE_FILE_DELETED
+  ACTION_CREATED
+  ACTION_UPDATED
+  ACTION_STATUS_CHANGED
+  ACTION_PROGRESS_ADDED
 }
 
 model Audit {
@@ -1014,7 +1035,11 @@ model Audit {
   responsible   User?       @relation("AuditResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
   findings      AuditFinding[]
   evidences     AuditEvidence[]
+  evidenceFiles AuditEvidenceFile[]
   events        AuditEvent[]
+  checklists    AuditChecklist[]
+  relatedProcesses AuditProcess[]
+  procedures    AuditProcedure[]
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -1023,6 +1048,89 @@ model Audit {
   @@index([status])
   @@index([leadAuditorId])
   @@index([responsibleId])
+}
+
+/**
+ * Vínculo de una auditoría con un proceso adicional (el proceso principal sigue en Audit.processId,
+ * que es el que ancla el código y el tenant). La clave primaria compuesta impide vínculos
+ * duplicados; el borrado del proceso o de la auditoría retira el vínculo sin tocar el historial.
+ */
+model AuditProcess {
+  auditId   String
+  processId String
+  audit     Audit   @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  process   Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([auditId, processId])
+  @@index([processId])
+}
+
+/**
+ * Vínculo de una auditoría con un procedimiento. El procedimiento se valida contra la empresa del
+ * proceso principal de la auditoría en la API; el cascade retira el vínculo si el procedimiento se
+ * retira, sin afectar hallazgos ni evidencias (éstos apuntan al procedimiento con SetNull).
+ */
+model AuditProcedure {
+  auditId      String
+  procedureId  String
+  audit        Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  procedure    Procedure  @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@id([auditId, procedureId])
+  @@index([procedureId])
+}
+
+enum AuditChecklistResult {
+  PENDING
+  CONFORM
+  NON_CONFORM
+  NOT_APPLICABLE
+}
+
+/**
+ * Lista de verificación de una auditoría. Puede haber varias (p. ej. una por área); el progreso se
+ * calcula sobre sus ítems y el cierre de la auditoría exige que ningún ítem obligatorio siga en
+ * PENDING. Borrar una lista borra sus ítems, pero los hallazgos que se anclaron a un ítem
+ * sobreviven con itemId en null (la trazabilidad del hallazgo no se pierde).
+ */
+model AuditChecklist {
+  id        String              @id @default(cuid())
+  auditId   String
+  name      String
+  audit     Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  items     AuditChecklistItem[]
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  @@index([auditId])
+}
+
+/**
+ * Ítem de una lista de verificación: descripción, criterio de evaluación, resultado explícito y
+ * observaciones. El resultado arranca en PENDING y cada cambio queda registrado en el historial
+ * append-only de la auditoría (CHECKLIST_ITEM_*), de modo que la trazabilidad vive en AuditEvent y
+ * no en columnas sobrescribibles. Los hallazgos se anclan con SetNull para sobrevivir al
+ * reordenamiento o a la baja del ítem.
+ */
+model AuditChecklistItem {
+  id           String               @id @default(cuid())
+  checklistId  String
+  position     Int                  @default(0)
+  description  String
+  criteria     String
+  result       AuditChecklistResult @default(PENDING)
+  observations String?
+  required     Boolean              @default(true)
+  checklist    AuditChecklist       @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  findings     AuditFinding[]
+  evidenceFiles AuditEvidenceFile[]
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([checklistId])
+  @@index([result])
 }
 
 model AuditFinding {
@@ -1038,10 +1146,22 @@ model AuditFinding {
   resolution     String?
   verifiedById   String?
   verifiedAt     DateTime?
+  itemId         String?
+  processId      String?
+  procedureId    String?
+  efficacyVerification   String?
+  efficacyVerifiedById   String?
+  efficacyVerifiedAt     DateTime?
   audit          Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
   responsible    User?               @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
   verifiedBy     User?               @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
+  efficacyVerifiedBy User?           @relation("AuditFindingEfficacyVerifiers", fields: [efficacyVerifiedById], references: [id], onDelete: SetNull)
+  item           AuditChecklistItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  process        Process?            @relation(fields: [processId], references: [id], onDelete: SetNull)
+  procedure      Procedure?          @relation(fields: [procedureId], references: [id], onDelete: SetNull)
   evidences      AuditEvidence[]
+  evidenceFiles  AuditEvidenceFile[]
+  actions        AuditCorrectiveAction[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
@@ -1049,6 +1169,9 @@ model AuditFinding {
   @@index([status])
   @@index([severity])
   @@index([responsibleId])
+  @@index([itemId])
+  @@index([processId])
+  @@index([procedureId])
 }
 
 // Evidencia con solo enlace http(s) (mismo contrato que RiskEvidence): no se guardan archivos ni
@@ -1097,4 +1220,100 @@ model AuditEvent {
 
   @@index([auditId, occurredAt])
   @@index([eventType])
+}
+
+enum AuditCorrectiveActionStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditCorrectiveActionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/**
+ * Acción correctiva derivada de un hallazgo de auditoría. `required` determina si su estado
+ * bloquea la resolución del hallazgo: ninguna acción obligatoria puede quedar sin estado final
+ * (COMPLETED o CANCELLED) para resolver. El historial de avances (AuditActionProgress) es
+ * independiente y sobrevive a los cambios de estado; un hallazgo con acciones no se puede borrar
+ * (la API responde 409 y el esquema usa Restrict), de modo que la trazabilidad no se destruye.
+ */
+model AuditCorrectiveAction {
+  id             String                    @id @default(cuid())
+  findingId      String
+  title          String
+  description    String
+  responsibleId  String?
+  priority       AuditCorrectiveActionPriority @default(MEDIUM)
+  status         AuditCorrectiveActionStatus   @default(OPEN)
+  required       Boolean                   @default(true)
+  dueDate        DateTime?
+  completedAt    DateTime?
+  finding        AuditFinding              @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  responsible    User?                     @relation("AuditActionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  progress       AuditActionProgress[]
+  evidenceFiles  AuditEvidenceFile[]
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  @@index([findingId])
+  @@index([status])
+  @@index([responsibleId])
+  @@index([dueDate])
+}
+
+/**
+ * Registro de avance de una acción correctiva (append-only desde el punto de vista del usuario:
+ * solo se crean filas, no se editan ni se borran desde la API). El borrado físico solo ocurre en
+ * cascada al eliminar la acción, que la API bloquea si ya hay avances registrados.
+ */
+model AuditActionProgress {
+  id          String                @id @default(cuid())
+  actionId    String
+  note        String
+  percent     Int?
+  createdById String?
+  action      AuditCorrectiveAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  createdBy   User?                 @relation("AuditActionProgressCreators", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime              @default(now())
+
+  @@index([actionId, createdAt])
+}
+
+/**
+ * Evidencia en PDF adjunta a una auditoría, un hallazgo, una acción correctiva o un ítem de
+ * checklist (como mucho uno de ellos; la API lo valida). Mismo contrato que TicketEvidenceFile: el
+ * archivo vive en el directorio privado EVIDENCE_UPLOAD_DIR con nombre generado por el servidor y
+ * aquí solo se guardan metadatos. La descarga pasa por un endpoint autenticado que relee los bytes
+ * de disco. Si el hallazgo o la acción se retiran, la evidencia sobrevive anclada a la auditoría
+ * (SET NULL) para no perder el respaldo documental.
+ */
+model AuditEvidenceFile {
+  id           String          @id @default(cuid())
+  auditId      String
+  findingId    String?
+  actionId     String?
+  itemId       String?
+  filename     String
+  storedName   String          @unique
+  mimeType     String
+  size         Int
+  uploadedById String
+  audit        Audit           @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding      AuditFinding?   @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  action       AuditCorrectiveAction? @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  item         AuditChecklistItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  uploadedBy   User            @relation("AuditEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime        @default(now())
+
+  @@index([auditId])
+  @@index([findingId])
+  @@index([actionId])
+  @@index([itemId])
+  @@index([uploadedById])
 }

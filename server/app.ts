@@ -5,7 +5,7 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
@@ -21,7 +21,7 @@ import { mitigationCompletedNotification, mitigationNotificationRecipients, miti
 import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
 import { EvidenceValidationError, nextStoredName, readEvidenceFile, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
 import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -1160,6 +1160,10 @@ const auditInclude = {
     include: {
       responsible: { select: { id: true, name: true } },
       verifiedBy: { select: { id: true, name: true } },
+      efficacyVerifiedBy: { select: { id: true, name: true } },
+      item: { select: { id: true, description: true, checklistId: true } },
+      process: { select: { id: true, name: true, code: true } },
+      procedure: { select: { id: true, code: true, name: true } },
     },
   },
   evidences: { orderBy: { createdAt: 'asc' as const } },
@@ -1169,6 +1173,10 @@ type AuditWithInclude = Prisma.AuditGetPayload<{ include: typeof auditInclude }>
 const auditFindingInclude = {
   responsible: { select: { id: true, name: true } },
   verifiedBy: { select: { id: true, name: true } },
+  efficacyVerifiedBy: { select: { id: true, name: true } },
+  item: { select: { id: true, description: true, checklistId: true } },
+  process: { select: { id: true, name: true, code: true } },
+  procedure: { select: { id: true, code: true, name: true } },
 } as const
 type AuditFindingWithInclude = Prisma.AuditFindingGetPayload<{ include: typeof auditFindingInclude }>
 
@@ -1185,6 +1193,15 @@ const auditFindingView = (finding: AuditFindingWithInclude) => ({
   resolution: finding.resolution,
   verifiedBy: finding.verifiedBy,
   verifiedAt: finding.verifiedAt,
+  itemId: finding.itemId,
+  item: finding.item ?? null,
+  processId: finding.processId,
+  process: finding.process ?? null,
+  procedureId: finding.procedureId,
+  procedure: finding.procedure ?? null,
+  efficacyVerification: finding.efficacyVerification,
+  efficacyVerifiedBy: finding.efficacyVerifiedBy ?? null,
+  efficacyVerifiedAt: finding.efficacyVerifiedAt ?? null,
   createdAt: finding.createdAt,
   updatedAt: finding.updatedAt,
 })
@@ -1204,6 +1221,7 @@ const auditView = (audit: AuditWithInclude) => ({
   id: audit.id,
   processId: audit.processId,
   companyId: audit.process.companyId,
+  process: { id: audit.process.id, name: audit.process.name, code: audit.process.code },
   code: audit.code,
   title: audit.title,
   auditType: audit.auditType,
@@ -1221,6 +1239,148 @@ const auditView = (audit: AuditWithInclude) => ({
   evidences: audit.evidences.map(auditEvidenceView),
   createdAt: audit.createdAt,
   updatedAt: audit.updatedAt,
+})
+
+// ---- Vistas del módulo Aseguramiento de Calidad (checklists, acciones, evidencias en disco) ----
+
+type AuditChecklistItemRow = Prisma.AuditChecklistItemGetPayload<{
+  select: {
+    id: true
+    checklistId: true
+    position: true
+    description: true
+    criteria: true
+    result: true
+    observations: true
+    required: true
+    createdAt: true
+    updatedAt: true
+  }
+}>
+
+const checklistItemView = (item: AuditChecklistItemRow) => ({
+  id: item.id,
+  checklistId: item.checklistId,
+  position: item.position,
+  description: item.description,
+  criteria: item.criteria,
+  result: item.result,
+  observations: item.observations,
+  required: item.required,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+})
+
+const checklistInclude = { items: { orderBy: [{ position: 'asc' as const }, { createdAt: 'asc' as const }] } }
+type AuditChecklistWithItems = Prisma.AuditChecklistGetPayload<{ include: typeof checklistInclude }>
+
+const checklistView = (checklist: AuditChecklistWithItems) => ({
+  id: checklist.id,
+  auditId: checklist.auditId,
+  name: checklist.name,
+  items: checklist.items.map(checklistItemView),
+  createdAt: checklist.createdAt,
+  updatedAt: checklist.updatedAt,
+})
+
+/** Progreso de una lista: total, evaluados (resultado distinto de PENDING) y pendientes obligatorios. */
+const checklistProgress = (checklist: { items: Array<{ result: AuditChecklistResult; required: boolean }> }) => ({
+  total: checklist.items.length,
+  completed: checklist.items.filter((item) => item.result !== 'PENDING').length,
+  requiredPending: checklist.items.filter((item) => item.required && item.result === 'PENDING').length,
+})
+
+const auditActionInclude = {
+  responsible: { select: { id: true, name: true } },
+  progress: { orderBy: { createdAt: 'desc' as const }, include: { createdBy: { select: { id: true, name: true } } } },
+} as const
+type AuditActionWithInclude = Prisma.AuditCorrectiveActionGetPayload<{ include: typeof auditActionInclude }>
+
+const auditActionProgressView = (entry: AuditActionWithInclude['progress'][number]) => ({
+  id: entry.id,
+  actionId: entry.actionId,
+  note: entry.note,
+  percent: entry.percent,
+  createdBy: entry.createdBy,
+  createdAt: entry.createdAt,
+})
+
+const auditActionView = (action: AuditActionWithInclude) => ({
+  id: action.id,
+  findingId: action.findingId,
+  title: action.title,
+  description: action.description,
+  responsible: action.responsible,
+  priority: action.priority,
+  status: action.status,
+  required: action.required,
+  dueDate: action.dueDate,
+  completedAt: action.completedAt,
+  progress: action.progress.map(auditActionProgressView),
+  createdAt: action.createdAt,
+  updatedAt: action.updatedAt,
+})
+
+// Vista de una evidencia en PDF de auditoría. No expone storedName (el nombre en disco es interno
+// del servidor, mismo criterio que TicketEvidenceFile).
+const auditEvidenceFileInclude = { uploadedBy: { select: { id: true, name: true } } } as const
+type AuditEvidenceFileWithInclude = Prisma.AuditEvidenceFileGetPayload<{ include: typeof auditEvidenceFileInclude }>
+const auditEvidenceFileView = (file: AuditEvidenceFileWithInclude) => ({
+  id: file.id,
+  auditId: file.auditId,
+  findingId: file.findingId,
+  actionId: file.actionId,
+  itemId: file.itemId,
+  filename: file.filename,
+  mimeType: file.mimeType,
+  size: file.size,
+  uploadedBy: file.uploadedBy,
+  createdAt: file.createdAt,
+})
+
+const auditRelationsInclude = {
+  relatedProcesses: { include: { process: { select: { id: true, name: true, code: true, companyId: true } } }, orderBy: { createdAt: 'asc' as const } },
+  procedures: { include: { procedure: { select: { id: true, code: true, name: true, processId: true } } }, orderBy: { createdAt: 'asc' as const } },
+} as const
+type AuditWithRelations = AuditWithInclude & Prisma.AuditGetPayload<{ include: typeof auditRelationsInclude }>
+
+const auditRelationsView = (audit: AuditWithRelations) => ({
+  relatedProcesses: audit.relatedProcesses.map((row) => row.process),
+  procedures: audit.procedures.map((row) => row.procedure),
+})
+
+const auditDetailInclude = {
+  ...auditInclude,
+  ...auditRelationsInclude,
+  findings: {
+    orderBy: { createdAt: 'asc' as const },
+    include: {
+      ...auditFindingInclude,
+      actions: { orderBy: { createdAt: 'asc' as const }, include: auditActionInclude },
+    },
+  },
+  checklists: { orderBy: { createdAt: 'asc' as const }, include: checklistInclude },
+  evidenceFiles: { orderBy: { createdAt: 'desc' as const }, include: auditEvidenceFileInclude },
+}
+type AuditWithDetail = Prisma.AuditGetPayload<{ include: typeof auditDetailInclude }>
+
+const auditDetailView = (audit: AuditWithDetail) => ({
+  ...auditView(audit as unknown as AuditWithInclude),
+  ...auditRelationsView(audit as unknown as AuditWithRelations),
+  findings: audit.findings.map((finding) => ({
+    ...auditFindingView(finding),
+    actions: finding.actions.map(auditActionView),
+  })),
+  checklists: audit.checklists.map(checklistView),
+  checklistProgress: audit.checklists.map(checklistProgress).reduce(
+    (total, progress) => ({
+      total: total.total + progress.total,
+      completed: total.completed + progress.completed,
+      requiredPending: total.requiredPending + progress.requiredPending,
+    }),
+    { total: 0, completed: 0, requiredPending: 0 },
+  ),
+  evidenceFiles: audit.evidenceFiles.map(auditEvidenceFileView),
 })
 
 // Máquina de transiciones del flujo de auditoría. CLOSED y CANCELLED son terminales: no se sale
@@ -1246,6 +1406,24 @@ const auditFindingTransitions: Record<AuditFindingStatus, AuditFindingStatus[]> 
 }
 const canTransitionAuditFinding = (from: AuditFindingStatus, to: AuditFindingStatus): boolean =>
   from !== to && auditFindingTransitions[from].includes(to)
+
+// Flujo de una acción correctiva. Solo avances hacia estados finales; CANCELLED y COMPLETED son
+// terminales. El servidor nunca "cierra" acciones automáticamente: cada cambio llega explícito.
+const auditActionTransitions: Record<AuditCorrectiveActionStatus, AuditCorrectiveActionStatus[]> = {
+  [AuditCorrectiveActionStatus.OPEN]: [AuditCorrectiveActionStatus.IN_PROGRESS, AuditCorrectiveActionStatus.CANCELLED],
+  [AuditCorrectiveActionStatus.IN_PROGRESS]: [AuditCorrectiveActionStatus.COMPLETED, AuditCorrectiveActionStatus.CANCELLED],
+  [AuditCorrectiveActionStatus.COMPLETED]: [],
+  [AuditCorrectiveActionStatus.CANCELLED]: [],
+}
+const canTransitionAuditAction = (from: AuditCorrectiveActionStatus, to: AuditCorrectiveActionStatus): boolean =>
+  from !== to && auditActionTransitions[from].includes(to)
+
+const auditActionStatusNames: Record<AuditCorrectiveActionStatus, string> = {
+  [AuditCorrectiveActionStatus.OPEN]: 'Abierta',
+  [AuditCorrectiveActionStatus.IN_PROGRESS]: 'En curso',
+  [AuditCorrectiveActionStatus.COMPLETED]: 'Completada',
+  [AuditCorrectiveActionStatus.CANCELLED]: 'Cancelada',
+}
 
 const auditStatusNames: Record<AuditStatus, string> = {
   [AuditStatus.PLANNED]: 'Planificada',
@@ -1336,7 +1514,7 @@ const updatedAuditChanges = (existing: AuditWithInclude, data: Prisma.AuditUnche
   return changes
 }
 
-const findingAuditChanges = (previous: { title: string; description: string; type: string; severity: string; dueDate: Date | null; responsibleName: string | null } | null, next: { title?: string; description?: string; type?: string; severity?: string; dueDate?: Date | null; responsibleName?: string | null }): RiskAuditChange[] => {
+const findingAuditChanges = (previous: { title: string; description: string; type: string; severity: string; dueDate: Date | null; responsibleName: string | null; itemId: string | null; itemDescription: string | null; processId: string | null; processName: string | null; procedureId: string | null; procedureName: string | null; efficacyVerification: string | null } | null, next: { title?: string; description?: string; type?: string; severity?: string; dueDate?: Date | null; responsibleName?: string | null; itemId?: string | null; itemDescription?: string | null; processId?: string | null; processName?: string | null; procedureId?: string | null; procedureName?: string | null; efficacyVerification?: string | null }): RiskAuditChange[] => {
   const rows: Array<{ field: string; label: string; previousValue: ProcessChangeValue; newValue: ProcessChangeValue }> = [
     { field: 'title', label: 'Título del hallazgo', previousValue: previous?.title ?? null, newValue: next.title !== undefined ? next.title : previous?.title ?? null },
     { field: 'description', label: 'Descripción del hallazgo', previousValue: previous?.description ?? null, newValue: next.description !== undefined ? next.description : previous?.description ?? null },
@@ -1344,6 +1522,10 @@ const findingAuditChanges = (previous: { title: string; description: string; typ
     { field: 'severity', label: 'Severidad', previousValue: previous?.severity ?? null, newValue: next.severity !== undefined ? next.severity : previous?.severity ?? null },
     { field: 'dueDate', label: 'Fecha límite', previousValue: auditValue(previous?.dueDate ?? null), newValue: next.dueDate !== undefined ? auditValue(next.dueDate) : auditValue(previous?.dueDate ?? null) },
     { field: 'responsibleId', label: 'Responsable del hallazgo', previousValue: previous?.responsibleName ?? null, newValue: next.responsibleName !== undefined ? next.responsibleName : previous?.responsibleName ?? null },
+    { field: 'itemId', label: 'Ítem de la lista de verificación', previousValue: previous?.itemDescription ?? null, newValue: next.itemDescription !== undefined ? next.itemDescription : previous?.itemDescription ?? null },
+    { field: 'processId', label: 'Proceso relacionado', previousValue: previous?.processName ?? null, newValue: next.processName !== undefined ? next.processName : previous?.processName ?? null },
+    { field: 'procedureId', label: 'Procedimiento relacionado', previousValue: previous?.procedureName ?? null, newValue: next.procedureName !== undefined ? next.procedureName : previous?.procedureName ?? null },
+    { field: 'efficacyVerification', label: 'Verificación de eficacia', previousValue: previous?.efficacyVerification ?? null, newValue: next.efficacyVerification !== undefined ? next.efficacyVerification : previous?.efficacyVerification ?? null },
   ]
   return rows.filter((row) => row.previousValue !== row.newValue)
 }
@@ -1379,8 +1561,10 @@ export const nextAuditCode = (codes: readonly (string | null | undefined)[]): st
  * El código es único dentro de la empresa: se toma advisory lock sobre companyId, se escanean los
  * códigos de la empresa y se emite el siguiente libre. El índice único (processId, code) actúa
  * como red de seguridad y withCodeRetry reinicia la transacción ante un hipotético conflicto.
+ * Los vínculos con procesos y procedimientos adicionales (ya validados contra la empresa por la
+ * ruta) se crean en la misma transacción: una auditoría nunca queda a medias.
  */
-const createAuditWithCode = async (db: PrismaClient, actor: RiskAuditActor, processId: string, companyId: string, data: Omit<Prisma.AuditUncheckedCreateInput, 'code' | 'processId'>): Promise<AuditWithInclude> => {
+const createAuditWithCode = async (db: PrismaClient, actor: RiskAuditActor, processId: string, companyId: string, data: Omit<Prisma.AuditUncheckedCreateInput, 'code' | 'processId'>, relations?: { processIds?: string[]; procedureIds?: string[] }): Promise<AuditWithInclude> => {
   return withCodeRetry(() => db.$transaction(async (tx) => {
     if (typeof tx.$queryRaw === 'function') {
       await tx.$queryRaw`
@@ -1397,12 +1581,29 @@ const createAuditWithCode = async (db: PrismaClient, actor: RiskAuditActor, proc
     })
     const code = nextAuditCode(existing.map((audit) => audit.code))
     const audit = await tx.audit.create({ data: { ...data, processId, code }, include: auditInclude })
+    const relatedProcessIds = [...new Set(relations?.processIds ?? [])].filter((id) => id !== processId)
+    const procedureIds = [...new Set(relations?.procedureIds ?? [])]
+    if (relatedProcessIds.length > 0) {
+      await tx.auditProcess.createMany({
+        data: relatedProcessIds.map((relatedId) => ({ auditId: audit.id, processId: relatedId })),
+        skipDuplicates: true,
+      })
+    }
+    if (procedureIds.length > 0) {
+      await tx.auditProcedure.createMany({
+        data: procedureIds.map((procedureId) => ({ auditId: audit.id, procedureId })),
+        skipDuplicates: true,
+      })
+    }
     await auditEventWrite(tx, {
       auditId: audit.id,
       eventType: 'AUDIT_CREATED',
       summary: `Auditoría ${code} creada`,
       actor,
       changes: auditCreationChanges(audit),
+      ...(relatedProcessIds.length > 0 || procedureIds.length > 0
+        ? { metadata: { relatedProcessIds, procedureIds } }
+        : {}),
     })
     return audit
   }))
@@ -2018,7 +2219,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
    * Any user assigned to a process resource must belong to the process company. The id comes from
    * the client, so the company check stays on the server even when the UI filters the directory.
    */
-  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible' | 'lead auditor' | 'audit responsible' | 'finding responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
+  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible' | 'lead auditor' | 'audit responsible' | 'finding responsible' | 'action responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
     if (!userId) return { ok: true, userId: null }
     const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, companyId: true } })
     const label = roleLabel === 'risk owner' ? 'Risk owner'
@@ -2026,6 +2227,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       : roleLabel === 'lead auditor' ? 'Lead auditor'
       : roleLabel === 'audit responsible' ? 'Audit responsible'
       : roleLabel === 'finding responsible' ? 'Finding responsible'
+      : roleLabel === 'action responsible' ? 'Action responsible'
       : 'Responsible'
     if (!user) return { ok: false, status: 400, error: `${label} user not found` }
     if (user.companyId !== companyId) return { ok: false, status: 403, error: `You can only assign a ${roleLabel} from your own company` }
@@ -3637,6 +3839,147 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     return audit
   }
 
+  /**
+   * Resuelve una auditoría por su id comprobando que su proceso sea visible para la sesión. Es la
+   * puerta de entrada de las rutas top-level (/api/audits/...): el proceso se deriva de la propia
+   * auditoría, de modo que el cliente no necesita conocerlo para leer ni para escribir.
+   */
+  const findCompanyAudit = async (request: Request, auditId: string) => {
+    const parsed = idReference.safeParse(auditId)
+    if (!parsed.success) return null
+    const audit = await db.audit.findUnique({ where: { id: parsed.data }, include: auditInclude })
+    if (!audit) return null
+    const process = await findAccessibleProcess(request, audit.processId)
+    return process && audit.processId === process.id ? audit : null
+  }
+
+  /**
+   * Delega una ruta anidada (/api/processes/:processId/audits/...) desde su variante top-level
+   * (/api/audits/...): resuelve la auditoría, comprueba el acceso y rellena req.params.processId
+   * para que el handler existente ejecute exactamente la misma lógica y validaciones.
+   */
+  const withAuditProcessParam = (handler: RequestHandler): RequestHandler => async (request, response, next) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    request.params.processId = audit.processId
+    return handler(request, response, next)
+  }
+
+  /** Ítems obligatorios que siguen sin evaluación: bloquean el cierre de la auditoría. */
+  const pendingRequiredItems = (client: Prisma.TransactionClient | PrismaClient, auditId: string) =>
+    client.auditChecklistItem.count({
+      where: { required: true, result: 'PENDING', checklist: { auditId } },
+    })
+
+  /**
+   * Acciones correctivas obligatorias sin estado final. Mientras existan, el hallazgo no puede
+   * resolverse: la verificación siempre se apoya en acciones terminadas (COMPLETED o CANCELLED),
+   * nunca en un cierre automático.
+   */
+  const pendingRequiredActions = (client: Prisma.TransactionClient | PrismaClient, findingId: string) =>
+    client.auditCorrectiveAction.count({
+      where: { findingId, required: true, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+    })
+
+  /**
+   * Valida los procesos y procedimientos que se quieren vincular a una auditoría: todos deben
+   * pertenecer a la empresa del proceso principal (sin referencias cruzadas entre empresas). El
+   * proceso principal se deduplica y no se guarda como vínculo (siempre aparece en la vista).
+   */
+  const validateAuditRelations = async (companyId: string, processId: string, data: { processIds?: string[]; procedureIds?: string[] }) => {
+    const processIds = [...new Set(data.processIds ?? [])].filter((id) => id !== processId)
+    const procedureIds = [...new Set(data.procedureIds ?? [])]
+    if (processIds.length > 0) {
+      const count = await db.process.count({ where: { id: { in: processIds }, companyId } })
+      if (count !== processIds.length) return { ok: false as const, status: 404, error: 'One or more related processes were not found in this company' }
+    }
+    if (procedureIds.length > 0) {
+      const procedures = await db.procedure.findMany({
+        where: { id: { in: procedureIds } },
+        select: { id: true, process: { select: { companyId: true } } },
+      })
+      if (procedures.length !== procedureIds.length || procedures.some((procedure) => procedure.process.companyId !== companyId)) {
+        return { ok: false as const, status: 404, error: 'One or more related procedures were not found in this company' }
+      }
+    }
+    return { ok: true as const, processIds, procedureIds }
+  }
+
+  /** Sustituye el conjunto de vínculos sin duplicados y sin reescribir los que ya están iguales. */
+  const syncAuditRelations = async (tx: Prisma.TransactionClient, auditId: string, processIds: string[], procedureIds: string[]) => {
+    const [existingProcesses, existingProcedures] = await Promise.all([
+      tx.auditProcess.findMany({ where: { auditId }, select: { processId: true } }),
+      tx.auditProcedure.findMany({ where: { auditId }, select: { procedureId: true } }),
+    ])
+    const currentProcessIds = existingProcesses.map((row) => row.processId)
+    const currentProcedureIds = existingProcedures.map((row) => row.procedureId)
+    const removeProcessIds = currentProcessIds.filter((id) => !processIds.includes(id))
+    const addProcessIds = processIds.filter((id) => !currentProcessIds.includes(id))
+    const removeProcedureIds = currentProcedureIds.filter((id) => !procedureIds.includes(id))
+    const addProcedureIds = procedureIds.filter((id) => !currentProcedureIds.includes(id))
+    if (removeProcessIds.length > 0) await tx.auditProcess.deleteMany({ where: { auditId, processId: { in: removeProcessIds } } })
+    if (removeProcedureIds.length > 0) await tx.auditProcedure.deleteMany({ where: { auditId, procedureId: { in: removeProcedureIds } } })
+    if (addProcessIds.length > 0) {
+      await tx.auditProcess.createMany({ data: addProcessIds.map((processId) => ({ auditId, processId })), skipDuplicates: true })
+    }
+    if (addProcedureIds.length > 0) {
+      await tx.auditProcedure.createMany({ data: addProcedureIds.map((procedureId) => ({ auditId, procedureId })), skipDuplicates: true })
+    }
+    return { changed: addProcessIds.length + removeProcessIds.length + addProcedureIds.length + removeProcedureIds.length > 0, addedProcessIds: addProcessIds, removedProcessIds: removeProcessIds, addedProcedureIds: addProcedureIds, removedProcedureIds: removeProcedureIds } as const
+  }
+
+  /**
+   * Resuelve los vínculos opcionales de un hallazgo (ítem de checklist, proceso y procedimiento)
+   * contra la auditoría y su empresa. Un id que no pertenezca responde 404 sin filtrar existencia.
+   */
+  const resolveFindingLinks = async (audit: { id: string; processId: string; process: { companyId: string } }, data: { itemId?: string | null; processId?: string | null; procedureId?: string | null }) => {
+    let itemId: string | null = null
+    let itemDescription: string | null = null
+    let processId: string | null = null
+    let processName: string | null = null
+    let procedureId: string | null = null
+    let procedureName: string | null = null
+    if (data.itemId !== undefined) {
+      if (data.itemId) {
+        const item = await db.auditChecklistItem.findFirst({
+          where: { id: data.itemId, checklist: { auditId: audit.id } },
+          select: { id: true, description: true },
+        })
+        if (!item) return { ok: false as const, status: 404 as const, error: 'Checklist item not found' }
+        itemId = item.id
+        itemDescription = item.description
+      }
+    }
+    if (data.processId !== undefined) {
+      if (data.processId) {
+        // El proceso del hallazgo debe ser el principal o uno de los relacionados con la auditoría.
+        const related = await db.auditProcess.findFirst({ where: { auditId: audit.id, processId: data.processId }, select: { processId: true } })
+        if (data.processId !== audit.processId && !related) {
+          return { ok: false as const, status: 404 as const, error: 'Process not found for this audit' }
+        }
+        const process = await db.process.findFirst({ where: { id: data.processId, companyId: audit.process.companyId }, select: { id: true, name: true } })
+        if (!process) return { ok: false as const, status: 404 as const, error: 'Process not found for this audit' }
+        processId = process.id
+        processName = process.name
+      }
+    }
+    if (data.procedureId !== undefined) {
+      if (data.procedureId) {
+        const procedure = await db.procedure.findFirst({
+          where: { id: data.procedureId, process: { companyId: audit.process.companyId } },
+          select: { id: true, name: true },
+        })
+        if (!procedure) return { ok: false as const, status: 404 as const, error: 'Procedure not found in this company' }
+        procedureId = procedure.id
+        procedureName = procedure.name
+      }
+    }
+    return { ok: true as const, itemId, itemDescription, processId, processName, procedureId, procedureName }
+  }
+
   app.get('/api/processes/:processId/audits', authMiddleware, asyncHandler(async (request, response) => {
     const parsed = auditQuerySchema.safeParse(request.query)
     if (!parsed.success) {
@@ -3662,7 +4005,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ audits: audits.map(auditView) })
   }))
 
-  app.post('/api/processes/:processId/audits', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const createAuditHandler = asyncHandler(async (request, response) => {
     const parsed = auditCreateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid audit data', details: parsed.error.issues })
@@ -3683,18 +4026,36 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(responsible.status).json({ error: responsible.error })
       return
     }
+    const relations = await validateAuditRelations(process.companyId, process.id, parsed.data)
+    if (!relations.ok) {
+      response.status(relations.status).json({ error: relations.error })
+      return
+    }
     const actor = auditActorOf(request)
     const audit = await createAuditWithCode(db, actor!, process.id, process.companyId, {
       title: parsed.data.title,
-      auditType: parsed.data.auditType || null,
+      auditType: parsed.data.auditType,
       scope: parsed.data.scope,
       objectives: parsed.data.objectives || null,
       criteria: parsed.data.criteria,
       plannedDate: parsed.data.plannedDate || null,
       leadAuditorId: leadAuditor.userId,
       responsibleId: responsible.userId,
-    })
+    }, { processIds: relations.processIds, procedureIds: relations.procedureIds })
     response.status(201).json({ audit: auditView(audit) })
+  })
+  app.post('/api/processes/:processId/audits', authMiddleware, userWriteGuard, createAuditHandler)
+
+  // Variante top-level del alta: el proceso principal viaja en el cuerpo (processId) y se traduce
+  // al parámetro de ruta para reutilizar el mismo handler y las mismas validaciones.
+  app.post('/api/audits', authMiddleware, userWriteGuard, asyncHandler(async (request, response, next) => {
+    const parsedProcess = idReference.safeParse((request.body as { processId?: unknown } | undefined)?.processId)
+    if (!parsedProcess.success) {
+      response.status(400).json({ error: 'A valid processId is required' })
+      return
+    }
+    request.params.processId = parsedProcess.data
+    return createAuditHandler(request, response, next)
   }))
 
   app.get('/api/processes/:processId/audits/:auditId', authMiddleware, asyncHandler(async (request, response) => {
@@ -3714,7 +4075,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ audit: auditView(audit) })
   }))
 
-  app.patch('/api/processes/:processId/audits/:auditId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const updateAuditHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3747,7 +4108,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const data: Prisma.AuditUncheckedUpdateInput = {}
     const people: { leadAuditor?: string | null; responsible?: string | null } = {}
     if (parsed.data.title !== undefined) data.title = parsed.data.title
-    if (parsed.data.auditType !== undefined) data.auditType = parsed.data.auditType || null
+    if (parsed.data.auditType !== undefined) data.auditType = parsed.data.auditType
     if (parsed.data.scope !== undefined) data.scope = parsed.data.scope
     if (parsed.data.objectives !== undefined) data.objectives = parsed.data.objectives || null
     if (parsed.data.criteria !== undefined) data.criteria = parsed.data.criteria
@@ -3799,9 +4160,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.json({ audit: auditView(audit) })
-  }))
+  })
+  app.patch('/api/processes/:processId/audits/:auditId', authMiddleware, userWriteGuard, updateAuditHandler)
+  app.patch('/api/audits/:auditId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditHandler))
 
-  app.post('/api/processes/:processId/audits/:auditId/status', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const changeAuditStatusHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3845,9 +4208,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         : []),
     ]
     const actor = auditActorOf(request)
-    const audit = await db.$transaction(async (tx) => {
+    const result = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
+      // Gate de listas de verificación: cerrar exige que ningún ítem obligatorio siga en PENDING.
+      // El recuento ocurre DESPUÉS de bloquear la fila de la auditoría, y toda escritura de ítems
+      // también pasa por ese bloqueo, así que no se cuela una creación concurrente.
+      if (parsed.data.status === AuditStatus.CLOSED) {
+        const pending = await pendingRequiredItems(tx, existing.id)
+        if (pending > 0) return { blocked: 'CHECKLIST_PENDING' as const, pending }
+      }
       const updated = await tx.audit.update({ where: { id: existing.id }, data, include: auditInclude })
       await auditEventWrite(tx, {
         auditId: updated.id,
@@ -3857,16 +4227,25 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         changes,
         metadata: { previousStatus: existing.status, newStatus: parsed.data.status },
       })
-      return updated
+      return { audit: updated }
     })
-    if (!audit) {
+    if (!result) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.json({ audit: auditView(audit) })
-  }))
+    if ('blocked' in result) {
+      response.status(409).json({
+        error: `The audit cannot be closed while ${result.pending} required checklist item(s) are still pending`,
+        reason: result.blocked,
+      })
+      return
+    }
+    response.json({ audit: auditView(result.audit) })
+  })
+  app.post('/api/processes/:processId/audits/:auditId/status', authMiddleware, userWriteGuard, changeAuditStatusHandler)
+  app.post('/api/audits/:auditId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeAuditStatusHandler))
 
-  app.get('/api/processes/:processId/audits/:auditId/history', authMiddleware, asyncHandler(async (request, response) => {
+  const getAuditHistoryHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3902,9 +4281,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       }),
     ])
     response.json({ events: events.map(auditEventView), total, page, pageSize })
-  }))
+  })
+  app.get('/api/processes/:processId/audits/:auditId/history', authMiddleware, getAuditHistoryHandler)
+  app.get('/api/audits/:auditId/history', authMiddleware, withAuditProcessParam(getAuditHistoryHandler))
 
-  app.delete('/api/processes/:processId/audits/:auditId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const deleteAuditHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3930,18 +4311,29 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'The audit has findings; cancel it instead' })
       return
     }
-    // Sin hallazgos se retira la auditoría completa: hallazgos no hay, y evidencias e historial
-    // acompañan en la misma transacción (las claves foráneas son Restrict sobre Audit y
-    // CASCADE no basta si el cliente de prueba no replica el motor).
+    // Sin hallazgos se retira la auditoría completa: evidencias (enlace y archivos), checklists,
+    // vínculos e historial acompañan en la misma transacción (las claves foráneas son Restrict
+    // sobre Audit y CASCADE no basta si el cliente de prueba no replica el motor). Los nombres en
+    // disco se leen antes para limpiar los PDF después de confirmar la baja en base de datos.
+    const storedNames = (await db.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { storedName: true } })).map((file) => file.storedName)
     await db.$transaction(async (tx) => {
+      await tx.auditEvidenceFile.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvidence.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvent.deleteMany({ where: { auditId: existing.id } })
       await tx.audit.delete({ where: { id: existing.id } })
     })
+    if (storedNames.length > 0) {
+      const { failed } = await removeEvidenceFiles(storedNames)
+      if (failed.length > 0) {
+        console.error('[evidence] no se pudieron borrar archivos tras eliminar la auditoría', { auditId: existing.id, failed })
+      }
+    }
     response.status(204).send()
-  }))
+  })
+  app.delete('/api/processes/:processId/audits/:auditId', authMiddleware, userWriteGuard, deleteAuditHandler)
+  app.delete('/api/audits/:auditId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditHandler))
 
-  app.get('/api/processes/:processId/audits/:auditId/findings', authMiddleware, asyncHandler(async (request, response) => {
+  const listAuditFindingsHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3961,9 +4353,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       orderBy: [{ createdAt: 'asc' }],
     })
     response.json({ findings: findings.map(auditFindingView) })
-  }))
+  })
+  app.get('/api/processes/:processId/audits/:auditId/findings', authMiddleware, listAuditFindingsHandler)
+  app.get('/api/audits/:auditId/findings', authMiddleware, withAuditProcessParam(listAuditFindingsHandler))
 
-  app.post('/api/processes/:processId/audits/:auditId/findings', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const createAuditFindingHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -3996,6 +4390,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(responsible.status).json({ error: responsible.error })
       return
     }
+    const links = await resolveFindingLinks(existing, parsed.data)
+    if (!links.ok) {
+      response.status(links.status).json({ error: links.error })
+      return
+    }
     const actor = auditActorOf(request)
     const finding = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
@@ -4009,6 +4408,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           severity: parsed.data.severity,
           dueDate: parsed.data.dueDate || null,
           responsibleId: responsible.userId,
+          itemId: links.itemId,
+          processId: links.processId,
+          procedureId: links.procedureId,
         },
         include: auditFindingInclude,
       })
@@ -4024,8 +4426,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           severity: created.severity,
           dueDate: created.dueDate,
           responsibleName: created.responsible?.name ?? null,
+          itemId: created.itemId,
+          processId: created.processId,
+          procedureId: created.procedureId,
         }),
-        metadata: { findingId: created.id },
+        metadata: {
+          findingId: created.id,
+          ...(links.itemId ? { itemId: links.itemId } : {}),
+          ...(links.processId ? { linkedProcessId: links.processId } : {}),
+          ...(links.procedureId ? { linkedProcedureId: links.procedureId } : {}),
+        },
       })
       return created
     })
@@ -4034,9 +4444,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.status(201).json({ finding: auditFindingView(finding) })
-  }))
+  })
+  app.post('/api/processes/:processId/audits/:auditId/findings', authMiddleware, userWriteGuard, createAuditFindingHandler)
+  app.post('/api/audits/:auditId/findings', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditFindingHandler))
 
-  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const updateAuditFindingHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4081,6 +4493,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.type !== undefined) data.type = parsed.data.type
     if (parsed.data.severity !== undefined) data.severity = parsed.data.severity
     if (parsed.data.dueDate !== undefined) data.dueDate = parsed.data.dueDate || null
+    if (parsed.data.efficacyVerification !== undefined) data.efficacyVerification = parsed.data.efficacyVerification || null
     if (parsed.data.responsibleId !== undefined) {
       const responsible = await resolveUserInCompany(parsed.data.responsibleId, process.companyId, 'finding responsible')
       if (!responsible.ok) {
@@ -4088,6 +4501,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         return
       }
       data.responsibleId = responsible.userId
+    }
+    const links = await resolveFindingLinks({ id: audit.id, processId: audit.processId, process: { companyId: process.companyId } }, parsed.data)
+    if (!links.ok) {
+      response.status(links.status).json({ error: links.error })
+      return
+    }
+    if (parsed.data.itemId !== undefined) {
+      data.itemId = links.itemId
+    }
+    if (parsed.data.processId !== undefined) {
+      data.processId = links.processId
+    }
+    if (parsed.data.procedureId !== undefined) {
+      data.procedureId = links.procedureId
     }
     const nextResponsibleName = data.responsibleId !== undefined
       ? (data.responsibleId
@@ -4101,6 +4528,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       severity: existing.severity,
       dueDate: existing.dueDate,
       responsibleName: existing.responsible?.name ?? null,
+      itemId: existing.itemId,
+      itemDescription: existing.item?.description ?? null,
+      processId: existing.processId,
+      processName: existing.process?.name ?? null,
+      procedureId: existing.procedureId,
+      procedureName: existing.procedure?.name ?? null,
+      efficacyVerification: existing.efficacyVerification,
     }, {
       ...(data.title !== undefined ? { title: String(data.title) } : {}),
       ...(data.description !== undefined ? { description: String(data.description) } : {}),
@@ -4108,6 +4542,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       ...(data.severity !== undefined ? { severity: String(data.severity) } : {}),
       ...(data.dueDate !== undefined ? { dueDate: (data.dueDate as Date | null) ?? null } : {}),
       ...(nextResponsibleName !== undefined ? { responsibleName: nextResponsibleName } : {}),
+      ...(data.itemId !== undefined ? { itemId: data.itemId as string | null } : {}),
+      ...(data.processId !== undefined ? { processId: data.processId as string | null } : {}),
+      ...(data.procedureId !== undefined ? { procedureId: data.procedureId as string | null } : {}),
+      ...(data.efficacyVerification !== undefined ? { efficacyVerification: data.efficacyVerification as string | null } : {}),
     })
     if (changes.length === 0) {
       response.json({ finding: auditFindingView(existing) })
@@ -4133,9 +4571,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.json({ finding: auditFindingView(finding) })
-  }))
+  })
+  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, updateAuditFindingHandler)
+  app.patch('/api/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditFindingHandler))
 
-  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/status', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const changeAuditFindingStatusHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4174,13 +4614,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     // RESOLVED exige resolución (también validada en Zod); VERIFIED registra actor y fecha del
-    // verificador, que salen de la sesión y nunca del cuerpo.
+    // verificador, que salen de la sesión y nunca del cuerpo. Para las No conformidades, además,
+    // exige la verificación de eficacia ya registrada en el hallazgo (se guarda con PATCH).
     if (parsed.data.status === AuditFindingStatus.RESOLVED && (!parsed.data.resolution || parsed.data.resolution.trim().length < 3)) {
       response.status(400).json({ error: 'Resolving a finding requires a resolution with at least 3 characters' })
       return
     }
     if (parsed.data.status === AuditFindingStatus.VERIFIED && !existing.resolution) {
       response.status(400).json({ error: 'A finding must be resolved before it can be verified' })
+      return
+    }
+    if (parsed.data.status === AuditFindingStatus.VERIFIED && existing.type === 'NONCONFORMITY' && (!existing.efficacyVerification || existing.efficacyVerification.trim().length < 3)) {
+      response.status(400).json({ error: 'A nonconformity requires an efficacy verification of at least 3 characters before it can be verified' })
       return
     }
     const data: Prisma.AuditFindingUncheckedUpdateInput = { status: parsed.data.status }
@@ -4197,9 +4642,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       changes.push({ field: 'verifiedAt', label: 'Verificado', previousValue: null, newValue: auditValue(data.verifiedAt) })
     }
     const actor = auditActorOf(request)
-    const finding = await db.$transaction(async (tx) => {
+    const result = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      // Gate de acciones correctivas: ninguna obligatoria sin estado final impide resolver el
+      // hallazgo. El recuento ocurre con la fila de la auditoría bloqueada, de modo que no se
+      // cuela una creación concurrente de acciones mientras se resuelve.
+      if (parsed.data.status === AuditFindingStatus.RESOLVED) {
+        const pending = await pendingRequiredActions(tx, existing.id)
+        if (pending > 0) return { blocked: 'ACTIONS_PENDING' as const, pending }
+      }
       const updated = await tx.auditFinding.update({ where: { id: existing.id }, data, include: auditFindingInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -4209,16 +4661,25 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         changes,
         metadata: { findingId: updated.id, previousStatus: existing.status, newStatus: parsed.data.status },
       })
-      return updated
+      return { finding: updated }
     })
-    if (!finding) {
+    if (!result) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.json({ finding: auditFindingView(finding) })
-  }))
+    if ('blocked' in result) {
+      response.status(409).json({
+        error: `The finding cannot be resolved while ${result.pending} required corrective action(s) are still open`,
+        reason: result.blocked,
+      })
+      return
+    }
+    response.json({ finding: auditFindingView(result.finding) })
+  })
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/status', authMiddleware, userWriteGuard, changeAuditFindingStatusHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeAuditFindingStatusHandler))
 
-  app.delete('/api/processes/:processId/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const deleteAuditFindingHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4253,6 +4714,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'A verified finding cannot be deleted' })
       return
     }
+    // Un hallazgo con acciones correctivas tampoco se borra: la trazabilidad del seguimiento
+    // (acciones y su progreso) sobrevive al hallazgo, que además es Restrict en el esquema.
+    const action = await db.auditCorrectiveAction.findFirst({ where: { findingId: existing.id }, select: { id: true } })
+    if (action) {
+      response.status(409).json({ error: 'The finding has corrective actions; resolve or cancel it instead' })
+      return
+    }
     const actor = auditActorOf(request)
     const deleted = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
@@ -4260,6 +4728,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       // Las evidencias ancladas al hallazgo sobreviven con findingId en null (SET NULL en el
       // esquema): la evidencia documental no se pierde al retirar el hallazgo.
       await tx.auditEvidence.updateMany({ where: { findingId: existing.id }, data: { findingId: null } })
+      await tx.auditEvidenceFile.updateMany({ where: { findingId: existing.id }, data: { findingId: null } })
       await tx.auditFinding.delete({ where: { id: existing.id } })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -4275,9 +4744,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.status(204).send()
-  }))
+  })
+  app.delete('/api/processes/:processId/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, deleteAuditFindingHandler)
+  app.delete('/api/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditFindingHandler))
 
-  app.get('/api/processes/:processId/audits/:auditId/evidences', authMiddleware, asyncHandler(async (request, response) => {
+  const listAuditEvidencesHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4296,9 +4767,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       orderBy: [{ createdAt: 'asc' }],
     })
     response.json({ evidences: evidences.map(auditEvidenceView) })
-  }))
+  })
+  app.get('/api/processes/:processId/audits/:auditId/evidences', authMiddleware, listAuditEvidencesHandler)
+  app.get('/api/audits/:auditId/evidences', authMiddleware, withAuditProcessParam(listAuditEvidencesHandler))
 
-  app.post('/api/processes/:processId/audits/:auditId/evidences', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const createAuditEvidenceHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4366,9 +4839,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.status(201).json({ evidence: auditEvidenceView(evidence) })
-  }))
+  })
+  app.post('/api/processes/:processId/audits/:auditId/evidences', authMiddleware, userWriteGuard, createAuditEvidenceHandler)
+  app.post('/api/audits/:auditId/evidences', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditEvidenceHandler))
 
-  app.patch('/api/processes/:processId/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const updateAuditEvidenceHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, evidenceId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4450,9 +4925,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.json({ evidence: auditEvidenceView(evidence) })
-  }))
+  })
+  app.patch('/api/processes/:processId/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, updateAuditEvidenceHandler)
+  app.patch('/api/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditEvidenceHandler))
 
-  app.delete('/api/processes/:processId/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+  const deleteAuditEvidenceHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, evidenceId: idReference }).safeParse({
       processId: String(request.params.processId),
       auditId: String(request.params.auditId),
@@ -4501,7 +4978,1126 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     response.status(204).send()
+  })
+  app.delete('/api/processes/:processId/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, deleteAuditEvidenceHandler)
+  app.delete('/api/audits/:auditId/evidences/:evidenceId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditEvidenceHandler))
+
+  // ---- Aseguramiento de Calidad: rutas top-level ----
+  // Listado transversal de auditorías de la empresa con indicadores server-side (hallazgos,
+  // acciones y checklist) para el panel de Calidad. El scope de empresa es el mismo que en el
+  // resto de rutas top-level: scopeForCompany para usuarios de empresa, sin filtro para SUPERUSER.
+  app.get('/api/audits', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = auditQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid audit filters', details: parsed.error.issues })
+      return
+    }
+    const { status, search, processId } = parsed.data
+    const where: Prisma.AuditWhereInput = {
+      process: {
+        company: scopeForCompany(request),
+        ...(processId ? { id: processId } : {}),
+      },
+      ...(status ? { status } : {}),
+      ...(search ? {
+        OR: [
+          { code: { contains: search, mode: 'insensitive' } },
+          { title: { contains: search, mode: 'insensitive' } },
+        ],
+      } : {}),
+    }
+    const audits = await db.audit.findMany({
+      where,
+      include: {
+        ...auditInclude,
+        checklists: { include: checklistInclude },
+        findings: {
+          include: { actions: { select: { status: true, required: true } } },
+        },
+      },
+      orderBy: [{ code: 'asc' }, { createdAt: 'desc' }],
+    })
+    response.json({
+      audits: audits.map((audit) => {
+        const allItems = audit.checklists.flatMap((checklist) => checklist.items)
+        const requiredPending = allItems.filter((item) => item.required && item.result === 'PENDING').length
+        const openFindings = audit.findings.filter((finding) => finding.status !== 'VERIFIED').length
+        const openActions = audit.findings.flatMap((finding) => finding.actions).filter((action) => action.required && !['COMPLETED', 'CANCELLED'].includes(action.status)).length
+        return {
+          ...auditView(audit as unknown as AuditWithInclude),
+          indicators: {
+            findings: audit.findings.length,
+            openFindings,
+            checklistTotal: allItems.length,
+            checklistRequiredPending: requiredPending,
+            openRequiredActions: openActions,
+          },
+        }
+      }),
+    })
   }))
+
+  // Detalle completo de una auditoría (checklists, hallazgos con acciones, evidencias en disco y
+  // relaciones) para la vista de seguimiento sin ir y volver a la lista.
+  app.get('/api/audits/:auditId', authMiddleware, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const full = await db.audit.findUnique({ where: { id: audit.id }, include: auditDetailInclude })
+    if (!full) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    response.json({ audit: auditDetailView(full) })
+  }))
+
+  // Sustituye el conjunto de procesos y procedimientos relacionados con la auditoría. El proceso
+  // principal no se toca (sigue siendo el ancla del código y del tenant); los demás se validan
+  // contra la empresa y se registran en el historial.
+  app.put('/api/audits/:auditId/relations', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = auditRelationsUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid relations data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const companyId = audit.process.companyId
+    const relations = await validateAuditRelations(companyId, audit.processId, parsed.data)
+    if (!relations.ok) {
+      response.status(relations.status).json({ error: relations.error })
+      return
+    }
+    const actor = auditActorOf(request)
+    const result = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const sync = await syncAuditRelations(tx, audit.id, relations.processIds, relations.procedureIds)
+      if (sync.changed) {
+        await auditEventWrite(tx, {
+          auditId: audit.id,
+          eventType: 'AUDIT_RELATIONS_UPDATED',
+          summary: 'Relaciones de procesos y procedimientos actualizadas',
+          actor,
+          metadata: {
+            addedProcessIds: sync.addedProcessIds,
+            removedProcessIds: sync.removedProcessIds,
+            addedProcedureIds: sync.addedProcedureIds,
+            removedProcedureIds: sync.removedProcedureIds,
+          },
+        })
+      }
+      const full = await tx.audit.findUnique({ where: { id: audit.id }, include: auditRelationsInclude })
+      return full
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.json({ relations: auditRelationsView(result as unknown as AuditWithRelations) })
+  }))
+
+  // ---- Listas de verificación ----
+  const listAuditChecklistsHandler = asyncHandler(async (request, response) => {
+    const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const checklists = await db.auditChecklist.findMany({
+      where: { auditId: audit.id },
+      include: checklistInclude,
+      orderBy: [{ createdAt: 'asc' }],
+    })
+    response.json({
+      checklists: checklists.map((checklist) => ({
+        ...checklistView(checklist),
+        progress: checklistProgress(checklist),
+      })),
+    })
+  })
+  app.get('/api/audits/:auditId/checklists', authMiddleware, withAuditProcessParam(listAuditChecklistsHandler))
+  app.get('/api/processes/:processId/audits/:auditId/checklists', authMiddleware, listAuditChecklistsHandler)
+
+  const createAuditChecklistHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid audit id' })
+      return
+    }
+    const parsed = auditChecklistCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid checklist data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const checklist = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const created = await tx.auditChecklist.create({
+        data: { auditId: audit.id, name: parsed.data.name },
+        include: checklistInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_CREATED',
+        summary: `Lista de verificación «${created.name}» creada`,
+        actor,
+        changes: [{ field: 'name', label: 'Nombre', previousValue: null, newValue: created.name }],
+        metadata: { checklistId: created.id },
+      })
+      return created
+    })
+    if (!checklist) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(201).json({ checklist: { ...checklistView(checklist), progress: checklistProgress(checklist) } })
+  })
+  app.post('/api/audits/:auditId/checklists', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditChecklistHandler))
+  app.post('/api/processes/:processId/audits/:auditId/checklists', authMiddleware, userWriteGuard, createAuditChecklistHandler)
+
+  const updateAuditChecklistHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, checklistId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      checklistId: String(request.params.checklistId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid checklist id' })
+      return
+    }
+    const parsed = auditChecklistUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid checklist data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await db.auditChecklist.findFirst({
+      where: { id: parsedIds.data.checklistId, auditId: audit.id },
+      include: checklistInclude,
+    })
+    if (!existing) {
+      response.status(404).json({ error: 'Checklist not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const changes: RiskAuditChange[] = []
+    const data: Prisma.AuditChecklistUncheckedUpdateInput = {}
+    if (parsed.data.name !== undefined && parsed.data.name !== existing.name) {
+      data.name = parsed.data.name
+      changes.push({ field: 'name', label: 'Nombre', previousValue: existing.name, newValue: parsed.data.name })
+    }
+    if (changes.length === 0) {
+      response.json({ checklist: { ...checklistView(existing), progress: checklistProgress(existing) } })
+      return
+    }
+    const actor = auditActorOf(request)
+    const checklist = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const updated = await tx.auditChecklist.update({ where: { id: existing.id }, data, include: checklistInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_UPDATED',
+        summary: `Lista de verificación «${updated.name}» actualizada`,
+        actor,
+        changes,
+        metadata: { checklistId: updated.id },
+      })
+      return updated
+    })
+    if (!checklist) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.json({ checklist: { ...checklistView(checklist), progress: checklistProgress(checklist) } })
+  })
+  app.patch('/api/audits/:auditId/checklists/:checklistId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditChecklistHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/checklists/:checklistId', authMiddleware, userWriteGuard, updateAuditChecklistHandler)
+
+  const deleteAuditChecklistHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, checklistId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      checklistId: String(request.params.checklistId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid checklist id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await db.auditChecklist.findFirst({
+      where: { id: parsedIds.data.checklistId, auditId: audit.id },
+      select: { id: true, name: true },
+    })
+    if (!existing) {
+      response.status(404).json({ error: 'Checklist not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const deleted = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return false
+      await tx.auditChecklist.delete({ where: { id: existing.id } })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_DELETED',
+        summary: `Lista de verificación «${existing.name}» eliminada`,
+        actor,
+        changes: [{ field: 'name', label: 'Nombre', previousValue: existing.name, newValue: null }],
+        metadata: { checklistId: existing.id },
+      })
+      return true
+    })
+    if (!deleted) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(204).send()
+  })
+  app.delete('/api/audits/:auditId/checklists/:checklistId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditChecklistHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/checklists/:checklistId', authMiddleware, userWriteGuard, deleteAuditChecklistHandler)
+
+  const createAuditChecklistItemHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, checklistId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      checklistId: String(request.params.checklistId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid checklist id' })
+      return
+    }
+    const parsed = auditChecklistItemCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid checklist item data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const checklist = await db.auditChecklist.findFirst({
+      where: { id: parsedIds.data.checklistId, auditId: audit.id },
+      select: { id: true, name: true },
+    })
+    if (!checklist) {
+      response.status(404).json({ error: 'Checklist not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    // Sin posición explícita el ítem va al final: evita huecos y reordenes accidentales.
+    const position = parsed.data.position ?? await db.auditChecklistItem.count({ where: { checklistId: checklist.id } })
+    const actor = auditActorOf(request)
+    const item = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const created = await tx.auditChecklistItem.create({
+        data: {
+          checklistId: checklist.id,
+          description: parsed.data.description,
+          criteria: parsed.data.criteria,
+          required: parsed.data.required ?? true,
+          position,
+        },
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_ITEM_CREATED',
+        summary: `Ítem «${created.description.slice(0, 80)}» añadido a la lista`,
+        actor,
+        changes: [
+          { field: 'description', label: 'Descripción', previousValue: null, newValue: created.description },
+          { field: 'required', label: 'Obligatorio', previousValue: null, newValue: String(created.required) },
+        ],
+        metadata: { checklistId: checklist.id, itemId: created.id },
+      })
+      return created
+    })
+    if (!item) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(201).json({ item: checklistItemView(item) })
+  })
+  app.post('/api/audits/:auditId/checklists/:checklistId/items', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditChecklistItemHandler))
+  app.post('/api/processes/:processId/audits/:auditId/checklists/:checklistId/items', authMiddleware, userWriteGuard, createAuditChecklistItemHandler)
+
+  const updateAuditChecklistItemHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, checklistId: idReference, itemId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      checklistId: String(request.params.checklistId),
+      itemId: String(request.params.itemId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid checklist item id' })
+      return
+    }
+    const parsed = auditChecklistItemUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid checklist item data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await db.auditChecklistItem.findFirst({
+      where: { id: parsedIds.data.itemId, checklistId: parsedIds.data.checklistId, checklist: { auditId: audit.id } },
+    })
+    if (!existing) {
+      response.status(404).json({ error: 'Checklist item not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const data: Prisma.AuditChecklistItemUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    if (parsed.data.description !== undefined && parsed.data.description !== existing.description) {
+      data.description = parsed.data.description
+      changes.push({ field: 'description', label: 'Descripción', previousValue: existing.description, newValue: parsed.data.description })
+    }
+    if (parsed.data.criteria !== undefined && parsed.data.criteria !== existing.criteria) {
+      data.criteria = parsed.data.criteria
+      changes.push({ field: 'criteria', label: 'Criterio', previousValue: existing.criteria, newValue: parsed.data.criteria })
+    }
+    if (parsed.data.result !== undefined && parsed.data.result !== existing.result) {
+      data.result = parsed.data.result
+      changes.push({ field: 'result', label: 'Resultado', previousValue: existing.result, newValue: parsed.data.result })
+    }
+    if (parsed.data.observations !== undefined && parsed.data.observations !== existing.observations) {
+      data.observations = parsed.data.observations || null
+      changes.push({ field: 'observations', label: 'Observaciones', previousValue: existing.observations, newValue: data.observations as string | null })
+    }
+    if (parsed.data.required !== undefined && parsed.data.required !== existing.required) {
+      data.required = parsed.data.required
+      changes.push({ field: 'required', label: 'Obligatorio', previousValue: String(existing.required), newValue: String(parsed.data.required) })
+    }
+    if (parsed.data.position !== undefined && parsed.data.position !== existing.position) {
+      data.position = parsed.data.position
+      changes.push({ field: 'position', label: 'Posición', previousValue: String(existing.position), newValue: String(parsed.data.position) })
+    }
+    if (changes.length === 0) {
+      response.json({ item: checklistItemView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    const item = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const updated = await tx.auditChecklistItem.update({ where: { id: existing.id }, data })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_ITEM_UPDATED',
+        summary: `Ítem «${updated.description.slice(0, 80)}» actualizado`,
+        actor,
+        changes,
+        metadata: { checklistId: existing.checklistId, itemId: updated.id },
+      })
+      return updated
+    })
+    if (!item) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.json({ item: checklistItemView(item) })
+  })
+  app.patch('/api/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditChecklistItemHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, updateAuditChecklistItemHandler)
+
+  const deleteAuditChecklistItemHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, checklistId: idReference, itemId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      checklistId: String(request.params.checklistId),
+      itemId: String(request.params.itemId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid checklist item id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await db.auditChecklistItem.findFirst({
+      where: { id: parsedIds.data.itemId, checklistId: parsedIds.data.checklistId, checklist: { auditId: audit.id } },
+      select: { id: true, description: true, checklistId: true },
+    })
+    if (!existing) {
+      response.status(404).json({ error: 'Checklist item not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const deleted = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return false
+      // Los hallazgos anclados al ítem sobreviven con itemId en null (SET NULL); los archivos de
+      // evidencia del ítem también se desanclan para no perder el PDF.
+      await tx.auditFinding.updateMany({ where: { itemId: existing.id }, data: { itemId: null } })
+      await tx.auditEvidenceFile.updateMany({ where: { itemId: existing.id }, data: { itemId: null } })
+      await tx.auditChecklistItem.delete({ where: { id: existing.id } })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CHECKLIST_ITEM_DELETED',
+        summary: `Ítem «${existing.description.slice(0, 80)}» eliminado`,
+        actor,
+        changes: [{ field: 'description', label: 'Descripción', previousValue: existing.description, newValue: null }],
+        metadata: { checklistId: existing.checklistId, itemId: existing.id },
+      })
+      return true
+    })
+    if (!deleted) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(204).send()
+  })
+  app.delete('/api/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditChecklistItemHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, deleteAuditChecklistItemHandler)
+
+  // ---- Evidencias en PDF (archivos privados) ----
+  // Mismo contrato que la evidencia de tickets: multipart, solo PDF, validación de firma antes de
+  // tocar disco, descarga autenticada y nombre en disco nunca expuesto al cliente.
+  const resolveAuditEvidenceAnchor = async (audit: { id: string }, data: { findingId?: string | null; actionId?: string | null; itemId?: string | null }) => {
+    const anchors = { findingId: null as string | null, actionId: null as string | null, itemId: null as string | null }
+    const provided = [data.findingId, data.actionId, data.itemId].filter(Boolean)
+    if (provided.length > 1) {
+      return { ok: false as const, status: 400 as const, error: 'A file can be attached to at most one of finding, action or checklist item' }
+    }
+    if (data.findingId) {
+      const finding = await db.auditFinding.findFirst({ where: { id: data.findingId, auditId: audit.id }, select: { id: true } })
+      if (!finding) return { ok: false as const, status: 404 as const, error: 'Finding not found' }
+      anchors.findingId = finding.id
+    }
+    if (data.actionId) {
+      const action = await db.auditCorrectiveAction.findFirst({
+        where: { id: data.actionId, finding: { auditId: audit.id } },
+        select: { id: true },
+      })
+      if (!action) return { ok: false as const, status: 404 as const, error: 'Corrective action not found' }
+      anchors.actionId = action.id
+    }
+    if (data.itemId) {
+      const item = await db.auditChecklistItem.findFirst({
+        where: { id: data.itemId, checklist: { auditId: audit.id } },
+        select: { id: true },
+      })
+      if (!item) return { ok: false as const, status: 404 as const, error: 'Checklist item not found' }
+      anchors.itemId = item.id
+    }
+    return { ok: true as const, ...anchors }
+  }
+
+  app.post('/api/audits/:auditId/evidence-files', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const contentTypeHeader = String(request.headers['content-type'] ?? '')
+    if (!/^multipart\/form-data\b/i.test(contentTypeHeader.trim())) {
+      throw new MultipartError(415, 'La evidencia debe subirse como multipart/form-data con el campo "file"')
+    }
+    const raw = await readRequestBuffer(request, MAX_UPLOAD_REQUEST_BYTES)
+    const parts = parseMultipartFormData(raw, contentTypeHeader)
+    const file = findMultipartFile(parts, 'file')
+    if (!file) {
+      throw new MultipartError(400, 'Falta el archivo PDF en el campo "file"')
+    }
+    const anchorPayload: { findingId?: string | null; actionId?: string | null; itemId?: string | null } = {}
+    // El campo de anclaje viaja como campo de texto del multipart (misma part que file).
+    for (const part of parts) {
+      if (part.filename) continue
+      if (part.fieldName === 'findingId' || part.fieldName === 'actionId' || part.fieldName === 'itemId') {
+        const value = part.data.toString('utf8').trim()
+        if (value) anchorPayload[part.fieldName] = value
+      }
+    }
+    const anchors = await resolveAuditEvidenceAnchor(audit, anchorPayload)
+    if (!anchors.ok) {
+      response.status(anchors.status).json({ error: anchors.error })
+      return
+    }
+    const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
+    const storedName = nextStoredName()
+    try {
+      await writeEvidenceFile(storedName, file.data)
+      const actor = auditActorOf(request)
+      const created = await db.$transaction(async (tx) => {
+        const locked = await lockAuditForWrite(tx, audit.id)
+        if (!locked) return null
+        const saved = await tx.auditEvidenceFile.create({
+          data: {
+            auditId: audit.id,
+            findingId: anchors.findingId,
+            actionId: anchors.actionId,
+            itemId: anchors.itemId,
+            filename: upload.filename,
+            storedName,
+            mimeType: upload.mimeType,
+            size: upload.size,
+            uploadedById: request.user!.id,
+          },
+          include: auditEvidenceFileInclude,
+        })
+        await auditEventWrite(tx, {
+          auditId: audit.id,
+          eventType: 'EVIDENCE_FILE_CREATED',
+          summary: `Evidencia «${saved.filename}» adjuntada`,
+          actor,
+          metadata: {
+            evidenceFileId: saved.id,
+            ...(saved.findingId ? { findingId: saved.findingId } : {}),
+            ...(saved.actionId ? { actionId: saved.actionId } : {}),
+            ...(saved.itemId ? { itemId: saved.itemId } : {}),
+          },
+        })
+        return saved
+      })
+      if (!created) {
+        const { failed } = await removeEvidenceFiles([storedName])
+        if (failed.length > 0) {
+          console.error('[evidence] no se pudo retirar el archivo tras rechazar la subida por estado', { auditId: audit.id, storedName, failed })
+        }
+        response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+        return
+      }
+      response.status(201).json({ file: auditEvidenceFileView(created) })
+    } catch (error) {
+      const { failed } = await removeEvidenceFiles([storedName])
+      if (failed.length > 0) {
+        console.error('[evidence] no se pudo retirar el archivo tras fallar la subida', { auditId: audit.id, storedName, failed })
+      }
+      throw error
+    }
+  }))
+
+  app.get('/api/audits/:auditId/evidence-files', authMiddleware, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const files = await db.auditEvidenceFile.findMany({
+      where: { auditId: audit.id },
+      include: auditEvidenceFileInclude,
+      orderBy: [{ createdAt: 'desc' }],
+    })
+    response.json({ files: files.map(auditEvidenceFileView) })
+  }))
+
+  app.get('/api/audits/:auditId/evidence-files/:fileId', authMiddleware, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const record = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id } })
+    if (!record) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    let data: Buffer
+    try {
+      data = await readEvidenceFile(record.storedName)
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        response.status(404).json({ error: 'El archivo de evidencia ya no está disponible' })
+        return
+      }
+      throw error
+    }
+    response.setHeader('Content-Type', record.mimeType)
+    response.setHeader('Content-Length', String(data.length))
+    response.setHeader('Content-Disposition', `attachment; filename="${sanitizeUploadFilename(record.filename)}"`)
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('Cache-Control', 'private, no-store')
+    response.send(data)
+  }))
+
+  app.delete('/api/audits/:auditId/evidence-files/:fileId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id } })
+    if (!existing) {
+      response.status(404).json({ error: 'Evidence not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const deleted = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return false
+      await tx.auditEvidenceFile.delete({ where: { id: existing.id } })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'EVIDENCE_FILE_DELETED',
+        summary: `Evidencia «${existing.filename}» eliminada`,
+        actor,
+        metadata: {
+          evidenceFileId: existing.id,
+          ...(existing.findingId ? { findingId: existing.findingId } : {}),
+          ...(existing.actionId ? { actionId: existing.actionId } : {}),
+          ...(existing.itemId ? { itemId: existing.itemId } : {}),
+        },
+      })
+      return true
+    })
+    if (!deleted) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const { failed } = await removeEvidenceFiles([existing.storedName])
+    if (failed.length > 0) {
+      console.error('[evidence] archivo no borrado tras eliminar la evidencia de auditoría', { auditId: audit.id, storedName: existing.storedName, failed })
+    }
+    response.status(204).send()
+  }))
+
+  // ---- Acciones correctivas ----
+  const findAccessibleAction = async (auditId: string, actionId: string) => {
+    const parsed = idReference.safeParse(actionId)
+    if (!parsed.success) return null
+    return db.auditCorrectiveAction.findFirst({
+      where: { id: parsed.data, finding: { auditId } },
+      include: auditActionInclude,
+    })
+  }
+
+  const listAuditActionsHandler = asyncHandler(async (request, response) => {
+    const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const actions = await db.auditCorrectiveAction.findMany({
+      where: { finding: { auditId: audit.id } },
+      include: auditActionInclude,
+      orderBy: [{ createdAt: 'asc' }],
+    })
+    response.json({ actions: actions.map(auditActionView) })
+  })
+  app.get('/api/audits/:auditId/actions', authMiddleware, withAuditProcessParam(listAuditActionsHandler))
+  app.get('/api/processes/:processId/audits/:auditId/actions', authMiddleware, listAuditActionsHandler)
+
+  const createAuditActionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid finding id' })
+      return
+    }
+    const parsed = auditCorrectiveActionCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid corrective action data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await db.auditFinding.findFirst({
+      where: { id: parsedIds.data.findingId, auditId: audit.id },
+      select: { id: true, title: true, status: true },
+    })
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status) || finding.status === AuditFindingStatus.VERIFIED) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'action responsible')
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const actor = auditActorOf(request)
+    const action = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const created = await tx.auditCorrectiveAction.create({
+        data: {
+          findingId: finding.id,
+          title: parsed.data.title,
+          description: parsed.data.description,
+          responsibleId: responsible.userId,
+          priority: parsed.data.priority ?? 'MEDIUM',
+          required: parsed.data.required ?? true,
+          dueDate: parsed.data.dueDate || null,
+        },
+        include: auditActionInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ACTION_CREATED',
+        summary: `Acción correctiva «${created.title}» creada`,
+        actor,
+        changes: [
+          { field: 'title', label: 'Título', previousValue: null, newValue: created.title },
+          { field: 'required', label: 'Obligatoria', previousValue: null, newValue: String(created.required) },
+        ],
+        metadata: { findingId: finding.id, actionId: created.id },
+      })
+      return created
+    })
+    if (!action) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(201).json({ action: auditActionView(action) })
+  })
+  app.post('/api/audits/:auditId/findings/:findingId/actions', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditActionHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/actions', authMiddleware, userWriteGuard, createAuditActionHandler)
+
+  const updateAuditActionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid action id' })
+      return
+    }
+    const parsed = auditCorrectiveActionUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid corrective action data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleAction(audit.id, parsedIds.data.actionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    // Un estado final no se edita: el cambio de estado es la vía única de cerrar o cancelar.
+    if (existing.status === AuditCorrectiveActionStatus.COMPLETED || existing.status === AuditCorrectiveActionStatus.CANCELLED) {
+      response.status(409).json({ error: 'A completed or cancelled corrective action cannot be edited' })
+      return
+    }
+    const data: Prisma.AuditCorrectiveActionUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    if (parsed.data.title !== undefined && parsed.data.title !== existing.title) {
+      data.title = parsed.data.title
+      changes.push({ field: 'title', label: 'Título', previousValue: existing.title, newValue: parsed.data.title })
+    }
+    if (parsed.data.description !== undefined && parsed.data.description !== existing.description) {
+      data.description = parsed.data.description
+      changes.push({ field: 'description', label: 'Descripción', previousValue: existing.description, newValue: parsed.data.description })
+    }
+    if (parsed.data.priority !== undefined && parsed.data.priority !== existing.priority) {
+      data.priority = parsed.data.priority
+      changes.push({ field: 'priority', label: 'Prioridad', previousValue: existing.priority, newValue: parsed.data.priority })
+    }
+    if (parsed.data.required !== undefined && parsed.data.required !== existing.required) {
+      data.required = parsed.data.required
+      changes.push({ field: 'required', label: 'Obligatoria', previousValue: String(existing.required), newValue: String(parsed.data.required) })
+    }
+    if (parsed.data.dueDate !== undefined) {
+      const nextDate = parsed.data.dueDate || null
+      if (nextDate?.getTime() !== existing.dueDate?.getTime()) {
+        data.dueDate = nextDate
+        changes.push({ field: 'dueDate', label: 'Fecha límite', previousValue: auditValue(existing.dueDate), newValue: auditValue(nextDate) })
+      }
+    }
+    if (parsed.data.responsibleId !== undefined) {
+      const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'action responsible')
+      if (!responsible.ok) {
+        response.status(responsible.status).json({ error: responsible.error })
+        return
+      }
+      if (responsible.userId !== existing.responsibleId) {
+        data.responsibleId = responsible.userId
+        const nextName = responsible.userId
+          ? await db.user.findUnique({ where: { id: responsible.userId }, select: { name: true } }).then((user) => user?.name ?? null)
+          : null
+        changes.push({ field: 'responsibleId', label: 'Responsable', previousValue: existing.responsible?.name ?? null, newValue: nextName })
+      }
+    }
+    if (changes.length === 0) {
+      response.json({ action: auditActionView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    const action = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ACTION_UPDATED',
+        summary: `Acción correctiva «${updated.title}» actualizada`,
+        actor,
+        changes,
+        metadata: { findingId: existing.findingId, actionId: updated.id },
+      })
+      return updated
+    })
+    if (!action) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.json({ action: auditActionView(action) })
+  })
+  app.patch('/api/audits/:auditId/actions/:actionId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditActionHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/actions/:actionId', authMiddleware, userWriteGuard, updateAuditActionHandler)
+
+  const changeAuditActionStatusHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid action id' })
+      return
+    }
+    const parsed = auditCorrectiveActionStatusChangeSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid status change', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleAction(audit.id, parsedIds.data.actionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if (!canTransitionAuditAction(existing.status, parsed.data.status)) {
+      response.status(409).json({ error: 'Invalid corrective action status transition' })
+      return
+    }
+    const data: Prisma.AuditCorrectiveActionUncheckedUpdateInput = { status: parsed.data.status }
+    if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED) data.completedAt = new Date()
+    if (parsed.data.status === AuditCorrectiveActionStatus.CANCELLED || parsed.data.status === AuditCorrectiveActionStatus.OPEN) data.completedAt = null
+    const changes: RiskAuditChange[] = [
+      { field: 'status', label: 'Estado de la acción', previousValue: existing.status, newValue: parsed.data.status },
+    ]
+    const actor = auditActorOf(request)
+    const action = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ACTION_STATUS_CHANGED',
+        summary: `Acción correctiva «${updated.title}» ${auditActionStatusNames[parsed.data.status].toLowerCase()}`,
+        actor,
+        changes,
+        metadata: { findingId: existing.findingId, actionId: updated.id, previousStatus: existing.status, newStatus: parsed.data.status },
+      })
+      return updated
+    })
+    if (!action) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.json({ action: auditActionView(action) })
+  })
+  app.post('/api/audits/:auditId/actions/:actionId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeAuditActionStatusHandler))
+  app.post('/api/processes/:processId/audits/:auditId/actions/:actionId/status', authMiddleware, userWriteGuard, changeAuditActionStatusHandler)
+
+  const addAuditActionProgressHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid action id' })
+      return
+    }
+    const parsed = auditActionProgressCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid progress data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleAction(audit.id, parsedIds.data.actionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if (existing.status === AuditCorrectiveActionStatus.COMPLETED || existing.status === AuditCorrectiveActionStatus.CANCELLED) {
+      response.status(409).json({ error: 'A completed or cancelled corrective action cannot receive progress' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const entry = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const created = await tx.auditActionProgress.create({
+        data: {
+          actionId: existing.id,
+          note: parsed.data.note,
+          percent: parsed.data.percent ?? null,
+          createdById: request.user?.id ?? null,
+        },
+        include: { createdBy: { select: { id: true, name: true } } },
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ACTION_PROGRESS_ADDED',
+        summary: `Avance registrado en «${existing.title}»`,
+        actor,
+        changes: [{ field: 'note', label: 'Avance', previousValue: null, newValue: created.note }],
+        metadata: { findingId: existing.findingId, actionId: existing.id, progressId: created.id },
+      })
+      return created
+    })
+    if (!entry) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(201).json({ progress: auditActionProgressView(entry as never) })
+  })
+  app.post('/api/audits/:auditId/actions/:actionId/progress', authMiddleware, userWriteGuard, withAuditProcessParam(addAuditActionProgressHandler))
+  app.post('/api/processes/:processId/audits/:auditId/actions/:actionId/progress', authMiddleware, userWriteGuard, addAuditActionProgressHandler)
+
+  const deleteAuditActionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid action id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleAction(audit.id, parsedIds.data.actionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    // Una acción con progreso no se borra: el historial de avances es la prueba del seguimiento.
+    if (existing.progress.length > 0) {
+      response.status(409).json({ error: 'The corrective action has progress entries; cancel it instead' })
+      return
+    }
+    const actor = auditActorOf(request)
+    const deleted = await db.$transaction(async (tx) => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return false
+      await tx.auditEvidenceFile.updateMany({ where: { actionId: existing.id }, data: { actionId: null } })
+      await tx.auditCorrectiveAction.delete({ where: { id: existing.id } })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ACTION_UPDATED',
+        summary: `Acción correctiva «${existing.title}» eliminada`,
+        actor,
+        changes: [{ field: 'title', label: 'Título', previousValue: existing.title, newValue: null }],
+        metadata: { findingId: existing.findingId, actionId: existing.id },
+      })
+      return true
+    })
+    if (!deleted) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    response.status(204).send()
+  })
+  app.delete('/api/audits/:auditId/actions/:actionId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteAuditActionHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/actions/:actionId', authMiddleware, userWriteGuard, deleteAuditActionHandler)
 
   app.post('/api/diagnostics/:id/swot/items', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = swotItemCreateSchema.safeParse(request.body)
