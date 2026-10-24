@@ -3885,6 +3885,29 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     })
 
   /**
+   * Acciones correctivas obligatorias de TODA la auditoría sin estado final: además de frenar la
+   * resolución del hallazgo, bloquean el cierre de la auditoría. Se evalúa dentro de la transacción
+   * tras el bloqueo de fila, y toda escritura de acciones también pasa por ese bloqueo.
+   */
+  const pendingAuditRequiredActions = (client: Prisma.TransactionClient | PrismaClient, auditId: string) =>
+    client.auditCorrectiveAction.count({
+      where: { required: true, status: { notIn: ['COMPLETED', 'CANCELLED'] }, finding: { auditId } },
+    })
+
+  /**
+   * No conformidades ya resueltas sin verificación de eficacia: la misma regla que exige eficacia
+   * antes de verificar el hallazgo impide cerrar la auditoría mientras esas verificaciones sigan
+   * pendientes. Se filtra en memoria porque el umbral es de texto (>= 3 caracteres).
+   */
+  const pendingAuditEfficacyVerifications = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
+    const resolved = await client.auditFinding.findMany({
+      where: { auditId, type: 'NONCONFORMITY', status: 'RESOLVED' },
+      select: { efficacyVerification: true },
+    })
+    return resolved.filter((finding) => !finding.efficacyVerification || finding.efficacyVerification.trim().length < 3).length
+  }
+
+  /**
    * Valida los procesos y procedimientos que se quieren vincular a una auditoría: todos deben
    * pertenecer a la empresa del proceso principal (sin referencias cruzadas entre empresas). El
    * proceso principal se deduplica y no se guarda como vínculo (siempre aparece en la vista).
@@ -4201,24 +4224,43 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.status === AuditStatus.IN_PROGRESS && !existing.startDate) data.startDate = new Date()
     if (parsed.data.status === AuditStatus.CLOSED || parsed.data.status === AuditStatus.CANCELLED) data.endDate = new Date()
     if (parsed.data.status === AuditStatus.CLOSED) data.summary = parsed.data.summary!.trim()
-    const changes: RiskAuditChange[] = [
-      { field: 'status', label: 'Estado', previousValue: existing.status, newValue: parsed.data.status },
-      ...(parsed.data.summary && parsed.data.status === AuditStatus.CLOSED
-        ? [{ field: 'summary', label: 'Resumen de cierre', previousValue: auditValue(existing.summary), newValue: auditValue(parsed.data.summary.trim()) }]
-        : []),
-    ]
     const actor = auditActorOf(request)
-    const result = await db.$transaction(async (tx) => {
+    // El tipo de retorno se anota a mano: con la inferencia del genérico de $transaction,
+    // 'blocked' in result no estrecha la unión y typeof result.blocked queda con undefined.
+    type AuditStatusChangeResult =
+      | null
+      | { blocked: 'CHECKLIST_PENDING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING'; pending: number }
+      | { invalidTransition: true }
+      | { audit: AuditWithInclude }
+    const result = await db.$transaction(async (tx): Promise<AuditStatusChangeResult> => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
-      // Gate de listas de verificación: cerrar exige que ningún ítem obligatorio siga en PENDING.
-      // El recuento ocurre DESPUÉS de bloquear la fila de la auditoría, y toda escritura de ítems
-      // también pasa por ese bloqueo, así que no se cuela una creación concurrente.
+      if (!canTransitionAudit(locked.status, parsed.data.status)) return { invalidTransition: true }
+      // Gate de cierre: cerrar exige que ningún ítem obligatorio siga en PENDING, que no queden
+      // acciones correctivas obligatorias sin estado final y que las no conformidades resueltas
+      // tengan verificación de eficacia. Los recuentos ocurren DESPUÉS de bloquear la fila de la
+      // auditoría, y toda escritura de ítems, acciones y hallazgos también pasa por ese bloqueo,
+      // así que no se cuela una creación concurrente.
       if (parsed.data.status === AuditStatus.CLOSED) {
         const pending = await pendingRequiredItems(tx, existing.id)
         if (pending > 0) return { blocked: 'CHECKLIST_PENDING' as const, pending }
+        const openActions = await pendingAuditRequiredActions(tx, existing.id)
+        if (openActions > 0) return { blocked: 'ACTIONS_PENDING' as const, pending: openActions }
+        const pendingEfficacy = await pendingAuditEfficacyVerifications(tx, existing.id)
+        if (pendingEfficacy > 0) return { blocked: 'EFFICACY_PENDING' as const, pending: pendingEfficacy }
       }
-      const updated = await tx.audit.update({ where: { id: existing.id }, data, include: auditInclude })
+      const updateData = { ...data }
+      if (parsed.data.status === AuditStatus.IN_PROGRESS) {
+        if (locked.startDate) delete updateData.startDate
+        else updateData.startDate = new Date()
+      }
+      const changes: RiskAuditChange[] = [
+        { field: 'status', label: 'Estado', previousValue: locked.status, newValue: parsed.data.status },
+        ...(parsed.data.summary && parsed.data.status === AuditStatus.CLOSED
+          ? [{ field: 'summary', label: 'Resumen de cierre', previousValue: auditValue(locked.summary), newValue: auditValue(parsed.data.summary.trim()) }]
+          : []),
+      ]
+      const updated = await tx.audit.update({ where: { id: existing.id }, data: updateData, include: auditInclude })
       await auditEventWrite(tx, {
         auditId: updated.id,
         eventType: 'STATUS_CHANGED',
@@ -4233,10 +4275,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
+    if ('invalidTransition' in result) {
+      response.status(409).json({ error: 'Invalid audit status transition' })
+      return
+    }
     if ('blocked' in result) {
+      const blockedMessages: Record<typeof result.blocked, string> = {
+        CHECKLIST_PENDING: `The audit cannot be closed while ${result.pending} required checklist item(s) are still pending`,
+        ACTIONS_PENDING: `The audit cannot be closed while ${result.pending} required corrective action(s) are still open`,
+        EFFICACY_PENDING: `The audit cannot be closed while ${result.pending} nonconformity(ies) still require an efficacy verification`,
+      }
       response.status(409).json({
-        error: `The audit cannot be closed while ${result.pending} required checklist item(s) are still pending`,
+        error: blockedMessages[result.blocked],
         reason: result.blocked,
+        pending: result.pending,
       })
       return
     }
@@ -4299,9 +4351,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const existing = await db.audit.findUnique({ where: { id: parsedIds.data.auditId }, select: { id: true, processId: true, code: true } })
+    const existing = await db.audit.findUnique({ where: { id: parsedIds.data.auditId }, select: { id: true, processId: true, code: true, status: true } })
     if (!existing || existing.processId !== process.id) {
       response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (isTerminalAuditStatus(existing.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
     // Una auditoría con hallazgos no se borra: su baja es CANCELLED, que conserva la evidencia
@@ -4315,13 +4371,27 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // vínculos e historial acompañan en la misma transacción (las claves foráneas son Restrict
     // sobre Audit y CASCADE no basta si el cliente de prueba no replica el motor). Los nombres en
     // disco se leen antes para limpiar los PDF después de confirmar la baja en base de datos.
-    const storedNames = (await db.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { storedName: true } })).map((file) => file.storedName)
-    await db.$transaction(async (tx) => {
+    const deletion = await db.$transaction(async (tx): Promise<string[] | false | null> => {
+      const locked = await lockAuditForWrite(tx, existing.id)
+      if (!locked) return null
+      const lockedFinding = await tx.auditFinding.findFirst({ where: { auditId: existing.id }, select: { id: true } })
+      if (lockedFinding) return false
+      const storedNames = (await tx.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { storedName: true } })).map((file) => file.storedName)
       await tx.auditEvidenceFile.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvidence.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvent.deleteMany({ where: { auditId: existing.id } })
       await tx.audit.delete({ where: { id: existing.id } })
+      return storedNames
     })
+    if (deletion === null) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if (deletion === false) {
+      response.status(409).json({ error: 'The audit has findings; cancel it instead' })
+      return
+    }
+    const storedNames = deletion
     if (storedNames.length > 0) {
       const { failed } = await removeEvidenceFiles(storedNames)
       if (failed.length > 0) {
@@ -4629,28 +4699,52 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const data: Prisma.AuditFindingUncheckedUpdateInput = { status: parsed.data.status }
-    const changes: RiskAuditChange[] = [
-      { field: 'status', label: 'Estado del hallazgo', previousValue: existing.status, newValue: parsed.data.status },
-    ]
-    if (parsed.data.status === AuditFindingStatus.RESOLVED) {
-      data.resolution = parsed.data.resolution!.trim()
-      changes.push({ field: 'resolution', label: 'Resolución', previousValue: auditValue(existing.resolution), newValue: auditValue(data.resolution) })
-    }
-    if (parsed.data.status === AuditFindingStatus.VERIFIED) {
-      data.verifiedById = request.user?.id ?? null
-      data.verifiedAt = new Date()
-      changes.push({ field: 'verifiedAt', label: 'Verificado', previousValue: null, newValue: auditValue(data.verifiedAt) })
-    }
     const actor = auditActorOf(request)
-    const result = await db.$transaction(async (tx) => {
+    type FindingStatusChangeResult =
+      | null
+      | { conflict: true }
+      | { blocked: 'ACTIONS_PENDING'; pending: number }
+      | { finding: AuditFindingWithInclude }
+    const result = await db.$transaction(async (tx): Promise<FindingStatusChangeResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.id }, include: auditFindingInclude })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id || !canTransitionAuditFinding(lockedFinding.status, parsed.data.status)) {
+        return { conflict: true }
+      }
+      if (parsed.data.status === AuditFindingStatus.VERIFIED && !lockedFinding.resolution) return { conflict: true }
+      if (parsed.data.status === AuditFindingStatus.VERIFIED && lockedFinding.type === 'NONCONFORMITY' && (!lockedFinding.efficacyVerification || lockedFinding.efficacyVerification.trim().length < 3)) {
+        return { conflict: true }
+      }
+      if (parsed.data.status === AuditFindingStatus.RESOLVED) {
+        data.resolution = parsed.data.resolution!.trim()
+      }
+      if (parsed.data.status === AuditFindingStatus.VERIFIED) {
+        data.verifiedById = request.user?.id ?? null
+        data.verifiedAt = new Date()
+        if (lockedFinding.type === 'NONCONFORMITY') {
+          data.efficacyVerifiedById = request.user?.id ?? null
+          data.efficacyVerifiedAt = data.verifiedAt
+        }
+      }
       // Gate de acciones correctivas: ninguna obligatoria sin estado final impide resolver el
       // hallazgo. El recuento ocurre con la fila de la auditoría bloqueada, de modo que no se
       // cuela una creación concurrente de acciones mientras se resuelve.
       if (parsed.data.status === AuditFindingStatus.RESOLVED) {
-        const pending = await pendingRequiredActions(tx, existing.id)
+        const pending = await pendingRequiredActions(tx, lockedFinding.id)
         if (pending > 0) return { blocked: 'ACTIONS_PENDING' as const, pending }
+      }
+      const changes: RiskAuditChange[] = [
+        { field: 'status', label: 'Estado del hallazgo', previousValue: lockedFinding.status, newValue: parsed.data.status },
+      ]
+      if (parsed.data.status === AuditFindingStatus.RESOLVED) {
+        changes.push({ field: 'resolution', label: 'Resolución', previousValue: auditValue(lockedFinding.resolution), newValue: auditValue(data.resolution) })
+      }
+      if (parsed.data.status === AuditFindingStatus.VERIFIED) {
+        changes.push({ field: 'verifiedAt', label: 'Verificado', previousValue: auditValue(lockedFinding.verifiedAt), newValue: auditValue(data.verifiedAt) })
+        if (lockedFinding.type === 'NONCONFORMITY') {
+          changes.push({ field: 'efficacyVerifiedAt', label: 'Eficacia verificada', previousValue: auditValue(lockedFinding.efficacyVerifiedAt), newValue: auditValue(data.efficacyVerifiedAt) })
+        }
       }
       const updated = await tx.auditFinding.update({ where: { id: existing.id }, data, include: auditFindingInclude })
       await auditEventWrite(tx, {
@@ -4667,10 +4761,15 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
+    if ('conflict' in result) {
+      response.status(409).json({ error: 'The finding changed before this transition was applied; reload and try again' })
+      return
+    }
     if ('blocked' in result) {
       response.status(409).json({
         error: `The finding cannot be resolved while ${result.pending} required corrective action(s) are still open`,
         reason: result.blocked,
+        pending: result.pending,
       })
       return
     }
@@ -5953,13 +6052,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const data: Prisma.AuditCorrectiveActionUncheckedUpdateInput = { status: parsed.data.status }
     if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED) data.completedAt = new Date()
     if (parsed.data.status === AuditCorrectiveActionStatus.CANCELLED || parsed.data.status === AuditCorrectiveActionStatus.OPEN) data.completedAt = null
-    const changes: RiskAuditChange[] = [
-      { field: 'status', label: 'Estado de la acción', previousValue: existing.status, newValue: parsed.data.status },
-    ]
     const actor = auditActorOf(request)
-    const action = await db.$transaction(async (tx) => {
+    type ActionStatusChangeResult = null | { conflict: true } | { action: AuditActionWithInclude }
+    const action = await db.$transaction(async (tx): Promise<ActionStatusChangeResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: existing.id }, include: auditActionInclude })
+      if (!lockedAction || lockedAction.findingId !== existing.findingId || !canTransitionAuditAction(lockedAction.status, parsed.data.status)) {
+        return { conflict: true }
+      }
+      const changes: RiskAuditChange[] = [
+        { field: 'status', label: 'Estado de la acción', previousValue: lockedAction.status, newValue: parsed.data.status },
+      ]
       const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -5967,15 +6071,19 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         summary: `Acción correctiva «${updated.title}» ${auditActionStatusNames[parsed.data.status].toLowerCase()}`,
         actor,
         changes,
-        metadata: { findingId: existing.findingId, actionId: updated.id, previousStatus: existing.status, newStatus: parsed.data.status },
+        metadata: { findingId: lockedAction.findingId, actionId: updated.id, previousStatus: lockedAction.status, newStatus: parsed.data.status },
       })
-      return updated
+      return { action: updated }
     })
     if (!action) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.json({ action: auditActionView(action) })
+    if ('conflict' in action) {
+      response.status(409).json({ error: 'The corrective action changed before this transition was applied; reload and try again' })
+      return
+    }
+    response.json({ action: auditActionView(action.action) })
   })
   app.post('/api/audits/:auditId/actions/:actionId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeAuditActionStatusHandler))
   app.post('/api/processes/:processId/audits/:auditId/actions/:actionId/status', authMiddleware, userWriteGuard, changeAuditActionStatusHandler)

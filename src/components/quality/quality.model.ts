@@ -1,10 +1,12 @@
 import type {
   Audit,
   AuditChecklistResult,
+  AuditCorrectiveAction,
   AuditCorrectiveActionPriority,
   AuditCorrectiveActionStatus,
   AuditEvent,
   AuditEventType,
+  AuditEvidenceFile,
   AuditFinding,
   AuditFindingSeverity,
   AuditFindingStatus,
@@ -151,10 +153,12 @@ export const auditModuleLabels = {
   auditEventLabels,
 }
 
+// El draft del formulario unifica proceso principal y relaciones en dos listas: processIds
+// (el primero es el ancla `processId` del backend, obligatoria) y procedureIds. El formulario
+// decide el ancla al crear; en edición la ancla es inmutable y se envía solo como referencia.
 export type AuditDraft = {
   title: string
   auditType: AuditKind | ''
-  processId: string
   scope: string
   objectives: string
   criteria: string
@@ -166,20 +170,19 @@ export type AuditDraft = {
 }
 
 export const emptyAuditDraft: AuditDraft = {
-  title: '', auditType: '', processId: '', scope: '', objectives: '', criteria: '', plannedDate: '', leadAuditorId: '', responsibleId: '', processIds: [], procedureIds: [],
+  title: '', auditType: '', scope: '', objectives: '', criteria: '', plannedDate: '', leadAuditorId: '', responsibleId: '', processIds: [], procedureIds: [],
 }
 
 export const draftFromAudit = (audit: Audit): AuditDraft => ({
   title: audit.title,
   auditType: (audit.auditType === 'Interna' || audit.auditType === 'Externa' || audit.auditType === 'Mixta') ? audit.auditType : '',
-  processId: audit.processId,
   scope: audit.scope,
   objectives: audit.objectives ?? '',
   criteria: audit.criteria,
   plannedDate: audit.plannedDate ? audit.plannedDate.slice(0, 10) : '',
   leadAuditorId: audit.leadAuditor?.id ?? '',
   responsibleId: audit.responsible?.id ?? '',
-  processIds: (audit.relatedProcesses ?? []).map((process) => process.id),
+  processIds: [audit.processId, ...(audit.relatedProcesses ?? []).map((process) => process.id).filter((id) => id !== audit.processId)],
   procedureIds: (audit.procedures ?? []).map((procedure) => procedure.id),
 })
 
@@ -260,4 +263,138 @@ export const formatBytes = (size: number): string => {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ---- Espacio de ejecución de la auditoría (resumen, checklist, cierre guiado) ----
+
+/** Secciones del espacio de trabajo del detalle; espejo de las pestañas renderizadas. */
+export type AuditWorkspaceSection = 'resumen' | 'checklist' | 'hallazgos' | 'evidencias' | 'acciones' | 'historial'
+
+export type AuditCloseBlocker = {
+  reason: 'CHECKLIST_PENDING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING'
+  count: number
+  message: string
+  /** Sección del espacio de trabajo donde se resuelve el bloqueo. */
+  section: AuditWorkspaceSection
+}
+
+const isFinalActionStatus = (status: AuditCorrectiveActionStatus): boolean => status === 'COMPLETED' || status === 'CANCELLED'
+
+/**
+ * Condiciones de cierre calculadas en el cliente para el cierre guiado. Es el MISMO criterio que
+ * valida el servidor dentro de la transacción (server/app.ts changeAuditStatusHandler): aquí solo
+ * sirve para mostrar qué falta; la autoridad sigue siendo el backend.
+ */
+export const auditCloseBlockers = (audit: Audit): AuditCloseBlocker[] => {
+  const blockers: AuditCloseBlocker[] = []
+  const items = (audit.checklists ?? []).flatMap((checklist) => checklist.items)
+  const actions = (audit.findings ?? []).flatMap((finding) => finding.actions ?? [])
+  const requiredPending = items.filter((item) => item.required && item.result === 'PENDING').length
+  if (requiredPending > 0) {
+    blockers.push({
+      reason: 'CHECKLIST_PENDING',
+      count: requiredPending,
+      message: `${requiredPending} criterio(s) obligatorio(s) sin evaluar`,
+      section: 'checklist',
+    })
+  }
+  const openRequiredActions = actions.filter((action) => action.required && !isFinalActionStatus(action.status)).length
+  if (openRequiredActions > 0) {
+    blockers.push({
+      reason: 'ACTIONS_PENDING',
+      count: openRequiredActions,
+      message: `${openRequiredActions} acción(es) correctiva(s) obligatoria(s) pendiente(s)`,
+      section: 'acciones',
+    })
+  }
+  const pendingEfficacy = pendingEfficacyFindings(audit).length
+  if (pendingEfficacy > 0) {
+    blockers.push({
+      reason: 'EFFICACY_PENDING',
+      count: pendingEfficacy,
+      message: `${pendingEfficacy} no conformidad(es) sin verificación de eficacia`,
+      section: 'hallazgos',
+    })
+  }
+  return blockers
+}
+
+/** No conformidades resueltas cuya verificación de eficacia todavía no está registrada. */
+export const pendingEfficacyFindings = (audit: Audit): AuditFinding[] =>
+  (audit.findings ?? []).filter((finding) =>
+    finding.type === 'NONCONFORMITY'
+    && finding.status === 'RESOLVED'
+    && (!finding.efficacyVerification || finding.efficacyVerification.trim().length < 3))
+
+export type AuditExecutionSummary = {
+  itemsTotal: number
+  itemsEvaluated: number
+  itemsPending: number
+  itemsRequiredPending: number
+  conform: number
+  nonConform: number
+  notApplicable: number
+  findingsTotal: number
+  findingsOpen: number
+  findingsNonConformity: number
+  findingsObservation: number
+  findingsOpportunity: number
+  actionsTotal: number
+  actionsOpen: number
+  actionsRequiredOpen: number
+  actionsOverdue: number
+}
+
+/** Recuento de resultados para el resumen de cierre y los indicadores del espacio de trabajo. */
+export const auditExecutionSummary = (audit: Audit, today = new Date()): AuditExecutionSummary => {
+  const items = (audit.checklists ?? []).flatMap((checklist) => checklist.items)
+  const findings = audit.findings ?? []
+  const actions = findings.flatMap((finding) => finding.actions ?? [])
+  return {
+    itemsTotal: items.length,
+    itemsEvaluated: items.filter((item) => item.result !== 'PENDING').length,
+    itemsPending: items.filter((item) => item.result === 'PENDING').length,
+    itemsRequiredPending: items.filter((item) => item.required && item.result === 'PENDING').length,
+    conform: items.filter((item) => item.result === 'CONFORM').length,
+    nonConform: items.filter((item) => item.result === 'NON_CONFORM').length,
+    notApplicable: items.filter((item) => item.result === 'NOT_APPLICABLE').length,
+    findingsTotal: findings.length,
+    findingsOpen: findings.filter((finding) => finding.status !== 'VERIFIED').length,
+    findingsNonConformity: findings.filter((finding) => finding.type === 'NONCONFORMITY').length,
+    findingsObservation: findings.filter((finding) => finding.type === 'OBSERVATION').length,
+    findingsOpportunity: findings.filter((finding) => finding.type === 'OPPORTUNITY').length,
+    actionsTotal: actions.length,
+    actionsOpen: actions.filter((action) => !isFinalActionStatus(action.status)).length,
+    actionsRequiredOpen: actions.filter((action) => action.required && !isFinalActionStatus(action.status)).length,
+    actionsOverdue: actions.filter((action) => isAuditActionOverdue(action, today)).length,
+  }
+}
+
+/** Acción vencida: con fecha límite pasada y sin estado final (COMPLETED/CANCELLED). */
+export const isAuditActionOverdue = (action: Pick<AuditCorrectiveAction, 'dueDate' | 'status'>, today = new Date()): boolean => {
+  if (!action.dueDate || isFinalActionStatus(action.status)) return false
+  // Se interpreta como fin de día LOCAL: `new Date('YYYY-MM-DD')` cae en medianoche UTC y
+  // desplazaría un día la fecha límite en zonas con offset negativo (p. ej. America/Bogota).
+  const [year, month, day] = action.dueDate.slice(0, 10).split('-').map(Number)
+  if (!year || !month || !day) return false
+  const due = new Date(year, month - 1, day, 23, 59, 59, 999)
+  if (Number.isNaN(due.getTime())) return false
+  return due.getTime() < today.getTime()
+}
+
+/** Etiqueta de la relación de un archivo PDF de evidencia con el registro que lo origina. */
+export const evidenceFileRelationLabel = (file: AuditEvidenceFile, audit: Audit): string => {
+  if (file.findingId) {
+    const finding = audit.findings.find((item) => item.id === file.findingId)
+    return `Hallazgo: ${finding?.title ?? '—'}`
+  }
+  if (file.actionId) {
+    const action = audit.findings.flatMap((item) => item.actions ?? []).find((item) => item.id === file.actionId)
+    return `Acción: ${action?.title ?? '—'}`
+  }
+  if (file.itemId) {
+    const item = (audit.checklists ?? []).flatMap((checklist) => checklist.items).find((row) => row.id === file.itemId)
+    return `Criterio: ${item ? item.description.slice(0, 60) : '—'}`
+  }
+  return 'Auditoría'
 }

@@ -42,6 +42,7 @@ type AnyWhere = {
   checklistId?: string
   required?: boolean
   result?: string
+  type?: string
   process?: { companyId?: string; id?: string }
   finding?: { auditId?: string }
   checklist?: { auditId?: string }
@@ -83,6 +84,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     ...finding,
     responsible: userView(finding.responsibleId),
     verifiedBy: userView(finding.verifiedById),
+    efficacyVerifiedBy: userView(finding.efficacyVerifiedById),
   })
   const checklistView = (checklist: Record<string, unknown>) => ({
     ...checklist,
@@ -125,6 +127,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     if (typeof where?.id === 'string' && finding.id !== where.id) return false
     if (where?.auditId && finding.auditId !== where.auditId) return false
     if (typeof where?.status === 'string' && finding.status !== where.status) return false
+    if (typeof where?.type === 'string' && finding.type !== where.type) return false
     return true
   }
   const checklistMatches = (checklist: Record<string, unknown>, where?: AnyWhere) => {
@@ -364,6 +367,10 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
         const found = storedActions.find((action) => actionMatches(action, where))
         return found ? actionView(found) : null
       }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const found = storedActions.find((action) => action.id === where.id)
+        return found ? actionView(found) : null
+      }),
       count: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedActions.filter((action) => actionMatches(action, where)).length),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         actionSeq += 1
@@ -572,6 +579,131 @@ describe('quality assurance API', () => {
     expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
   })
 
+  it('blocks closing while required corrective actions are open and closes after they finish', async () => {
+    const { db, storedActions } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const finding = await createFinding(agent, auditId)
+
+    const action = await agent.post(`/api/audits/${auditId}/findings/${finding.id}/actions`).send({
+      title: 'Capacitar al equipo',
+      description: 'Dictar una charla de actualización.',
+      required: true,
+      responsibleId: admin.id,
+    })
+    expect(action.status).toBe(201)
+    const actionId = action.body.action.id as string
+
+    // Cerrar bloquea: la auditoría tiene una acción obligatoria sin estado final.
+    const blockedClose = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre preliminar.' })
+    expect(blockedClose.status).toBe(409)
+    expect(blockedClose.body.reason).toBe('ACTIONS_PENDING')
+    expect(blockedClose.body.pending).toBe(1)
+    expect(blockedClose.body.error).toContain('corrective action')
+
+    await agent.post(`/api/audits/${auditId}/actions/${actionId}/status`).send({ status: 'IN_PROGRESS' })
+    const stillBlocked = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre preliminar.' })
+    expect(stillBlocked.status).toBe(409)
+    expect(stillBlocked.body.reason).toBe('ACTIONS_PENDING')
+
+    const completed = await agent.post(`/api/audits/${auditId}/actions/${actionId}/status`).send({ status: 'COMPLETED' })
+    expect(completed.status).toBe(200)
+    expect(storedActions[0]).toMatchObject({ status: 'COMPLETED' })
+
+    const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Acciones completadas.' })
+    expect(closed.status).toBe(200)
+    expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
+  })
+
+  it('blocks closing until resolved nonconformities record an efficacy verification', async () => {
+    const { db, storedFindings } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const nonconformity = await createFinding(agent, auditId, { type: 'NONCONFORMITY', severity: 'MAJOR' })
+    const observation = await createFinding(agent, auditId, { type: 'OBSERVATION', title: 'Observación resuelta' })
+
+    await agent.post(`/api/audits/${auditId}/findings/${nonconformity.id}/status`).send({ status: 'RESOLVED', resolution: 'Se corrigió la no conformidad.' })
+    await agent.post(`/api/audits/${auditId}/findings/${observation.id}/status`).send({ status: 'RESOLVED', resolution: 'Se ordenó el archivo.' })
+    expect(storedFindings.every((row) => row.status === 'RESOLVED')).toBe(true)
+
+    // Solo cuenta la NO CONFORMIDAD: la observación resuelta no exige eficacia.
+    const blockedClose = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre preliminar.' })
+    expect(blockedClose.status).toBe(409)
+    expect(blockedClose.body.reason).toBe('EFFICACY_PENDING')
+    expect(blockedClose.body.pending).toBe(1)
+    expect(blockedClose.body.error).toContain('efficacy verification')
+
+    const patched = await agent.patch(`/api/audits/${auditId}/findings/${nonconformity.id}`).send({
+      efficacyVerification: 'Auditoría de seguimiento confirma la mejora.',
+    })
+    expect(patched.status).toBe(200)
+
+    const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Eficacia verificada.' })
+    expect(closed.status).toBe(200)
+    expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
+  })
+
+  it('rejects status changes from company users and from other tenants', async () => {
+    // COMPANY_USER: la sesión del arnés toma el rol configurado; la escritura se rechaza con 403
+    // en la guarda de rol antes de tocar la auditoría (misma guarda que audita server/audit.test.ts).
+    const readOnly = makeQualityDb('COMPANY_USER')
+    readOnly.storedAudits.push({
+      id: 'cmauditreadonly0000000001',
+      processId,
+      status: 'IN_PROGRESS',
+      title: 'Auditoría de solo lectura',
+      code: 'AUD-997',
+      scope: 'Alcance',
+      criteria: 'Criterios',
+      auditType: 'Interna',
+      summary: null,
+      findings: [],
+      evidences: [],
+    })
+    const userAgent = await loggedIn(readOnly.db, companyUser.email)
+    const asUser = await userAgent.post('/api/audits/cmauditreadonly0000000001/status').send({ status: 'CLOSED', summary: 'Cierre indebido.' })
+    expect(asUser.status).toBe(403)
+    expect(readOnly.storedAudits[0]).toMatchObject({ status: 'IN_PROGRESS' })
+
+    // Otra empresa: la auditoría existe pero su proceso pertenece a una empresa ajena → 404.
+    const foreignDb = makeQualityDb('COMPANY_ADMIN', otherCompanyId)
+    foreignDb.storedAudits.push({
+      id: 'cmauditforeign000000000003',
+      processId,
+      status: 'IN_PROGRESS',
+      title: 'Auditoría ajena',
+      code: 'AUD-998',
+      scope: 'Alcance',
+      criteria: 'Criterios',
+      auditType: 'Interna',
+      summary: null,
+      findings: [],
+      evidences: [],
+    })
+    const foreignAgent = await loggedIn(foreignDb.db, foreignAdmin.email)
+    const asForeign = await foreignAgent.post('/api/audits/cmauditforeign000000000003/status').send({ status: 'CLOSED', summary: 'Cierre ajeno.' })
+    expect(asForeign.status).toBe(404)
+    expect(foreignDb.storedAudits[0]).toMatchObject({ status: 'IN_PROGRESS' })
+  })
+
+  it('returns 409 when the transaction rechecks a terminal audit on status change', async () => {
+    const { db, storedAudits } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    // El arnés solo fuerza el recheck terminal dentro de la transacción; no simula concurrencia real.
+    const transaction = (db as unknown as { $transaction: ReturnType<typeof vi.fn> }).$transaction
+    transaction.mockImplementationOnce(async (fn: (client: unknown) => Promise<unknown>) => {
+      const audit = storedAudits.find((item) => item.id === auditId)
+      if (audit) audit.status = 'CLOSED'
+      return fn(db)
+    })
+
+    const rejected = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Carrera concurrente.' })
+    expect(rejected.status).toBe(409)
+    expect(rejected.body.error).toContain('closed')
+    expect(storedAudits.find((item) => item.id === auditId)).toMatchObject({ status: 'CLOSED', summary: null })
+  })
+
   it('manages corrective actions, enforces the status machine and blocks resolve while actions are open', async () => {
     const { db, storedActions } = makeQualityDb()
     const agent = await loggedIn(db)
@@ -650,6 +782,8 @@ describe('quality assurance API', () => {
     const verified = await agent.post(`/api/audits/${auditId}/findings/${finding.id}/status`).send({ status: 'VERIFIED' })
     expect(verified.status).toBe(200)
     expect(verified.body.finding).toMatchObject({ status: 'VERIFIED' })
+    expect(verified.body.finding.efficacyVerifiedBy).toMatchObject({ id: admin.id, name: admin.name })
+    expect(verified.body.finding.efficacyVerifiedAt).toBeTruthy()
   })
 
   it('blocks deleting a finding that still has corrective actions and deletes free findings', async () => {
@@ -764,6 +898,19 @@ describe('quality assurance API', () => {
     await expect(readdir(evidenceDirectory())).rejects.toThrow()
   })
 
+  it('does not delete a terminal audit without findings', async () => {
+    const { db, storedAudits } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Auditoría terminada.' })
+    expect(closed.status).toBe(200)
+
+    const rejected = await agent.delete(`/api/audits/${auditId}`)
+    expect(rejected.status).toBe(409)
+    expect(rejected.body.error).toContain('closed')
+    expect(storedAudits).toHaveLength(1)
+  })
+
   it('returns 409 and cleans the stored PDF when the transaction rechecks a terminal audit', async () => {
     const { db, storedAudits, storedFiles } = makeQualityDb()
     const agent = await loggedIn(db)
@@ -780,6 +927,44 @@ describe('quality assurance API', () => {
     expect(rejected.status).toBe(409)
     expect(storedFiles).toHaveLength(0)
     expect(await readdir(evidenceDirectory())).toHaveLength(0)
+  })
+
+  it('rechecks child state transitions after locking the audit', async () => {
+    const { db, storedAudits, storedFindings, storedActions } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const finding = await createFinding(agent, auditId)
+    const action = await agent.post(`/api/audits/${auditId}/findings/${finding.id}/actions`).send({
+      title: 'Acción concurrente',
+      description: 'Validar la transición dentro del lock.',
+      required: false,
+    })
+    const actionId = action.body.action.id as string
+
+    const transaction = (db as unknown as { $transaction: ReturnType<typeof vi.fn> }).$transaction
+    transaction.mockImplementationOnce(async (fn: (client: unknown) => Promise<unknown>) => {
+      storedActions[0].status = 'CANCELLED'
+      return fn(db)
+    })
+    const staleAction = await agent.post(`/api/audits/${auditId}/actions/${actionId}/status`).send({ status: 'IN_PROGRESS' })
+    expect(staleAction.status).toBe(409)
+    expect(staleAction.body.error).toContain('changed before')
+
+    transaction.mockImplementationOnce(async (fn: (client: unknown) => Promise<unknown>) => {
+      storedFindings[0].status = 'VERIFIED'
+      return fn(db)
+    })
+    const staleFinding = await agent.post(`/api/audits/${auditId}/findings/${finding.id}/status`).send({ status: 'RESOLVED', resolution: 'Resolución concurrente.' })
+    expect(staleFinding.status).toBe(409)
+    expect(staleFinding.body.error).toContain('changed before')
+
+    transaction.mockImplementationOnce(async (fn: (client: unknown) => Promise<unknown>) => {
+      storedAudits[0].status = 'PLANNED'
+      return fn(db)
+    })
+    const staleAudit = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre concurrente.' })
+    expect(staleAudit.status).toBe(409)
+    expect(staleAudit.body.error).toBe('Invalid audit status transition')
   })
 
   it('accepts a valid multipart PDF and rejects MIME, signature and size violations', async () => {
