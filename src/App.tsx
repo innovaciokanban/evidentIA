@@ -19,6 +19,8 @@ import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress,
 import { parseNotificationLink } from './notification-links'
 import { canManageGoogleDrive, drivePickerViewConfig, googleDrivePaths, googleDriveScopeLabel } from './google-drive'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
+import { TicketHistorySection } from './components/tickets/TicketHistorySection'
+import { ticketEventMeta } from './components/tickets/ticket-history-meta'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
@@ -98,19 +100,6 @@ const priorities: Array<{ value: TicketPriority; label: string }> = [
   { value: 'MEDIUM', label: 'Media' },
   { value: 'HIGH', label: 'Alta' },
   { value: 'URGENT', label: 'Urgente' },]
-
-const ticketEventTypes: Array<{ value: TicketHistoryEvent['eventType']; label: string }> = [
-  { value: 'TICKET_CREATED', label: 'Creación' },
-  { value: 'TICKET_UPDATED', label: 'Edición' },
-  { value: 'TICKET_ASSIGNED', label: 'Asignación' },
-  { value: 'TICKET_UNASSIGNED', label: 'Desasignación' },
-  { value: 'TICKET_STATUS_CHANGED', label: 'Cambio de estado' },
-  { value: 'TICKET_PRIORITY_CHANGED', label: 'Cambio de prioridad' },
-  { value: 'TICKET_DUE_DATE_CHANGED', label: 'Cambio de vencimiento' },
-  { value: 'EVIDENCE_ATTACHED', label: 'Evidencia adjunta' },
-  { value: 'EVIDENCE_DELETED', label: 'Evidencia eliminada' },
-  { value: 'TICKET_DELETED', label: 'Eliminación' },
-]
 
 const emptyDraft: TicketDraft = { title: '', description: '', priority: 'MEDIUM', status: 'OPEN', assignedToId: '' }
 
@@ -1851,6 +1840,7 @@ function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }
   const [historyTotal, setHistoryTotal] = useState(0)
   const [historyPage, setHistoryPage] = useState(1)
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [historySearch, setHistorySearch] = useState('')
   const [historyStatus, setHistoryStatus] = useState('')
@@ -1858,23 +1848,40 @@ function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }
   const [historyAssignee, setHistoryAssignee] = useState('')
   const [historyEventType, setHistoryEventType] = useState('')
   const [users, setUsers] = useState<User[]>([])
+  const historyParams = useCallback((page: number) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: '12' })
+    if (historySearch) params.set('search', historySearch)
+    if (historyStatus) params.set('status', historyStatus)
+    if (historyPriority) params.set('priority', historyPriority)
+    if (historyAssignee) params.set('assignedToId', historyAssignee)
+    if (historyEventType) params.set('eventType', historyEventType)
+    return params
+  }, [historyAssignee, historyEventType, historyPriority, historySearch, historyStatus])
   const loadHistory = useCallback(async () => {
-    setHistoryLoading(true); setHistoryError('')
+    setHistoryLoading(true); setHistoryError(''); setHistoryPage(1)
     try {
-      const params = new URLSearchParams({ page: String(historyPage), pageSize: '12' })
-      if (historySearch) params.set('search', historySearch)
-      if (historyStatus) params.set('status', historyStatus)
-      if (historyPriority) params.set('priority', historyPriority)
-      if (historyAssignee) params.set('assignedToId', historyAssignee)
-      if (historyEventType) params.set('eventType', historyEventType)
-      const result = await api<{ events: TicketHistoryEvent[]; total: number }>(`/tickets/history?${params}`)
+      const result = await api<{ events: TicketHistoryEvent[]; total: number }>(`/tickets/history?${historyParams(1)}`)
       setHistoryEvents(result.events); setHistoryTotal(result.total)
-    } catch { setHistoryError('No pudimos cargar el historial de tickets.') } finally { setHistoryLoading(false) }
-  }, [historyAssignee, historyEventType, historyPage, historyPriority, historySearch, historyStatus])
+    } catch {
+      setHistoryEvents([]); setHistoryTotal(0)
+      setHistoryError('No pudimos cargar el historial de tickets.')
+    } finally { setHistoryLoading(false) }
+  }, [historyParams])
+  const loadMoreHistory = useCallback(async () => {
+    if (historyLoadingMore || historyLoading) return
+    setHistoryLoadingMore(true)
+    try {
+      const result = await api<{ events: TicketHistoryEvent[]; total: number; page: number }>(`/tickets/history?${historyParams(historyPage + 1)}`)
+      setHistoryEvents((current) => [...current, ...result.events])
+      setHistoryTotal(result.total)
+      setHistoryPage(result.page)
+    } catch {
+      setHistoryError('No pudimos cargar más eventos del historial.')
+    } finally { setHistoryLoadingMore(false) }
+  }, [historyLoading, historyLoadingMore, historyPage, historyParams])
   useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
   useEffect(() => { const timer = window.setTimeout(() => { void loadHistory() }, 0); return () => window.clearTimeout(timer) }, [loadHistory])
-  const updateHistoryFilter = (setter: (value: string) => void, value: string) => { setter(value); setHistoryPage(1) }
-  return <><TicketsList user={user} onOpenRisk={onOpenRisk} initialTicketId={initialTicketId} onConsumeInitialTicketId={onConsumeInitialTicketId} /><div className="page ticket-history-page"><TicketHistoryPanel events={historyEvents} total={historyTotal} page={historyPage} pageSize={12} loading={historyLoading} error={historyError} users={users} search={historySearch} status={historyStatus} priority={historyPriority} assignee={historyAssignee} eventType={historyEventType} onSearch={(value) => updateHistoryFilter(setHistorySearch, value)} onStatus={(value) => updateHistoryFilter(setHistoryStatus, value)} onPriority={(value) => updateHistoryFilter(setHistoryPriority, value)} onAssignee={(value) => updateHistoryFilter(setHistoryAssignee, value)} onEventType={(value) => updateHistoryFilter(setHistoryEventType, value)} onPage={setHistoryPage} onRetry={() => void loadHistory()} /></div></>
+  return <><TicketsList user={user} onOpenRisk={onOpenRisk} initialTicketId={initialTicketId} onConsumeInitialTicketId={onConsumeInitialTicketId} /><div className="page ticket-history-page"><TicketHistoryPanel events={historyEvents} total={historyTotal} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} users={users} search={historySearch} status={historyStatus} priority={historyPriority} assignee={historyAssignee} eventType={historyEventType} onSearch={setHistorySearch} onStatus={setHistoryStatus} onPriority={setHistoryPriority} onAssignee={setHistoryAssignee} onEventType={setHistoryEventType} onRetry={() => void loadHistory()} onLoadMore={() => void loadMoreHistory()} /></div></>
 }
 
 function TicketsList({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: TicketsProps) {
@@ -1959,7 +1966,10 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
   const [driveLoading, setDriveLoading] = useState(true)
   const [driveOpening, setDriveOpening] = useState(false)
   const [history, setHistory] = useState<TicketHistoryEvent[]>([])
+  const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyPage, setHistoryPage] = useState(1)
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const loadEvidence = useCallback(async () => {
     setEvidenceLoading(true)
@@ -1995,14 +2005,27 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
     return () => window.clearTimeout(timer)
   }, [loadDriveReferences])
   const loadHistory = useCallback(async () => {
-    setHistoryLoading(true); setHistoryError('')
+    setHistoryLoading(true); setHistoryError(''); setHistoryPage(1)
     try {
-      const result = await api<{ events: TicketHistoryEvent[] }>(`/tickets/${ticket.id}/history?page=1&pageSize=50`)
-      setHistory(result.events)
+      const result = await api<{ events: TicketHistoryEvent[]; total: number }>(`/tickets/${ticket.id}/history?page=1&pageSize=50`)
+      setHistory(result.events); setHistoryTotal(result.total)
     } catch (requestError) {
+      setHistory([]); setHistoryTotal(0)
       setHistoryError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar el historial.')
     } finally { setHistoryLoading(false) }
   }, [ticket.id])
+  const loadMoreHistory = useCallback(async () => {
+    if (historyLoadingMore || historyLoading) return
+    setHistoryLoadingMore(true)
+    try {
+      const result = await api<{ events: TicketHistoryEvent[]; total: number; page: number }>(`/tickets/${ticket.id}/history?page=${historyPage + 1}&pageSize=50`)
+      setHistory((current) => [...current, ...result.events])
+      setHistoryTotal(result.total)
+      setHistoryPage(result.page)
+    } catch (requestError) {
+      setHistoryError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar más eventos del historial.')
+    } finally { setHistoryLoadingMore(false) }
+  }, [historyLoading, historyLoadingMore, historyPage, ticket.id])
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadHistory() }, 0)
     return () => window.clearTimeout(timer)
@@ -2176,62 +2199,61 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
            </ul>
          )}
        </section>
-      <TicketHistoryList events={history} loading={historyLoading} error={historyError} showTicket={false} onRetry={() => void loadHistory()} />
+      <TicketHistorySection
+        heading={{ eyebrow: 'TRAZABILIDAD', title: 'HISTORIAL DEL TICKET' }}
+        total={historyTotal}
+        events={history}
+        loading={historyLoading}
+        loadingMore={historyLoadingMore}
+        error={historyError}
+        showCount
+        ariaLabel="Historial del ticket"
+        emptyMessage="Los cambios del ticket aparecerán aquí."
+        onRetry={() => void loadHistory()}
+        onLoadMore={() => void loadMoreHistory()}
+      />
       <div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div>
     </aside></div>
   )
 }
 
-function TicketHistoryPanel({ events, total, page, pageSize, loading, error, users, search, status, priority, assignee, eventType, onSearch, onStatus, onPriority, onAssignee, onEventType, onPage, onRetry }: { events: TicketHistoryEvent[]; total: number; page: number; pageSize: number; loading: boolean; error: string; users: User[]; search: string; status: string; priority: string; assignee: string; eventType: string; onSearch: (value: string) => void; onStatus: (value: string) => void; onPriority: (value: string) => void; onAssignee: (value: string) => void; onEventType: (value: string) => void; onPage: (value: number) => void; onRetry: () => void }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  return <div className="process-risk-page ticket-history-native">
-    <div className="risk-page-header">
-      <div className="risk-page-heading">
-        <div><p className="eyebrow">GESTIÓN OPERATIVA / TRAZABILIDAD</p><h1>Histórico de Tickets</h1><p className="muted">Revisa la evolución de cada ticket, su responsable y las decisiones registradas.</p></div>
-        <span className="risk-process-chip">{total} eventos</span>
-      </div>
-    </div>
-    <section className="panel risk-process-context ticket-history-context"><div><span>Registros visibles</span><strong>{total}</strong></div><div><span>Eventos por página</span><strong>{pageSize}</strong></div><div><span>Página actual</span><strong>{page} de {totalPages}</strong></div></section>
-    <section className="panel risk-detail-panel ticket-history-panel">
-      <div className="risk-detail-section ticket-history-toolbar-section">
-        <div className="risk-section-heading"><div><p className="detail-label">SEGUIMIENTO</p><h2>HISTORIAL DE CAMBIOS</h2></div><span className="risk-method-note">Ordenado del más reciente al más antiguo</span></div>
-        <div className="risk-evidence-block ticket-history-filter-block">
-          <div className="risk-controls-heading"><div><p className="detail-label">FILTROS</p><h3>Buscar y acotar resultados</h3></div><span className="risk-method-note">Los permisos se aplican en el servidor</span></div>
-          <div className="risk-base-grid ticket-history-filter-grid">
-            <label className="risk-base-wide">Buscar en tickets<input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Código, título o descripción" /></label>
-            <label>Estado<select value={status} onChange={(event) => onStatus(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-            <label>Prioridad<select value={priority} onChange={(event) => onPriority(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-            <label>Responsable<select value={assignee} onChange={(event) => onAssignee(event.target.value)}><option value="">Todos los responsables</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label>Tipo de evento<select value={eventType} onChange={(event) => onEventType(event.target.value)}><option value="">Todos los eventos</option>{ticketEventTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-          </div>
+function TicketHistoryPanel({ events, total, loading, loadingMore, error, users, search, status, priority, assignee, eventType, onSearch, onStatus, onPriority, onAssignee, onEventType, onRetry, onLoadMore }: { events: TicketHistoryEvent[]; total: number; loading: boolean; loadingMore: boolean; error: string; users: User[]; search: string; status: string; priority: string; assignee: string; eventType: string; onSearch: (value: string) => void; onStatus: (value: string) => void; onPriority: (value: string) => void; onAssignee: (value: string) => void; onEventType: (value: string) => void; onRetry: () => void; onLoadMore: () => void }) {
+  const filtersActive = Boolean(search || status || priority || assignee || eventType)
+  return (
+    <div className="process-risk-page ticket-history-native">
+      <div className="risk-page-header">
+        <div className="risk-page-heading">
+          <div><p className="eyebrow">GESTIÓN OPERATIVA / TRAZABILIDAD</p><h1>Histórico de Tickets</h1><p className="muted">Revisa la evolución de cada ticket, su responsable y las decisiones registradas.</p></div>
+          <span className="risk-process-chip">{total} eventos</span>
         </div>
-        {loading ? <div className="inline-loading" role="status"><span className="loader" />Cargando historial...</div> : error ? <ErrorBanner message={error} onRetry={onRetry} /> : <TicketHistoryTable events={events} />}
       </div>
-      {!loading && !error && <div className="risk-detail-toolbar ticket-history-pagination"><span className="risk-method-note">Página {page} de {totalPages}</span><div><button type="button" className="button secondary small-button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Anterior</button><button type="button" className="button secondary small-button" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Siguiente</button></div></div>}
-    </section>
-  </div>
+      <TicketHistorySection
+        heading={{ eyebrow: 'TRAZABILIDAD', title: 'HISTORIAL DE CAMBIOS' }}
+        total={total}
+        events={events}
+        loading={loading}
+        loadingMore={loadingMore}
+        error={error}
+        showTicket
+        emptyMessage={filtersActive ? 'No hay eventos que coincidan con los filtros.' : 'Los cambios de los tickets aparecerán aquí.'}
+        filters={(
+          <div className="risk-evidence-block ticket-history-filter-block">
+            <div className="risk-controls-heading"><div><p className="detail-label">FILTROS</p><h3>Buscar y acotar resultados</h3></div><span className="risk-method-note">Los permisos se aplican en el servidor</span></div>
+            <div className="risk-base-grid ticket-history-filter-grid">
+              <label className="risk-base-wide">Buscar en tickets<input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Código, título o descripción" /></label>
+              <label>Estado<select value={status} onChange={(event) => onStatus(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+              <label>Prioridad<select value={priority} onChange={(event) => onPriority(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+              <label>Responsable<select value={assignee} onChange={(event) => onAssignee(event.target.value)}><option value="">Todos los responsables</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <label>Tipo de evento<select value={eventType} onChange={(event) => onEventType(event.target.value)}><option value="">Todos los eventos</option>{Object.entries(ticketEventMeta).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select></label>
+            </div>
+          </div>
+        )}
+        onRetry={onRetry}
+        onLoadMore={onLoadMore}
+      />
+    </div>
+  )
 }
-
-function TicketHistoryTable({ events }: { events: TicketHistoryEvent[] }) {
-  if (events.length === 0) return <div className="risk-empty"><span className="risk-empty-icon">↺</span><h3>Sin eventos todavía</h3><p>Los cambios de los tickets aparecerán aquí.</p></div>
-  return <div className="ticket-history-table-scroll"><div className="risk-list ticket-history-table" role="table" aria-label="Histórico de tickets"><div className="risk-list-head ticket-history-table-head" role="row"><span>Código</span><span>Ticket</span><span>Evento</span><span>Responsable</span><span>Estado</span><span>Prioridad</span><span>Fecha</span></div>{events.map((event) => {
-    const ticket = event.ticket
-    const responsibility = event.changes.find((change) => change.field === 'assignedToId')
-    const ticketCode = event.ticketId ? `#${event.ticketId.slice(-6).toUpperCase()}` : '—'
-    return <div className="risk-list-item ticket-history-row" role="row" key={event.id}><div className="risk-list-main" role="gridcell"><span className="risk-list-code">{ticketCode}</span><span className="risk-list-name"><strong>{ticket?.title ?? event.ticketTitle ?? 'Ticket eliminado'}</strong><small>{event.summary}</small></span><span className="ticket-history-event-chip">{ticketEventLabel(event.eventType)}</span><span className="ticket-history-responsible">{responsibility ? historyValue(responsibility.newValue ?? responsibility.previousValue) : event.actorName ?? event.actor?.name ?? 'Sistema'}</span><span>{ticket ? <Badge type="status" value={ticket.status} /> : '—'}</span><span>{ticket ? <Badge type="priority" value={ticket.priority} /> : '—'}</span><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })}</time></div></div>
-  })}</div></div>
-}
-
-function TicketHistoryList({ events, loading, error, showTicket, onRetry }: { events: TicketHistoryEvent[]; loading: boolean; error: string; showTicket: boolean; onRetry: () => void }) {
-  if (loading) return <section className="ticket-history-section"><div className="inline-loading"><span className="loader" />Cargando historial...</div></section>
-  if (error) return <section className="ticket-history-section"><ErrorBanner message={error} onRetry={onRetry} /></section>
-  if (events.length === 0) return <section className="ticket-history-section"><div className="ticket-history-empty"><strong>Sin eventos todavía</strong><p>Los cambios del ticket aparecerán aquí.</p></div></section>
-  return <section className="ticket-history-section" aria-label="Historial del ticket"><div className="ticket-history-list">{events.map((event) => <article className="ticket-history-entry" key={event.id}><div className="ticket-history-marker"><span /></div><div className="ticket-history-body"><div className="ticket-history-event-head"><div><span className="ticket-history-chip">{ticketEventLabel(event.eventType)}</span>{showTicket && event.ticket && <strong>{event.ticket.title}</strong>}<h3>{event.summary}</h3></div><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}</time></div><p className="ticket-history-actor">Por <strong>{event.actorName ?? event.actor?.name ?? 'Sistema'}</strong></p>{event.changes.length > 0 && <div className="ticket-history-changes">{event.changes.map((change) => <div className="ticket-history-change" key={`${event.id}-${change.field}`}><span>{change.label}</span><strong>{historyValue(change.previousValue)}</strong><b>→</b><strong>{historyValue(change.newValue)}</strong></div>)}</div>}</div></article>)}</div></section>
-}
-
-function ticketEventLabel(eventType: TicketHistoryEvent['eventType']) { return ticketEventTypes.find((item) => item.value === eventType)?.label ?? 'Evento' }
-
-function historyValue(value: string | boolean | number | null) { if (value === null || value === '') return 'Sin valor'; if (typeof value === 'boolean') return value ? 'Sí' : 'No'; return String(value) }
 
 function PageError({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p>{onRetry && <button className="button primary" onClick={onRetry}>Reintentar</button>}</div></div> }
 
