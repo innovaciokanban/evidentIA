@@ -1,11 +1,11 @@
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import cors from 'cors'
 import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
@@ -20,12 +20,90 @@ import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
 import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
 import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
 import { EvidenceValidationError, nextStoredName, readEvidenceFile, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
+import { createEvidenceStorage, createLocalEvidenceStorage, type EvidenceStorage } from './evidence-provider.js'
+import { assertEvidenceStorageOperationShape, EvidenceOperationService } from './evidence-operations.js'
+import { GoogleDriveError, GoogleDriveGateway } from './google-drive.js'
+import { createOAuthState, createPkcePair, decryptOAuthSecret, encryptOAuthSecret, hashOAuthState } from './oauth-crypto.js'
 import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
 const DUMMY_PASSWORD_HASH = '$2b$12$UjBgyzK627Qyclju5Vdtne3rVrXxGDHxvGqnZahRh5D9geupYld9y'
+
+type GoogleDriveOAuthCallbackStage = 'EXCHANGE_CODE' | 'VALIDATE_REFRESH_TOKEN' | 'IDENTITY' | 'ENSURE_ROOT_FOLDER' | 'ENCRYPT_REFRESH_TOKEN' | 'PERSIST_CONNECTION'
+
+const normalizeOAuthDiagnosticCode = (code: string): string => {
+  const normalized = code.trim().replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').toUpperCase()
+  return normalized.slice(0, 80) || 'UNKNOWN_ERROR'
+}
+
+const googleDriveOAuthFailureDetails = (error: unknown, stage: GoogleDriveOAuthCallbackStage, correlationId: string) => {
+  if (error instanceof GoogleDriveError) {
+    return {
+      correlationId,
+      stage,
+      errorCode: normalizeOAuthDiagnosticCode(error.code ?? (error.status === null ? 'GOOGLE_DRIVE_ERROR' : `HTTP_${error.status}`)),
+      ...(error.status === null ? {} : { googleStatus: error.status }),
+    }
+  }
+  const isPrismaError = error instanceof Error && error.name.startsWith('PrismaClient')
+  const prismaCode = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null
+  if (isPrismaError) {
+    return {
+      correlationId,
+      stage,
+      errorCode: normalizeOAuthDiagnosticCode(prismaCode ? `PRISMA_${prismaCode}` : 'PRISMA_ERROR'),
+      ...(prismaCode ? { prismaCode } : {}),
+    }
+  }
+  return { correlationId, stage, errorCode: 'INTERNAL_ERROR' }
+}
+
+type GoogleDriveFlowStage =
+  | 'DECRYPT_REFRESH_TOKEN'
+  | 'VERIFY_CONFIGURED_ROOT'
+  | 'VERIFY_CONNECTION_ROOT'
+  | 'LOAD_COMPANY'
+  | 'VERIFY_COMPANY_FOLDER'
+  | 'ENSURE_COMPANY_FOLDER'
+  | 'ISSUE_PICKER_ACCESS_TOKEN'
+  | 'FETCH_FILE_METADATA'
+  | 'VERIFY_FILE_ANCESTRY'
+
+const googleDriveErrorFields = (error: unknown): { googleStatus: number | null; googleCode: string | null } =>
+  error instanceof GoogleDriveError ? { googleStatus: error.status, googleCode: error.code } : { googleStatus: null, googleCode: null }
+
+/**
+ * Diagnóstico del flujo de carpetas de evidencia: solo etapa, estado HTTP, código de error de
+ * Google y correlación. Nunca registra tokens, códigos OAuth, identificadores de carpeta ni
+ * mensajes crudos de Google.
+ */
+const logGoogleDriveFlowFailure = (details: { correlationId: string; stage: GoogleDriveFlowStage; reason?: string; source?: 'configured' | 'connection'; googleStatus?: number | null; googleCode?: string | null }) => {
+  console.warn('[google-drive/folder-flow]', {
+    correlationId: details.correlationId,
+    stage: details.stage,
+    ...(details.reason ? { reason: details.reason } : {}),
+    ...(details.source ? { source: details.source } : {}),
+    ...(details.googleStatus !== undefined ? { googleStatus: details.googleStatus } : {}),
+    ...(details.googleCode !== undefined ? { googleCode: details.googleCode } : {}),
+  })
+}
+
+/**
+ * Éxito del flujo de carpetas, con la misma información segura que el diagnóstico de fallo
+ * (etapa, fuente, estado y correlación): permite confirmar en los logs qué raíz quedó activa
+ * después del fallback sin exponer identificadores de carpeta ni tokens.
+ */
+const logGoogleDriveFlowSuccess = (details: { correlationId: string; stage: GoogleDriveFlowStage; source: 'configured' | 'connection'; googleStatus: number | null }) => {
+  console.info('[google-drive/folder-flow]', {
+    correlationId: details.correlationId,
+    stage: details.stage,
+    reason: 'OK',
+    source: details.source,
+    googleStatus: details.googleStatus,
+  })
+}
 
 const userInclude = { createdBy: { select: { id: true, name: true, email: true, companyId: true } }, assignedTo: { select: { id: true, name: true, email: true, companyId: true } } } as const
 const companyInclude = { users: { where: { role: Role.COMPANY_ADMIN }, select: { id: true, name: true, email: true, role: true, companyId: true }, take: 1 } } as const
@@ -126,6 +204,20 @@ const evidenceView = (evidence: Prisma.TicketEvidenceFileGetPayload<{ include: t
   uploadedBy: evidence.uploadedBy,
   ticket: evidence.ticket,
 })
+const driveReferenceInclude = { createdBy: { select: { id: true, name: true } } } as const
+const driveReferenceView = (reference: Prisma.TicketDriveReferenceGetPayload<{ include: typeof driveReferenceInclude }>) => ({
+  id: reference.id,
+  ticketId: reference.ticketId,
+  driveFileId: reference.driveFileId,
+  filename: reference.filename,
+  mimeType: reference.mimeType,
+  size: reference.size,
+  driveUrl: reference.driveUrl,
+  createdAt: reference.createdAt,
+  updatedAt: reference.updatedAt,
+  createdBy: reference.createdBy,
+})
+const MAX_TICKET_DRIVE_REFERENCE_BYTES = 10 * 1024 * 1024
 const crossInclude = { factor1: true, factor2: true } as const
 const crossFactorView = (item: { id: string; swotId: string; type: string; description: string; createdAt: Date }) => ({ id: item.id, swotId: item.swotId, type: item.type, description: item.description, createdAt: item.createdAt })
 const crossView = (cross: Prisma.StrategicCrossGetPayload<{ include: typeof crossInclude }>) => ({
@@ -1119,6 +1211,143 @@ const ticketStatusNames: Record<TicketStatus, string> = {
   [TicketStatus.CLOSED]: 'Cerrado',
 }
 
+type TicketAuditActor = { id: string; name: string; email: string }
+type TicketAuditClient = PrismaClient | Prisma.TransactionClient
+type TicketAuditSnapshot = {
+  title: string | null
+  description: string | null
+  status: TicketStatus | string | null
+  priority: TicketPriority | string | null
+  assignedToId: string | null
+  assignedToName?: string | null
+  dueDate: Date | string | null
+}
+type TicketAuditChange = ProcessChangeItem
+
+const ticketPriorityNames: Record<TicketPriority, string> = {
+  [TicketPriority.LOW]: 'Baja',
+  [TicketPriority.MEDIUM]: 'Media',
+  [TicketPriority.HIGH]: 'Alta',
+  [TicketPriority.URGENT]: 'Urgente',
+}
+
+const ticketAuditSnapshot = (ticket: { title: string; description: string; status: TicketStatus | string; priority: TicketPriority | string; assignedToId: string | null; dueDate: Date | null; assignedTo?: { name: string } | null }): TicketAuditSnapshot => ({
+  title: ticket.title,
+  description: ticket.description,
+  status: ticket.status,
+  priority: ticket.priority,
+  assignedToId: ticket.assignedToId,
+  assignedToName: ticket.assignedTo?.name ?? null,
+  dueDate: ticket.dueDate,
+})
+
+const ticketAuditValue = (value: unknown): ProcessChangeValue => {
+  if (value === null || value === undefined) return null
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  if (typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return String(value)
+}
+
+const ticketAuditActorFields = (actor: TicketAuditActor | null | undefined) => actor
+  ? { actorId: actor.id, actorName: actor.name || null, actorEmail: actor.email || null }
+  : { actorId: null, actorName: null, actorEmail: null }
+
+const ticketAuditEventInclude = { actor: { select: { id: true, name: true } }, ticket: { select: { id: true, title: true, status: true, priority: true } } } as const
+type TicketAuditEventWithRelations = Prisma.TicketAuditEventGetPayload<{ include: typeof ticketAuditEventInclude }>
+
+const ticketAuditMetadataView = (metadata: Prisma.JsonValue | null): Record<string, unknown> | null => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
+    if (sensitiveAuditKey.test(key)) continue
+    clean[key] = value
+  }
+  return clean
+}
+
+const ticketAuditEventView = (event: TicketAuditEventWithRelations) => ({
+  id: event.id,
+  ticketId: event.ticketId,
+  ticketTitle: event.ticketTitle,
+  eventType: event.eventType,
+  summary: event.summary,
+  actorId: event.actorId,
+  actor: event.actor,
+  actorName: event.actorName,
+  actorEmail: event.actorEmail,
+  occurredAt: event.occurredAt,
+  changes: Array.isArray(event.changes) ? event.changes : [],
+  metadata: ticketAuditMetadataView(event.metadata),
+  ...(event.ticket ? { ticket: event.ticket } : {}),
+})
+
+const ticketAuditWrite = (client: TicketAuditClient, data: {
+  ticketId: string
+  ticketTitle?: string | null
+  companyId?: string | null
+  eventType: TicketAuditEventType
+  summary: string
+  actor: TicketAuditActor | null | undefined
+  changes?: TicketAuditChange[]
+  metadata?: Record<string, unknown>
+}) => {
+  // Algunos arneses antiguos construyen un PrismaClient parcial; en producción el delegado siempre
+  // existe después de ejecutar la migración. Mantener el guard evita que esos tests fallen antes de
+  // poder ejercitar la operación de negocio que están verificando.
+  if (!client.ticketAuditEvent) return Promise.resolve()
+  return client.ticketAuditEvent.create({
+  data: {
+    ticketId: data.ticketId,
+    ...(data.ticketTitle !== undefined ? { ticketTitle: data.ticketTitle } : {}),
+    ...(data.companyId !== undefined ? { companyId: data.companyId } : {}),
+    eventType: data.eventType,
+    summary: data.summary,
+    ...(data.changes && data.changes.length > 0 ? { changes: data.changes as unknown as Prisma.InputJsonValue } : {}),
+    ...(data.metadata ? { metadata: data.metadata as unknown as Prisma.InputJsonValue } : {}),
+    ...ticketAuditActorFields(data.actor),
+  },
+  })
+}
+
+const ticketAuditCreatedChanges = (ticket: TicketAuditSnapshot): TicketAuditChange[] => [
+  { field: 'title', label: 'Titulo', previousValue: null, newValue: ticketAuditValue(ticket.title) },
+  { field: 'description', label: 'Descripcion', previousValue: null, newValue: ticketAuditValue(ticket.description) },
+  { field: 'status', label: 'Estado', previousValue: null, newValue: ticket.status ? ticketStatusNames[ticket.status as TicketStatus] ?? ticket.status : null },
+  { field: 'priority', label: 'Prioridad', previousValue: null, newValue: ticket.priority ? ticketPriorityNames[ticket.priority as TicketPriority] ?? ticket.priority : null },
+  { field: 'assignedToId', label: 'Responsable', previousValue: null, newValue: ticketAuditValue(ticket.assignedToName ?? ticket.assignedToId) },
+  { field: 'dueDate', label: 'Fecha limite', previousValue: null, newValue: ticketAuditValue(ticket.dueDate) },
+].filter((change) => change.newValue !== null)
+
+const ticketAuditDiff = (previous: TicketAuditSnapshot, next: TicketAuditSnapshot): Array<{ eventType: TicketAuditEventType; summary: string; changes: TicketAuditChange[] }> => {
+  const events: Array<{ eventType: TicketAuditEventType; summary: string; changes: TicketAuditChange[] }> = []
+  const fieldChange = (field: string, label: string, previousValue: unknown, newValue: unknown): TicketAuditChange | null => {
+    const before = ticketAuditValue(previousValue)
+    const after = ticketAuditValue(newValue)
+    return before === after ? null : { field, label, previousValue: before, newValue: after }
+  }
+  const contentChanges = [
+    fieldChange('title', 'Titulo', previous.title, next.title),
+    fieldChange('description', 'Descripcion', previous.description, next.description),
+  ].filter((change): change is TicketAuditChange => change !== null)
+  if (contentChanges.length > 0) events.push({ eventType: TicketAuditEventType.TICKET_UPDATED, summary: 'Informacion del ticket actualizada', changes: contentChanges })
+  const statusChange = fieldChange('status', 'Estado', ticketStatusNames[previous.status as TicketStatus] ?? previous.status, ticketStatusNames[next.status as TicketStatus] ?? next.status)
+  if (statusChange) events.push({ eventType: TicketAuditEventType.TICKET_STATUS_CHANGED, summary: `Estado del ticket: ${String(statusChange.newValue)}`, changes: [statusChange] })
+  const priorityChange = fieldChange('priority', 'Prioridad', ticketPriorityNames[previous.priority as TicketPriority] ?? previous.priority, ticketPriorityNames[next.priority as TicketPriority] ?? next.priority)
+  if (priorityChange) events.push({ eventType: TicketAuditEventType.TICKET_PRIORITY_CHANGED, summary: `Prioridad del ticket: ${String(priorityChange.newValue)}`, changes: [priorityChange] })
+  const dueDateChange = fieldChange('dueDate', 'Fecha limite', previous.dueDate, next.dueDate)
+  if (dueDateChange) events.push({ eventType: TicketAuditEventType.TICKET_DUE_DATE_CHANGED, summary: dueDateChange.newValue ? 'Fecha limite del ticket actualizada' : 'Fecha limite del ticket eliminada', changes: [dueDateChange] })
+  const assignmentChange = fieldChange('assignedToId', 'Responsable', previous.assignedToName ?? previous.assignedToId, next.assignedToName ?? next.assignedToId)
+  if (assignmentChange) events.push({ eventType: next.assignedToId ? TicketAuditEventType.TICKET_ASSIGNED : TicketAuditEventType.TICKET_UNASSIGNED, summary: next.assignedToId ? 'Ticket asignado' : 'Ticket desasignado', changes: [assignmentChange] })
+  return events
+}
+
+const ticketAuditWriteDiff = async (client: TicketAuditClient, ticketId: string, actor: TicketAuditActor | null | undefined, previous: TicketAuditSnapshot, next: TicketAuditSnapshot, metadata?: Record<string, unknown>) => {
+  for (const event of ticketAuditDiff(previous, next)) {
+    await ticketAuditWrite(client, { ticketId, eventType: event.eventType, summary: event.summary, actor, changes: event.changes, metadata })
+  }
+}
+
 /**
  * Alta de un riesgo con su código y su evento RISK_CREATED en la MISMA transacción: la secuencia
  * por categoría se lee dentro del tx (el lock de fila se sostiene hasta el commit) y withCodeRetry
@@ -1241,7 +1470,7 @@ const auditView = (audit: AuditWithInclude) => ({
   updatedAt: audit.updatedAt,
 })
 
-// ---- Vistas del módulo Aseguramiento de Calidad (checklists, acciones, evidencias en disco) ----
+// ---- Vistas del módulo Aseguramiento de Calidad (checklists, acciones y evidencias privadas) ----
 
 type AuditChecklistItemRow = Prisma.AuditChecklistItemGetPayload<{
   select: {
@@ -1323,7 +1552,10 @@ const auditActionView = (action: AuditActionWithInclude) => ({
 
 // Vista de una evidencia en PDF de auditoría. No expone storedName (el nombre en disco es interno
 // del servidor, mismo criterio que TicketEvidenceFile).
-const auditEvidenceFileInclude = { uploadedBy: { select: { id: true, name: true } } } as const
+const auditEvidenceFileInclude = {
+  uploadedBy: { select: { id: true, name: true } },
+  driveConnection: { select: { id: true, companyId: true, encryptedRefreshToken: true, rootFolderId: true, status: true } },
+} as const
 type AuditEvidenceFileWithInclude = Prisma.AuditEvidenceFileGetPayload<{ include: typeof auditEvidenceFileInclude }>
 const auditEvidenceFileView = (file: AuditEvidenceFileWithInclude) => ({
   id: file.id,
@@ -1334,6 +1566,8 @@ const auditEvidenceFileView = (file: AuditEvidenceFileWithInclude) => ({
   filename: file.filename,
   mimeType: file.mimeType,
   size: file.size,
+  storageProvider: file.storageProvider,
+  storageState: file.storageState,
   uploadedBy: file.uploadedBy,
   createdAt: file.createdAt,
 })
@@ -1904,7 +2138,7 @@ const strategyBandToActionPriority: Record<string, Priority> = {
 }
 
 
-export const createApp = (db: PrismaClient = prisma, aiService: AIService = new AIService()) => {
+export const createApp = (db: PrismaClient = prisma, aiService: AIService = new AIService(), evidenceStorage: EvidenceStorage = createEvidenceStorage(), driveGateway: GoogleDriveGateway = new GoogleDriveGateway()) => {
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', env.TRUST_PROXY_HOPS)
@@ -1926,6 +2160,83 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many login attempts' } })
   const aiAnalysisLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many AI analysis requests' } })
   const checkyLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many Checky consultation requests' } })
+  const evidenceOperations = new EvidenceOperationService(db, evidenceStorage)
+  const localEvidenceStorage = createLocalEvidenceStorage()
+  evidenceOperations.startWorker()
+
+  const manageableCompany = async (request: Request, companyId: string) => {
+    const company = await db.company.findUnique({ where: { id: companyId }, select: { id: true } })
+    return company && canAccessCompany(request, company) ? company : null
+  }
+  const activeDriveConnection = (companyId: string) => db.companyGoogleDriveConnection.findFirst({ where: { companyId, status: 'CONNECTED' }, orderBy: { updatedAt: 'desc' }, select: { id: true, companyId: true, encryptedRefreshToken: true, rootFolderId: true, status: true } })
+  /**
+   * Resuelve la carpeta raíz autorizada del ticket. Prefiere la raíz configurada con
+   * GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID, pero con el scope `drive.file` Google responde 404 para
+   * carpetas creadas fuera de la app (no visibles para ella), así que si esa raíz no está
+   * accesible se cae a la raíz por empresa creada durante la conexión OAuth, siempre validada con
+   * `verifyRootFolder` contra `evidentiaCompanyId` de la empresa. Si ninguna pasa, no se autoriza
+   * nada. Cada fallo queda registrado con etapa, estado HTTP, código de Google y correlación.
+   */
+  const ticketDriveFolderContext = async (companyId: string, connection: Awaited<ReturnType<typeof activeDriveConnection>>, correlationId: string) => {
+    if (!connection) return null
+    if (!env.GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID) {
+      logGoogleDriveFlowFailure({ correlationId, stage: 'VERIFY_CONFIGURED_ROOT', reason: 'CONFIGURED_ROOT_MISSING', googleStatus: null, googleCode: null })
+      return null
+    }
+    let stage: GoogleDriveFlowStage = 'DECRYPT_REFRESH_TOKEN'
+    try {
+      const token = decryptOAuthSecret(connection.encryptedRefreshToken)
+      const configuredRootId = env.GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID
+      stage = 'VERIFY_CONFIGURED_ROOT'
+      let rootFolderId: string | null = null
+      const configuredProbe = await driveGateway.probeFolderRoot(token, configuredRootId)
+      if (configuredProbe.accessible) {
+        rootFolderId = configuredRootId
+      } else {
+        logGoogleDriveFlowFailure({ correlationId, stage, source: 'configured', reason: configuredProbe.reason, googleStatus: configuredProbe.status, googleCode: configuredProbe.code })
+      }
+      if (!rootFolderId) {
+        stage = 'VERIFY_CONNECTION_ROOT'
+        if (!connection.rootFolderId) {
+          logGoogleDriveFlowFailure({ correlationId, stage, source: 'connection', reason: 'CONNECTION_ROOT_MISSING', googleStatus: null, googleCode: null })
+          return null
+        }
+        const connectionProbe = await driveGateway.probeFolderRoot(token, connection.rootFolderId)
+        if (!connectionProbe.accessible) {
+          logGoogleDriveFlowFailure({ correlationId, stage, source: 'connection', reason: connectionProbe.reason, googleStatus: connectionProbe.status, googleCode: connectionProbe.code })
+          return null
+        }
+        if (!await driveGateway.verifyRootFolder(token, connection.rootFolderId, companyId)) {
+          logGoogleDriveFlowFailure({ correlationId, stage, source: 'connection', reason: 'ROOT_TENANT_MISMATCH', googleStatus: null, googleCode: null })
+          return null
+        }
+        rootFolderId = connection.rootFolderId
+      }
+      logGoogleDriveFlowSuccess({ correlationId, stage, source: stage === 'VERIFY_CONFIGURED_ROOT' ? 'configured' : 'connection', googleStatus: 200 })
+      stage = 'LOAD_COMPANY'
+      const company = await db.company.findUnique({ where: { id: companyId }, select: { id: true, driveFolderId: true } })
+      if (!company) {
+        logGoogleDriveFlowFailure({ correlationId, stage, reason: 'COMPANY_NOT_FOUND', googleStatus: null, googleCode: null })
+        return null
+      }
+      const properties = { evidentiaType: 'company-folder', evidentiaCompanyId: companyId }
+      stage = 'VERIFY_COMPANY_FOLDER'
+      const existingValid = company.driveFolderId
+        ? await driveGateway.verifyFolder(token, company.driveFolderId, rootFolderId, properties)
+        : false
+      stage = 'ENSURE_COMPANY_FOLDER'
+      const companyFolder = existingValid
+        ? { id: company.driveFolderId!, name: null }
+        : await driveGateway.ensureFolder(token, rootFolderId, properties, `Empresa ${companyId}`)
+      if (company.driveFolderId !== companyFolder.id) {
+        await db.company.update({ where: { id: companyId }, data: { driveFolderId: companyFolder.id } })
+      }
+      return { rootFolderId, companyFolderId: companyFolder.id, token }
+    } catch (error) {
+      logGoogleDriveFlowFailure({ correlationId, stage, ...googleDriveErrorFields(error) })
+      throw error
+    }
+  }
 
   app.get('/api/health', (_request, response) => response.json({ status: 'ok' }))
 
@@ -1955,6 +2266,123 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   app.get('/api/auth/me', authMiddleware, (request, response) => response.json({ user: request.user }))
+
+  // OAuth de Google Drive: el state se vincula a la sesión y al administrador que inició el flujo.
+  app.post('/api/companies/:companyId/google-drive/oauth/start', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const company = await manageableCompany(request, String(request.params.companyId))
+    if (!company || !request.sessionId || !request.user) {
+      response.status(404).json({ error: 'Company not found' })
+      return
+    }
+    const { verifier, challenge } = createPkcePair()
+    const state = createOAuthState()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+    await db.googleDriveOAuthState.create({
+      data: {
+        stateHash: hashOAuthState(state),
+        companyId: company.id,
+        initiatedById: request.user.id,
+        sessionId: request.sessionId,
+        encryptedVerifier: encryptOAuthSecret(verifier),
+        expiresAt,
+      },
+    })
+    try {
+      response.json({ authorizationUrl: driveGateway.authorizationUrl(state, challenge), expiresAt })
+    } catch (error) {
+      response.status(error instanceof GoogleDriveError && error.code === 'OAUTH_NOT_CONFIGURED' ? 503 : 500).json({ error: 'Google OAuth is not configured' })
+    }
+  }))
+
+  app.get('/api/google-drive/oauth/callback', authMiddleware, asyncHandler(async (request, response) => {
+    const stateValue = typeof request.query.state === 'string' ? request.query.state : ''
+    const code = typeof request.query.code === 'string' ? request.query.code : ''
+    const oauthError = typeof request.query.error === 'string' ? request.query.error : ''
+    if (oauthError) {
+      response.status(400).send('Google OAuth was not completed.')
+      return
+    }
+    if (!stateValue || !code || !request.user || !request.sessionId) {
+      response.status(400).send('Invalid Google OAuth callback.')
+      return
+    }
+    const pending = await db.googleDriveOAuthState.findUnique({ where: { stateHash: hashOAuthState(stateValue) } })
+    const now = new Date()
+    if (!pending || pending.consumedAt || pending.expiresAt <= now || pending.sessionId !== request.sessionId || pending.initiatedById !== request.user.id) {
+      response.status(400).send('Invalid or expired Google OAuth state.')
+      return
+    }
+    const company = await manageableCompany(request, pending.companyId)
+    if (!company || !pending.encryptedVerifier) {
+      response.status(404).send('Company not found.')
+      return
+    }
+    const consumed = await db.googleDriveOAuthState.updateMany({ where: { id: pending.id, consumedAt: null, expiresAt: { gt: now } }, data: { consumedAt: now } })
+    if (consumed.count !== 1) {
+      response.status(400).send('Invalid or expired Google OAuth state.')
+      return
+    }
+    const correlationId = randomUUID()
+    let stage: GoogleDriveOAuthCallbackStage = 'EXCHANGE_CODE'
+    try {
+      const tokens = await driveGateway.exchangeCode(code, decryptOAuthSecret(pending.encryptedVerifier))
+      stage = 'VALIDATE_REFRESH_TOKEN'
+      if (!tokens.refresh_token) throw new GoogleDriveError('Google did not return a refresh token', { code: 'REFRESH_TOKEN_MISSING' })
+      stage = 'IDENTITY'
+      const identity = await driveGateway.identity(tokens)
+      stage = 'ENSURE_ROOT_FOLDER'
+      const root = await driveGateway.ensureRootFolder(tokens.refresh_token, company.id)
+      stage = 'ENCRYPT_REFRESH_TOKEN'
+      const encryptedRefreshToken = encryptOAuthSecret(tokens.refresh_token)
+      stage = 'PERSIST_CONNECTION'
+      await db.$transaction(async (tx) => {
+        if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Company" WHERE "id" = ${company.id} FOR UPDATE`
+        await tx.companyGoogleDriveConnection.updateMany({ where: { companyId: company.id, status: 'CONNECTED' }, data: { status: 'DISCONNECTED', disconnectedAt: now } })
+        const previous = await tx.companyGoogleDriveConnection.findFirst({ where: { companyId: company.id, googleSubject: identity.subject, status: { in: ['DISCONNECTED', 'REAUTH_REQUIRED'] } }, orderBy: { updatedAt: 'desc' } })
+        if (previous) {
+          await tx.companyGoogleDriveConnection.update({ where: { id: previous.id }, data: { encryptedRefreshToken, googleAccountEmail: identity.email, rootFolderId: root.id, scopes: [env.GOOGLE_DRIVE_SCOPE], status: 'CONNECTED', lastError: null, lastErrorCode: null, disconnectedAt: null, lastRefreshAt: now } })
+        } else {
+          await tx.companyGoogleDriveConnection.create({ data: { companyId: company.id, encryptedRefreshToken, googleSubject: identity.subject, googleAccountEmail: identity.email, rootFolderId: root.id, scopes: [env.GOOGLE_DRIVE_SCOPE], status: 'CONNECTED', lastRefreshAt: now } })
+        }
+      })
+      response.type('html').send('<!doctype html><title>Google Drive conectado</title><p>Google Drive conectado. Puedes cerrar esta ventana.</p>')
+    } catch (error) {
+      console.error('[google-drive/oauth/callback]', googleDriveOAuthFailureDetails(error, stage, correlationId))
+      const status = error instanceof GoogleDriveError && error.code === 'OAUTH_NOT_CONFIGURED' ? 503 : 502
+      response.status(status).send('No se pudo conectar Google Drive. Intenta nuevamente.')
+    }
+  }))
+
+  app.get('/api/companies/:companyId/google-drive', authMiddleware, asyncHandler(async (request, response) => {
+    const company = await manageableCompany(request, String(request.params.companyId))
+    if (!company) {
+      response.status(404).json({ error: 'Company not found' })
+      return
+    }
+    const connection = await db.companyGoogleDriveConnection.findFirst({ where: { companyId: company.id, status: 'CONNECTED' }, orderBy: { updatedAt: 'desc' }, select: { id: true, status: true, googleAccountEmail: true, scopes: true, connectedAt: true, lastErrorCode: true } })
+    response.json({ connected: Boolean(connection), connection: connection ?? null })
+  }))
+
+  app.delete('/api/companies/:companyId/google-drive', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const company = await manageableCompany(request, String(request.params.companyId))
+    if (!company) {
+      response.status(404).json({ error: 'Company not found' })
+      return
+    }
+    const connection = await db.companyGoogleDriveConnection.findFirst({ where: { companyId: company.id, status: 'CONNECTED' }, orderBy: { updatedAt: 'desc' } })
+    if (!connection) {
+      response.status(204).send()
+      return
+    }
+    try {
+      await driveGateway.revoke(decryptOAuthSecret(connection.encryptedRefreshToken))
+    } catch (error) {
+      response.status(error instanceof GoogleDriveError && error.retryable ? 503 : 502).json({ error: 'No se pudo revocar la conexión Google Drive' })
+      return
+    }
+    await db.companyGoogleDriveConnection.update({ where: { id: connection.id }, data: { status: 'DISCONNECTED', disconnectedAt: new Date() } })
+    response.status(204).send()
+  }))
 
   app.get('/api/users', authMiddleware, asyncHandler(async (request, response) => {
     const where: Prisma.UserWhereInput = request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
@@ -2905,7 +3333,15 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           // "Aprobar y aceptar": además del ciclo, el veredicto formal del riesgo queda ACCEPTED.
           await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'ACCEPTED' } })
           // Ticket único por ciclo (RiskApproval.ticketId es único): un reintento jamás duplica.
-          const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
+           const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
+           await ticketAuditWrite(tx, {
+             ticketId: ticket.id,
+             eventType: TicketAuditEventType.TICKET_CREATED,
+             summary: 'Ticket de seguimiento creado',
+             actor: request.user!,
+             changes: ticketAuditCreatedChanges(ticketAuditSnapshot(ticket)),
+             metadata: { approvalId: approval.id, origin: 'RISK_APPROVAL' },
+           })
           await tx.riskApproval.update({ where: { id: approval.id }, data: { ticketId: ticket.id } })
           createdTicketId = ticket.id
         } else {
@@ -3374,34 +3810,34 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const existingPlan = await db.actionPlan.findFirst({ where: { riskId: risk.id }, orderBy: { createdAt: 'asc' }, select: { id: true } })
-    let actionPlanId: string
-    if (existingPlan) {
-      actionPlanId = existingPlan.id
-    } else {
+    let diagnosticId: string | null = null
+    if (!existingPlan) {
       const diagnostic = await db.qualityDiagnostic.findFirst({
         where: { companyId: process.companyId },
         orderBy: { createdAt: 'desc' },
         select: { id: true },
       })
       if (!diagnostic) {
-        response.status(400).json({ error: 'No diagnostic available for this company' })
+        response.status(400).json({
+          error: 'Esta empresa no tiene un análisis estratégico. Selecciona uno existente o crea uno nuevo antes de agregar actividades de mitigación.',
+          reason: 'DIAGNOSTIC_REQUIRED',
+        })
         return
       }
-      const reference = risk.code ?? risk.name
-      const plan = await db.actionPlan.create({
+      diagnosticId = diagnostic.id
+    }
+    const { item } = await db.$transaction(async (tx) => {
+      const actionPlanId = existingPlan?.id ?? (await tx.actionPlan.create({
         data: {
-          diagnosticId: diagnostic.id,
+          diagnosticId: diagnosticId!,
           riskId: risk.id,
-          title: `Plan de mitigación ${reference}`,
-          description: `Actividades de mitigación del riesgo ${reference}.`,
+          title: `Plan de mitigación ${risk.code ?? risk.name}`,
+          description: `Actividades de mitigación del riesgo ${risk.code ?? risk.name}.`,
           status: 'ACTIVE',
           createdById: request.user!.id,
         },
         select: { id: true },
-      })
-      actionPlanId = plan.id
-    }
-    const { item } = await db.$transaction(async (tx) => {
+      })).id
       const created = await tx.actionItem.create({
         data: {
           actionPlanId,
@@ -3426,6 +3862,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           createdById: request.user!.id,
         }),
         include: ticketInclude,
+      })
+      await ticketAuditWrite(tx, {
+        ticketId: ticket.id,
+        eventType: TicketAuditEventType.TICKET_CREATED,
+        summary: 'Ticket de mitigacion creado',
+        actor: request.user!,
+        changes: ticketAuditCreatedChanges(ticketAuditSnapshot(ticket)),
+        metadata: { actionItemId: ticket.actionItemId, origin: 'MITIGATION_ACTIVITY' },
       })
       // Aviso de asignación: la actividad nace con responsable, así que ese responsable se entera
       // aquí mismo (mismo link idempotente tickets/<id> que el resto del sistema).
@@ -3835,7 +4279,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       await tx.$queryRaw`SELECT "id" FROM "Audit" WHERE "id" = ${auditId} FOR UPDATE`
     }
     const audit = await tx.audit.findUnique({ where: { id: auditId }, include: auditInclude })
-    if (!audit || isTerminalAuditStatus(audit.status)) return null
+    if (!audit || isTerminalAuditStatus(audit.status) || audit.storageDeletionRequestedAt) return null
     return audit
   }
 
@@ -4351,9 +4795,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const existing = await db.audit.findUnique({ where: { id: parsedIds.data.auditId }, select: { id: true, processId: true, code: true, status: true } })
+    const existing = await db.audit.findUnique({ where: { id: parsedIds.data.auditId }, select: { id: true, processId: true, code: true, status: true, storageDeletionRequestedAt: true } })
     if (!existing || existing.processId !== process.id) {
       response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (existing.storageDeletionRequestedAt) {
+      const operation = await db.evidenceStorageOperation.findUnique({ where: { idempotencyKey: `audit-delete:${existing.id}` }, select: { id: true, status: true } })
+      response.status(202).json({ auditId: existing.id, operationId: operation?.id ?? null, operationStatus: operation?.status ?? 'PENDING' })
       return
     }
     if (isTerminalAuditStatus(existing.status)) {
@@ -4367,21 +4816,42 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'The audit has findings; cancel it instead' })
       return
     }
-    // Sin hallazgos se retira la auditoría completa: evidencias (enlace y archivos), checklists,
-    // vínculos e historial acompañan en la misma transacción (las claves foráneas son Restrict
-    // sobre Audit y CASCADE no basta si el cliente de prueba no replica el motor). Los nombres en
-    // disco se leen antes para limpiar los PDF después de confirmar la baja en base de datos.
-    const deletion = await db.$transaction(async (tx): Promise<string[] | false | null> => {
+    // La auditoría permanece viva mientras el outbox elimina sus evidencias. Esto permite recuperar
+    // una operación pendiente incluso si la auditoría pasa después a un estado terminal.
+    const deletion = await db.$transaction(async (tx): Promise<{ operationId: string; pending: true } | { blocked: true; evidenceFileId: string } | false | null | { deleted: true; storedNames: string[] }> => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
       const lockedFinding = await tx.auditFinding.findFirst({ where: { auditId: existing.id }, select: { id: true } })
       if (lockedFinding) return false
-      const storedNames = (await tx.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { storedName: true } })).map((file) => file.storedName)
+      const files = await tx.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { id: true, filename: true, storedName: true, storageProvider: true, driveConnectionId: true } })
+      if (files.some((file) => file.storageProvider === 'GOOGLE_DRIVE')) {
+        const legacyDriveFile = files.find((file) => file.storageProvider === 'GOOGLE_DRIVE' && !file.driveConnectionId)
+        if (legacyDriveFile) return { blocked: true, evidenceFileId: legacyDriveFile.id }
+        await tx.audit.update({ where: { id: existing.id }, data: { storageDeletionRequestedAt: new Date() } })
+        for (const file of files) {
+          await tx.auditEvidenceFile.update({ where: { id: file.id }, data: { storageState: 'DELETE_PENDING' } })
+          assertEvidenceStorageOperationShape({ operationType: 'FILE_DELETE', auditId: existing.id, evidenceFileId: file.id, connectionId: file.driveConnectionId, storageProvider: file.storageProvider })
+          await tx.evidenceStorageOperation.upsert({
+            where: { idempotencyKey: `file-delete:${file.id}` },
+            create: { companyId: process.companyId, auditId: existing.id, evidenceFileId: file.id, connectionId: file.driveConnectionId, operationType: 'FILE_DELETE', idempotencyKey: `file-delete:${file.id}` },
+            update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
+          })
+        }
+        assertEvidenceStorageOperationShape({ operationType: 'AUDIT_DELETE', auditId: existing.id })
+        const operation = await tx.evidenceStorageOperation.upsert({
+          where: { idempotencyKey: `audit-delete:${existing.id}` },
+          create: { companyId: process.companyId, auditId: existing.id, operationType: 'AUDIT_DELETE', idempotencyKey: `audit-delete:${existing.id}` },
+          update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
+          select: { id: true },
+        })
+        await auditEventWrite(tx, { auditId: existing.id, eventType: 'EVIDENCE_FILE_DELETE_PENDING', summary: 'Eliminación de auditoría pendiente de almacenamiento', actor: auditActorOf(request), metadata: { operationId: operation.id, evidenceCount: files.length } })
+        return { operationId: operation.id, pending: true }
+      }
       await tx.auditEvidenceFile.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvidence.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvent.deleteMany({ where: { auditId: existing.id } })
       await tx.audit.delete({ where: { id: existing.id } })
-      return storedNames
+      return { deleted: true, storedNames: files.map((file) => file.storedName).filter((storedName): storedName is string => Boolean(storedName)) }
     })
     if (deletion === null) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
@@ -4391,12 +4861,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'The audit has findings; cancel it instead' })
       return
     }
-    const storedNames = deletion
-    if (storedNames.length > 0) {
-      const { failed } = await removeEvidenceFiles(storedNames)
-      if (failed.length > 0) {
-        console.error('[evidence] no se pudieron borrar archivos tras eliminar la auditoría', { auditId: existing.id, failed })
-      }
+    if ('blocked' in deletion) {
+      response.status(409).json({ error: 'A legacy Google Drive evidence has no recoverable company connection', reason: 'DRIVE_CONNECTION_REQUIRED', evidenceFileId: deletion.evidenceFileId })
+      return
+    }
+    if ('pending' in deletion) {
+      await evidenceOperations.runOperation(deletion.operationId)
+      const operation = await db.evidenceStorageOperation.findUnique({ where: { id: deletion.operationId }, select: { status: true } })
+      response.status(202).json({ auditId: existing.id, operationId: deletion.operationId, operationStatus: operation?.status ?? 'PENDING' })
+      return
+    }
+    for (const storedName of deletion.storedNames) {
+      await localEvidenceStorage.remove({ storedName }).catch((error) => console.error('[evidence] no se pudo borrar el staging local tras eliminar la auditoría', { auditId: existing.id, storedName, error }))
     }
     response.status(204).send()
   })
@@ -5673,9 +6149,64 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
-    const storedName = nextStoredName()
+    if (evidenceStorage.kind === 'GOOGLE_DRIVE') {
+      const connection = await activeDriveConnection(audit.process.companyId)
+      if (!connection) {
+        response.status(409).json({ error: 'La empresa no tiene una conexión Google Drive activa' })
+        return
+      }
+      const stagedName = nextStoredName()
+      await writeEvidenceFile(stagedName, file.data)
+      try {
+        const created = await db.$transaction(async (tx) => {
+          const locked = await lockAuditForWrite(tx, audit.id)
+          if (!locked) return null
+          const saved = await tx.auditEvidenceFile.create({
+            data: {
+              auditId: audit.id,
+              findingId: anchors.findingId,
+              actionId: anchors.actionId,
+              itemId: anchors.itemId,
+              filename: upload.filename,
+              storedName: null,
+              stagedName,
+              mimeType: upload.mimeType,
+              size: upload.size,
+              uploadedById: request.user!.id,
+              storageProvider: 'GOOGLE_DRIVE',
+              storageState: 'PENDING',
+              driveConnectionId: connection.id,
+            },
+            include: auditEvidenceFileInclude,
+          })
+          assertEvidenceStorageOperationShape({ operationType: 'UPLOAD', auditId: audit.id, evidenceFileId: saved.id, connectionId: connection.id })
+          const operation = await tx.evidenceStorageOperation.create({
+            data: { companyId: audit.process.companyId, auditId: audit.id, evidenceFileId: saved.id, connectionId: connection.id, operationType: 'UPLOAD', idempotencyKey: `upload:${saved.id}` },
+            select: { id: true },
+          })
+          await auditEventWrite(tx, { auditId: audit.id, eventType: 'EVIDENCE_FILE_CREATED', summary: `Evidencia «${saved.filename}» registrada`, actor: auditActorOf(request), metadata: { evidenceFileId: saved.id, operationId: operation.id, storageState: 'PENDING' } })
+          return { saved, operationId: operation.id }
+        })
+        if (!created) {
+          await removeEvidenceFiles([stagedName])
+          response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+          return
+        }
+        await evidenceOperations.runOperation(created.operationId)
+        const current = await db.auditEvidenceFile.findFirst({ where: { id: created.saved.id }, include: auditEvidenceFileInclude })
+        if (current?.storageState === 'READY') {
+          response.status(201).json({ file: auditEvidenceFileView(current) })
+          return
+        }
+        response.status(202).json({ operationId: created.operationId, file: current ? auditEvidenceFileView(current) : null })
+      } catch (error) {
+        await removeEvidenceFiles([stagedName]).catch(() => undefined)
+        throw error
+      }
+      return
+    }
+    const stored = await evidenceStorage.upload({ filename: upload.filename, mimeType: upload.mimeType, data: file.data })
     try {
-      await writeEvidenceFile(storedName, file.data)
       const actor = auditActorOf(request)
       const created = await db.$transaction(async (tx) => {
         const locked = await lockAuditForWrite(tx, audit.id)
@@ -5687,10 +6218,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
             actionId: anchors.actionId,
             itemId: anchors.itemId,
             filename: upload.filename,
-            storedName,
+            storedName: stored.storedName,
             mimeType: upload.mimeType,
             size: upload.size,
             uploadedById: request.user!.id,
+            storageProvider: evidenceStorage.kind,
+            storageState: 'READY',
+            driveFileId: stored.driveFileId,
+            driveUrl: stored.driveUrl,
           },
           include: auditEvidenceFileInclude,
         })
@@ -5709,18 +6244,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         return saved
       })
       if (!created) {
-        const { failed } = await removeEvidenceFiles([storedName])
-        if (failed.length > 0) {
-          console.error('[evidence] no se pudo retirar el archivo tras rechazar la subida por estado', { auditId: audit.id, storedName, failed })
+        try {
+          await evidenceStorage.remove(stored)
+        } catch (cleanupError) {
+          console.error('[evidence] no se pudo retirar el recurso tras rechazar la subida por estado', { auditId: audit.id, stored, cleanupError })
         }
         response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
         return
       }
       response.status(201).json({ file: auditEvidenceFileView(created) })
     } catch (error) {
-      const { failed } = await removeEvidenceFiles([storedName])
-      if (failed.length > 0) {
-        console.error('[evidence] no se pudo retirar el archivo tras fallar la subida', { auditId: audit.id, storedName, failed })
+      try {
+        await evidenceStorage.remove(stored)
+      } catch (cleanupError) {
+        console.error('[evidence] no se pudo retirar el recurso tras fallar la subida', { auditId: audit.id, stored, cleanupError })
       }
       throw error
     }
@@ -5740,22 +6277,47 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     response.json({ files: files.map(auditEvidenceFileView) })
   }))
 
+  app.get('/api/audits/:auditId/evidence-operations/:operationId', authMiddleware, asyncHandler(async (request, response) => {
+    const audit = await findCompanyAudit(request, String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const operation = await db.evidenceStorageOperation.findFirst({
+      where: { id: String(request.params.operationId), auditId: audit.id },
+      select: { id: true, auditId: true, evidenceFileId: true, operationType: true, status: true, attemptCount: true, nextAttemptAt: true, lastAttemptAt: true, lastErrorCode: true, createdAt: true, updatedAt: true },
+    })
+    if (!operation) {
+      response.status(404).json({ error: 'Storage operation not found' })
+      return
+    }
+    response.json({ operation })
+  }))
+
   app.get('/api/audits/:auditId/evidence-files/:fileId', authMiddleware, asyncHandler(async (request, response) => {
     const audit = await findCompanyAudit(request, String(request.params.auditId))
     if (!audit) {
       response.status(404).json({ error: 'Audit not found' })
       return
     }
-    const record = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id } })
+    const record = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id }, include: auditEvidenceFileInclude })
     if (!record) {
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
+    if (record.storageProvider === 'GOOGLE_DRIVE' && evidenceStorage.kind !== 'GOOGLE_DRIVE') {
+      response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
+      return
+    }
     let data: Buffer
     try {
-      data = await readEvidenceFile(record.storedName)
+      const provider = record.storageProvider === 'LOCAL' ? localEvidenceStorage : evidenceStorage
+      data = await provider.read({ storedName: record.storedName, driveFileId: record.driveFileId, connection: record.driveConnection })
     } catch (error) {
-      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      const remoteStatus = typeof error === 'object' && error !== null && 'response' in error
+        ? (error as { response?: { status?: number } }).response?.status
+        : undefined
+      if ((error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') || remoteStatus === 404) {
         response.status(404).json({ error: 'El archivo de evidencia ya no está disponible' })
         return
       }
@@ -5775,7 +6337,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Audit not found' })
       return
     }
-    const existing = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id } })
+    const existing = await db.auditEvidenceFile.findFirst({ where: { id: String(request.params.fileId), auditId: audit.id }, include: auditEvidenceFileInclude })
     if (!existing) {
       response.status(404).json({ error: 'Evidence not found' })
       return
@@ -5784,7 +6346,45 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
+    if (existing.storageProvider === 'GOOGLE_DRIVE' && evidenceStorage.kind !== 'GOOGLE_DRIVE') {
+      response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
+      return
+    }
     const actor = auditActorOf(request)
+    const reference = { storedName: existing.storedName, driveFileId: existing.driveFileId }
+    if (existing.storageProvider === 'GOOGLE_DRIVE') {
+      if (!existing.driveConnectionId) {
+        response.status(503).json({ error: 'La evidencia Drive no tiene conexión asociada' })
+        return
+      }
+      const pending = await db.$transaction(async (tx): Promise<string | false> => {
+        const locked = await lockAuditForWrite(tx, audit.id)
+        if (!locked) return false
+        await tx.auditEvidenceFile.update({ where: { id: existing.id }, data: { storageState: 'DELETE_PENDING', storageError: null } })
+        assertEvidenceStorageOperationShape({ operationType: 'FILE_DELETE', auditId: audit.id, evidenceFileId: existing.id, connectionId: existing.driveConnectionId, storageProvider: existing.storageProvider })
+        const operation = await tx.evidenceStorageOperation.upsert({
+          where: { idempotencyKey: `file-delete:${existing.id}` },
+          create: { companyId: audit.process.companyId, auditId: audit.id, evidenceFileId: existing.id, connectionId: existing.driveConnectionId, operationType: 'FILE_DELETE', idempotencyKey: `file-delete:${existing.id}` },
+          update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
+          select: { id: true },
+        })
+        await auditEventWrite(tx, { auditId: audit.id, eventType: 'EVIDENCE_FILE_DELETE_PENDING', summary: `Evidencia «${existing.filename}» pendiente de eliminación`, actor, metadata: { evidenceFileId: existing.id } })
+        return operation.id
+      })
+      if (pending === false) {
+        response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+        return
+      }
+      const operationId = pending
+      const operationResult = await evidenceOperations.runOperation(operationId)
+      const current = await db.auditEvidenceFile.findFirst({ where: { id: existing.id }, include: auditEvidenceFileInclude })
+      if (!current) {
+        response.status(204).send()
+        return
+      }
+      response.status(202).json({ operationId, operationStatus: operationResult ?? 'PENDING', file: auditEvidenceFileView(current) })
+      return
+    }
     const deleted = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
@@ -5807,9 +6407,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    const { failed } = await removeEvidenceFiles([existing.storedName])
-    if (failed.length > 0) {
-      console.error('[evidence] archivo no borrado tras eliminar la evidencia de auditoría', { auditId: audit.id, storedName: existing.storedName, failed })
+    try {
+      await localEvidenceStorage.remove(reference)
+    } catch (error) {
+      console.error('[evidence] archivo no borrado tras eliminar la evidencia de auditoría', { auditId: audit.id, reference, error })
     }
     response.status(204).send()
   }))
@@ -7144,7 +7745,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
             },
             include: actionItemInclude,
           })
-          await tx.ticket.create({
+           const createdTicket = await tx.ticket.create({
             data: ticketDataFromActionItem({
               title: created.title,
               description: created.description,
@@ -7155,8 +7756,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
               actionItemId: created.id,
               createdById: request.user!.id,
             }),
-            include: ticketInclude,
-          })
+             include: ticketInclude,
+           })
+           await ticketAuditWrite(tx, {
+             ticketId: createdTicket.id,
+             eventType: TicketAuditEventType.TICKET_CREATED,
+             summary: 'Ticket de plan de accion creado',
+             actor: request.user!,
+             changes: ticketAuditCreatedChanges(ticketAuditSnapshot(createdTicket)),
+             metadata: { actionItemId: created.id, origin: 'STRATEGY_TASKS' },
+           })
           existingTaskTitles.add(taskKey)
         }
         const refreshedPlan = await tx.actionPlan.findUnique({ where: { id: plan.id }, include: actionPlanInclude })
@@ -7225,7 +7834,17 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         await notifyMitigationPlanCompleted(tx, created.actionPlanId)
       }
       const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
-      const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
+       const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
+       if (!existingTicket) {
+         await ticketAuditWrite(tx, {
+           ticketId: linkedTicket.id,
+           eventType: TicketAuditEventType.TICKET_CREATED,
+           summary: 'Ticket de actividad creado',
+           actor: request.user!,
+           changes: ticketAuditCreatedChanges(ticketAuditSnapshot(linkedTicket)),
+           metadata: { actionItemId: created.id, origin: 'ACTION_ITEM' },
+         })
+       }
       // Aviso de asignación: si la actividad nace con responsable, ese responsable se entera aquí
       // mismo (mismo link idempotente que el resto de reasignaciones: tickets/<id>).
       await notifyTicketAssigned(tx, linkedTicket, linkedTicket.assignedToId, request.user!.id)
@@ -7298,7 +7917,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         })
       }
       const updated = await tx.actionItem.update({ where: { id: existing.id }, data: parsed.data, include: actionItemInclude })
-      const linked = await tx.ticket.findUnique({ where: { actionItemId: updated.id }, select: { id: true } })
+       const linked = await tx.ticket.findUnique({ where: { actionItemId: updated.id }, include: ticketInclude })
       const ticketData: Prisma.TicketUncheckedUpdateInput = {}
       if (parsed.data.title !== undefined) ticketData.title = parsed.data.title
       if (parsed.data.description !== undefined) ticketData.description = parsed.data.description
@@ -7307,14 +7926,23 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       if (parsed.data.dueDate !== undefined) ticketData.dueDate = parsed.data.dueDate
       if (parsed.data.status !== undefined) ticketData.status = actionItemToTicketStatus[parsed.data.status]
       let linkedTicketId: string
-      if (linked) {
-        linkedTicketId = linked.id
-        if (Object.keys(ticketData).length > 0) {
-          await tx.ticket.update({ where: { id: linked.id }, data: ticketData })
-        }
-      } else {
-        const linkedTicket = await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
-        linkedTicketId = linkedTicket.id
+       if (linked) {
+         linkedTicketId = linked.id
+         if (Object.keys(ticketData).length > 0) {
+           const updatedTicket = await tx.ticket.update({ where: { id: linked.id }, data: ticketData, include: ticketInclude })
+           await ticketAuditWriteDiff(tx, linked.id, request.user!, ticketAuditSnapshot(linked), ticketAuditSnapshot(updatedTicket), { actionItemId: updated.id, origin: 'ACTION_ITEM' })
+         }
+       } else {
+         const linkedTicket = await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
+         linkedTicketId = linkedTicket.id
+         await ticketAuditWrite(tx, {
+           ticketId: linkedTicket.id,
+           eventType: TicketAuditEventType.TICKET_CREATED,
+           summary: 'Ticket de actividad creado',
+           actor: request.user!,
+           changes: ticketAuditCreatedChanges(ticketAuditSnapshot(linkedTicket)),
+           metadata: { actionItemId: updated.id, origin: 'ACTION_ITEM' },
+         })
       }
       // Aviso de asignación: solo cuando el responsable cambia de verdad (y no a "sin responsable");
       // el link idempotente evita repetir el aviso si se reasigna a alguien ya avisado.
@@ -7396,6 +8024,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     const ticket = await db.$transaction(async (tx) => {
       const created = await tx.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: ticketInclude })
+      await ticketAuditWrite(tx, {
+        ticketId: created.id,
+        eventType: TicketAuditEventType.TICKET_CREATED,
+        summary: 'Ticket creado',
+        actor: request.user!,
+        changes: ticketAuditCreatedChanges(ticketAuditSnapshot(created)),
+        metadata: { origin: 'DIRECT' },
+      })
       // Aviso de asignación: un ticket manual con responsable avisa a ese responsable con el mismo
       // link idempotente (tickets/<id>) que usan las reasignaciones. El aviso vive en la misma
       // transacción que la creación, para que nunca quede un aviso de un ticket que no se creó.
@@ -7403,6 +8039,77 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       return created
     })
     response.status(201).json({ ticket: ticketView(ticket) })
+  }))
+
+  app.get('/api/tickets/history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = ticketHistoryQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid history query', details: parsed.error.issues })
+      return
+    }
+    const { page, pageSize, status, priority, search, assignedToId, eventType, from, to } = parsed.data
+    const ticketWhere: Prisma.TicketWhereInput = {
+      ...scopeForUser(request),
+      ...(status ? { status } : {}),
+      ...(priority ? { priority } : {}),
+      ...(assignedToId ? { assignedToId } : {}),
+      ...(search ? { OR: [{ title: { contains: search, mode: 'insensitive' } }, { description: { contains: search, mode: 'insensitive' } }] } : {}),
+    }
+    const visibleTickets: Prisma.TicketAuditEventWhereInput = request.user?.role === Role.SUPERUSER
+      ? { OR: [{ ticket: ticketWhere }, { ticketId: null }] }
+      : { OR: [{ ticket: ticketWhere }, { ticketId: null, companyId: request.user?.companyId ?? 'none' }] }
+    const where: Prisma.TicketAuditEventWhereInput = {
+      ...visibleTickets,
+      ...(eventType ? { eventType } : {}),
+      ...((from || to) ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    }
+    const [total, events] = await Promise.all([
+      db.ticketAuditEvent.count({ where }),
+      db.ticketAuditEvent.findMany({
+        where,
+        include: ticketAuditEventInclude,
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ])
+    response.json({ events: events.map(ticketAuditEventView), total, page, pageSize })
+  }))
+
+  app.get('/api/tickets/:id/history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsedQuery = ticketHistoryQuerySchema.safeParse(request.query)
+    if (!parsedQuery.success) {
+      response.status(400).json({ error: 'Invalid history query', details: parsedQuery.error.issues })
+      return
+    }
+    const ticketId = String(request.params.id)
+    const ticket = await db.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
+    if (!ticket || !canAccessTicket(request, ticket)) {
+      const deletedHistory = typeof db.ticketAuditEvent.findFirst === 'function'
+        ? await db.ticketAuditEvent.findFirst({ where: { ticketId, eventType: TicketAuditEventType.TICKET_DELETED, ...(request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }) } })
+        : null
+      if (!deletedHistory) {
+        response.status(404).json({ error: 'Ticket not found' })
+        return
+      }
+    }
+    const { page, pageSize, eventType, from, to } = parsedQuery.data
+    const where: Prisma.TicketAuditEventWhereInput = {
+      ticketId,
+      ...(eventType ? { eventType } : {}),
+      ...((from || to) ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    }
+    const [total, events] = await Promise.all([
+      db.ticketAuditEvent.count({ where }),
+      db.ticketAuditEvent.findMany({
+        where,
+        include: ticketAuditEventInclude,
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ])
+    response.json({ events: events.map(ticketAuditEventView), total, page, pageSize })
   }))
 
   app.get('/api/tickets/:id', authMiddleware, asyncHandler(async (request, response) => {
@@ -7414,17 +8121,189 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     response.json({ ticket: ticketView(ticket) })
   }))
 
+  const findAccessibleTicket = async (request: Request, ticketId: string) => {
+    const ticket = await db.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
+    return ticket && canAccessTicket(request, ticket) ? ticket : null
+  }
+
+  // Google Picker recibe un access token corto. El refresh token de la conexión de empresa nunca
+  // sale del servidor y el ticket sigue siendo el límite de autorización del usuario.
+  app.get('/api/tickets/:id/google-drive/picker-config', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
+    const connection = companyId ? await activeDriveConnection(companyId) : null
+    if (!connection) {
+      response.status(409).json({ error: 'La empresa no tiene una conexión Google Drive activa' })
+      return
+    }
+    if (!env.GOOGLE_PICKER_API_KEY || !env.GOOGLE_PICKER_APP_ID || !env.GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID) {
+      response.status(503).json({ error: 'Google Picker o la carpeta raíz de evidencias no están configurados en el servidor' })
+      return
+    }
+    const correlationId = randomUUID()
+    let folderContext: Awaited<ReturnType<typeof ticketDriveFolderContext>>
+    try {
+      folderContext = await ticketDriveFolderContext(companyId!, connection, correlationId)
+    } catch (error) {
+      // ticketDriveFolderContext ya registró etapa, estado y código con esta correlación.
+      response.status(error instanceof GoogleDriveError && error.retryable ? 503 : 502).json({ error: 'No se pudo preparar Google Picker' })
+      return
+    }
+    if (!folderContext) {
+      response.status(503).json({ error: 'La carpeta raíz o la subcarpeta de la empresa no está disponible en Google Drive' })
+      return
+    }
+    let accessToken: string
+    try {
+      accessToken = await driveGateway.accessToken(folderContext.token)
+    } catch (error) {
+      logGoogleDriveFlowFailure({ correlationId, stage: 'ISSUE_PICKER_ACCESS_TOKEN', ...googleDriveErrorFields(error) })
+      response.status(error instanceof GoogleDriveError && error.retryable ? 503 : 502).json({ error: 'No se pudo preparar Google Picker' })
+      return
+    }
+    response.json({ accessToken, developerKey: env.GOOGLE_PICKER_API_KEY, appId: env.GOOGLE_PICKER_APP_ID, rootFolderId: folderContext.rootFolderId, companyFolderId: folderContext.companyFolderId })
+  }))
+
+  app.get('/api/tickets/:id/drive-evidence', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const references = await db.ticketDriveReference.findMany({ where: { ticketId: ticket.id }, include: driveReferenceInclude, orderBy: { createdAt: 'desc' } })
+    response.json({ references: references.map(driveReferenceView) })
+  }))
+
+  app.post('/api/tickets/:id/drive-evidence', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = ticketDriveReferenceCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Google Drive file reference', details: parsed.error.issues })
+      return
+    }
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
+    const connection = companyId ? await activeDriveConnection(companyId) : null
+    if (!connection || !companyId) {
+      response.status(409).json({ error: 'La empresa no tiene una conexión Google Drive activa' })
+      return
+    }
+    const correlationId = randomUUID()
+    let folderContext: Awaited<ReturnType<typeof ticketDriveFolderContext>>
+    try {
+      folderContext = await ticketDriveFolderContext(companyId, connection, correlationId)
+    } catch (error) {
+      // ticketDriveFolderContext ya registró etapa, estado y código con esta correlación.
+      response.status(error instanceof GoogleDriveError && !error.retryable ? 502 : 503).json({ error: 'No se pudo validar la carpeta de evidencias de Google Drive' })
+      return
+    }
+    if (!folderContext) {
+      response.status(503).json({ error: 'La carpeta raíz o la subcarpeta de la empresa no está disponible en Google Drive' })
+      return
+    }
+    const existing = await db.ticketDriveReference.findFirst({ where: { ticketId: ticket.id, driveFileId: parsed.data.driveFileId }, select: { id: true } })
+    if (existing) {
+      response.status(409).json({ error: 'El archivo de Google Drive ya está asociado a un ticket' })
+      return
+    }
+    let metadata
+    try {
+      metadata = await driveGateway.fileMetadata(folderContext.token, parsed.data.driveFileId)
+    } catch (error) {
+      logGoogleDriveFlowFailure({ correlationId, stage: 'FETCH_FILE_METADATA', ...googleDriveErrorFields(error) })
+      if (error instanceof GoogleDriveError && [403, 404].includes(error.status ?? 0)) {
+        response.status(422).json({ error: 'El archivo no está disponible para la conexión Google Drive de la empresa' })
+        return
+      }
+      throw error
+    }
+    let ancestry: Awaited<ReturnType<typeof driveGateway.verifyFileAncestry>>
+    try {
+      ancestry = await driveGateway.verifyFileAncestry(folderContext.token, metadata.id, folderContext.rootFolderId, folderContext.companyFolderId, companyId)
+    } catch (error) {
+      logGoogleDriveFlowFailure({ correlationId, stage: 'VERIFY_FILE_ANCESTRY', ...googleDriveErrorFields(error) })
+      response.status(error instanceof GoogleDriveError && !error.retryable ? 422 : 503).json({ error: 'No se pudo verificar la carpeta del archivo en Google Drive' })
+      return
+    }
+    if (!ancestry.allowed) {
+      logGoogleDriveFlowFailure({ correlationId, stage: 'VERIFY_FILE_ANCESTRY', reason: ancestry.reason })
+      response.status(422).json({ error: 'El archivo debe pertenecer a la carpeta raíz de EvidentIA y a la subcarpeta autorizada de la empresa' })
+      return
+    }
+    if (metadata.mimeType !== 'application/pdf') {
+      response.status(415).json({ error: 'Solo se pueden asociar archivos PDF de Google Drive' })
+      return
+    }
+    if (metadata.size !== null && metadata.size > MAX_TICKET_DRIVE_REFERENCE_BYTES) {
+      response.status(413).json({ error: 'El PDF de Google Drive supera el tamaño máximo de 10 MB' })
+      return
+    }
+    const created = await db.$transaction(async (tx) => {
+      const reference = await tx.ticketDriveReference.create({
+        data: {
+          ticketId: ticket.id,
+          companyId,
+          connectionId: connection.id,
+          driveFileId: metadata.id,
+          filename: metadata.name,
+          mimeType: metadata.mimeType,
+          size: metadata.size,
+          driveUrl: metadata.webViewLink ?? `https://drive.google.com/file/d/${metadata.id}/view`,
+          createdById: request.user!.id,
+        },
+        include: driveReferenceInclude,
+      })
+      await ticketAuditWrite(tx, {
+        ticketId: ticket.id,
+        eventType: TicketAuditEventType.EVIDENCE_ATTACHED,
+        summary: `Evidencia Drive asociada: ${metadata.name}`,
+        actor: request.user!,
+        changes: [{ field: 'filename', label: 'Archivo Drive', previousValue: null, newValue: metadata.name }],
+        metadata: { source: 'GOOGLE_DRIVE', referenceId: reference.id, driveFileId: metadata.id, mimeType: metadata.mimeType, size: metadata.size },
+      })
+      return reference
+    })
+    response.status(201).json({ reference: driveReferenceView(created) })
+  }))
+
+  app.delete('/api/tickets/:id/drive-evidence/:referenceId', authMiddleware, asyncHandler(async (request, response) => {
+    const ticket = await findAccessibleTicket(request, String(request.params.id))
+    if (!ticket) {
+      response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    const reference = await db.ticketDriveReference.findFirst({ where: { id: String(request.params.referenceId), ticketId: ticket.id }, select: { id: true, filename: true, driveFileId: true } })
+    if (!reference) {
+      response.status(404).json({ error: 'Google Drive reference not found' })
+      return
+    }
+    await db.$transaction(async (tx) => {
+      await tx.ticketDriveReference.delete({ where: { id: reference.id } })
+      await ticketAuditWrite(tx, {
+        ticketId: ticket.id,
+        eventType: TicketAuditEventType.EVIDENCE_DELETED,
+        summary: `Referencia Drive retirada: ${reference.filename}`,
+        actor: request.user!,
+        changes: [{ field: 'filename', label: 'Archivo Drive', previousValue: reference.filename, newValue: null }],
+        metadata: { source: 'GOOGLE_DRIVE', referenceId: reference.id, driveFileId: reference.driveFileId },
+      })
+    })
+    response.status(204).send()
+  }))
+
   // ---- Evidencia PDF de los tickets ----
   // Los archivos viven en el directorio privado EVIDENCE_UPLOAD_DIR con nombre generado por el
   // servidor; aquí solo se guardan/sirven metadatos y referencias. Todas las operaciones pasan
   // antes por la misma comprobación de acceso al ticket (canAccessTicket), así un usuario que no
   // puede abrir el ticket tampoco ve, descarga ni borra su evidencia. La lista por plan respeta la
   // misma visibilidad, de modo que cada fila mostrada es una fila que efectivamente se puede abrir.
-  const findAccessibleTicket = async (request: Request, ticketId: string) => {
-    const ticket = await db.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
-    return ticket && canAccessTicket(request, ticket) ? ticket : null
-  }
-
   app.post('/api/tickets/:id/evidence', authMiddleware, asyncHandler(async (request, response) => {
     const ticket = await findAccessibleTicket(request, String(request.params.id))
     if (!ticket) {
@@ -7448,16 +8327,30 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     await writeEvidenceFile(storedName, file.data)
     let created: Prisma.TicketEvidenceFileGetPayload<{ include: typeof evidenceInclude }>
     try {
-      created = await db.ticketEvidenceFile.create({
-        data: {
+      created = await db.$transaction(async (tx) => {
+        const evidence = await tx.ticketEvidenceFile.create({
+          data: {
+            ticketId: ticket.id,
+            filename: upload.filename,
+            storedName,
+            mimeType: upload.mimeType,
+            size: upload.size,
+            uploadedById: request.user!.id,
+          },
+          include: evidenceInclude,
+        })
+        await ticketAuditWrite(tx, {
           ticketId: ticket.id,
-          filename: upload.filename,
-          storedName,
-          mimeType: upload.mimeType,
-          size: upload.size,
-          uploadedById: request.user!.id,
-        },
-        include: evidenceInclude,
+          eventType: TicketAuditEventType.EVIDENCE_ATTACHED,
+          summary: `Evidencia adjuntada: ${upload.filename}`,
+          actor: request.user!,
+          changes: [
+            { field: 'filename', label: 'Archivo', previousValue: null, newValue: upload.filename },
+            { field: 'size', label: 'Tamano', previousValue: null, newValue: upload.size },
+          ],
+          metadata: { evidenceId: evidence.id, mimeType: upload.mimeType, size: upload.size },
+        })
+        return evidence
       })
     } catch (error) {
       // Se escribió el archivo y falló la fila: se retira el bytes para no dejar basura en disco.
@@ -7518,14 +8411,24 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
-    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, storedName: true } })
+    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, filename: true, storedName: true } })
     if (!record) {
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
     // Base de datos primero y disco después: si el unlink falla queda un archivo huérfano (que se
     // registra), nunca una fila que promete un archivo ya borrado.
-    await db.ticketEvidenceFile.delete({ where: { id: record.id } })
+    await db.$transaction(async (tx) => {
+      await tx.ticketEvidenceFile.delete({ where: { id: record.id } })
+      await ticketAuditWrite(tx, {
+        ticketId: ticket.id,
+        eventType: TicketAuditEventType.EVIDENCE_DELETED,
+        summary: 'Evidencia eliminada',
+        actor: request.user!,
+        changes: [{ field: 'filename', label: 'Archivo', previousValue: record.filename, newValue: null }],
+        metadata: { evidenceId: record.id },
+      })
+    })
     const { failed } = await removeEvidenceFiles([record.storedName])
     if (failed.length > 0) {
       console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: record.storedName, failed })
@@ -7575,6 +8478,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         })
       }
       const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
+      await ticketAuditWriteDiff(tx, existing.id, request.user!, ticketAuditSnapshot(existing), ticketAuditSnapshot(updated), { origin: existing.actionItemId ? 'ACTION_ITEM_SYNC' : 'DIRECT' })
       if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
         // La tarea es la fuente de verdad del progreso del plan; el estado antes de escribirlo
         // decide si esto cierra la mitigación (p. ej. ticket RESOLVED -> actividad COMPLETED).
@@ -7616,7 +8520,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
   app.delete('/api/tickets/:id', authMiddleware, asyncHandler(async (request, response) => {
     const existing = await db.ticket.findUnique({
       where: { id: String(request.params.id) },
-      select: { id: true, createdById: true, assignedToId: true, createdBy: { select: { companyId: true } }, assignedTo: { select: { companyId: true } } },
+       select: { id: true, title: true, createdById: true, assignedToId: true, createdBy: { select: { companyId: true } }, assignedTo: { select: { companyId: true } } },
     })
     if (!existing || !canAccessTicket(request, existing)) {
       response.status(404).json({ error: 'Ticket not found' })
@@ -7631,7 +8535,18 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // como huérfano; nunca se borra primero el disco, porque si la escritura fallara quedarían filas
     // de evidencia apuntando a un archivo ya borrado.
     const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true } })
-    await db.ticket.delete({ where: { id: existing.id } })
+    await db.$transaction(async (tx) => {
+      await ticketAuditWrite(tx, {
+        ticketId: existing.id,
+        ticketTitle: existing.title,
+        companyId: existing.createdBy.companyId ?? existing.assignedTo?.companyId ?? null,
+        eventType: TicketAuditEventType.TICKET_DELETED,
+        summary: `Ticket eliminado: ${existing.title}`,
+        actor: request.user!,
+        changes: [{ field: 'title', label: 'Titulo', previousValue: existing.title, newValue: null }],
+      })
+      await tx.ticket.delete({ where: { id: existing.id } })
+    })
     if (evidenceFiles.length > 0) {
       const { failed } = await removeEvidenceFiles(evidenceFiles.map((evidenceFile) => evidenceFile.storedName))
       if (failed.length > 0) {

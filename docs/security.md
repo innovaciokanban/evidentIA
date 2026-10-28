@@ -38,7 +38,7 @@ Todo recurso por ID se valida contra el alcance del usuario antes de leer/escrib
 - **Tickets**: `canAccessTicket` — creador, asignado o `SUPERUSER`.
 - **Empresas**: `canAccessCompany` — `consultantId` del usuario o `SUPERUSER`.
 - **Diagnósticos / DOFA / IA / recomendaciones / planes / ítems**: acceso indirecto mediante la empresa del diagnóstico (consultas con `include` para traer `company.consultantId`).
-- **Actividades de mitigación** (`GET`/`POST .../plan-activities`): sesión + proceso visible + riesgo exacto de ese proceso; el alta exige `userWriteGuard` (SUPERUSER o COMPANY_ADMIN) y que el responsable asignado pertenezca a la empresa del proceso (`403` si es de otra empresa). El plan nuevo se ancla al diagnóstico más reciente de la misma empresa.
+- **Actividades de mitigación** (`GET`/`POST .../plan-activities`): sesión + proceso visible + riesgo exacto de ese proceso; el alta exige `userWriteGuard` (SUPERUSER o COMPANY_ADMIN) y que el responsable asignado pertenezca a la empresa del proceso (`403` si es de otra empresa). El plan nuevo se ancla al diagnóstico más reciente de la misma empresa; sin diagnóstico responde `400` con `DIAGNOSTIC_REQUIRED` y no escribe actividad, ticket ni notificación.
 - **Dashboard**: `dashboardScopesFor` construye filtros por rol; `USER` solo ve sus propios datos (`Promise.all` de consultas con esos alcances).
 - Los recursos inexistentes **y** los no accesibles devuelven `404` para no revelar existencia.
 - Tests dedicados manipulan IDs de recursos de otros consultores y verifican `404`/`403`.
@@ -91,10 +91,14 @@ Aplicadas globalmente:
 - Validación estricta **antes de tocar disco**: extensión `.pdf`, MIME `application/pdf`, firma `%PDF-` y tamaño > 0 (`server/evidence-storage.ts`); si algo falla no queda ni fila ni archivo.
 - **Sin path traversal**: el nombre en disco es `randomUUID().pdf`; el nombre original se sanea (solo `basename`, sin comillas ni caracteres de control, ≤150 caracteres) y la API solo expone ese nombre saneado.
 - **Fuera del árbol web**: los archivos viven en `EVIDENCE_UPLOAD_DIR` (default `var/evidence`, ignorado por git); en producción debe ser un volumen persistente.
+- **Drive privado**: cuando `EVIDENCE_STORAGE_PROVIDER=google-drive`, los nuevos PDF se guardan en la jerarquía privada raíz/empresa/auditoría. La API no acepta ids de carpeta desde el cliente, no crea permisos públicos y sirve el contenido mediante una ruta autenticada.
+- **OAuth por empresa**: cada empresa autoriza su propia cuenta Drive con el alcance mínimo `drive.file`; no existe una cuenta de servicio global ni delegación de dominio.
+- **Credenciales server-side**: el refresh token se cifra con `OAUTH_TOKEN_ENCRYPTION_KEY` antes de persistirse; nunca se envía al navegador ni forma parte de una respuesta HTTP. La conexión usada queda referenciada en cada evidencia para evitar cruces entre empresas.
 - **Autorización por ticket**: subir, listar, descargar y borrar exigen sesión + acceso al ticket (`canAccessTicket`); `plan-evidence` exige sesión + acceso al proceso y alcance del usuario sobre los tickets. El nombre en disco (`storedName`) jamás viaja en una respuesta.
+- **Referencias Drive de tickets**: Google Picker recibe únicamente un access token temporal de la conexión Drive de la empresa, nunca el refresh token. `setParent` solo orienta la interfaz: el servidor verifica la ascendencia real del archivo hasta la raíz efectiva (la de `GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID` o, si con `drive.file` no es visible, la raíz creada en la conexión OAuth, validada por tenant) y la subcarpeta marcada para la empresa, además de validar que sea PDF. Un 403/404 solo invalida la cadena si aún no se han alcanzado la raíz y la subcarpeta requeridas; los motivos de rechazo se registran como etiquetas sin identificadores. Persiste solo metadatos y `driveFileId`; eliminar la referencia no elimina ni cambia el archivo en Drive.
 - Descarga con `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` y `Cache-Control: private, no-store`.
 - **Limpieza ordenada**: al subir se escribe el disco primero y se retira si falla la fila; al borrar se elimina la fila primero y después el archivo (un unlink fallido queda en `console.error`, nunca una fila que promete un archivo borrado). `DELETE /api/tickets/:id` elimina las evidencias en cascada.
-- **Gate de cierre**: cerrar una actividad cuyo plan está ligado a un riesgo sin PDF adjunto responde `409` con `MITIGATION_EVIDENCE_REQUIRED` y revierte la transacción; las canceladas no exigen evidencia.
+- **Gate de cierre**: cerrar una actividad cuyo plan está ligado a un riesgo sin PDF local ni referencia PDF de Drive responde `409` con `MITIGATION_EVIDENCE_REQUIRED` y revierte la transacción; las canceladas no exigen evidencia.
 
 ## Secretos
 

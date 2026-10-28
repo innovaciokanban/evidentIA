@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, apiUpload, apiUrl, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketEvidence, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, GoogleDriveStatus, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketDriveReference, TicketEvidence, TicketHistoryEvent, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -16,6 +17,7 @@ import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, 
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
 import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
 import { parseNotificationLink } from './notification-links'
+import { canManageGoogleDrive, drivePickerViewConfig, googleDrivePaths, googleDriveScopeLabel } from './google-drive'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
@@ -30,6 +32,45 @@ type CompaniesIntent = { kind: 'create-company' } | { kind: 'create-diagnostic' 
 type DetailIntent = { kind: 'create-diagnostic' } | { kind: 'open-first-diagnostic' } | { kind: 'open-diagnostic'; diagnosticId: string }
 
 type TicketDraft = { title: string; description: string; priority: TicketPriority; status: TicketStatus; assignedToId: string }
+
+type PickerDocument = { id?: string; name?: string; mimeType?: string }
+type PickerResponse = { action?: string; docs?: PickerDocument[] }
+type PickerDocsView = { setMimeTypes: (mimeTypes: string) => PickerDocsView; setIncludeFolders: (include: boolean) => PickerDocsView; setMode: (mode: string) => PickerDocsView; setParent: (folderId: string) => PickerDocsView; setSelectFolderEnabled: (enabled: boolean) => PickerDocsView }
+type PickerBuilder = { addView: (view: PickerDocsView) => PickerBuilder; setOAuthToken: (token: string) => PickerBuilder; setDeveloperKey: (key: string) => PickerBuilder; setAppId: (id: string) => PickerBuilder; setCallback: (callback: (data: PickerResponse) => void) => PickerBuilder; build: () => { setVisible: (visible: boolean) => void } }
+type PickerApi = { PickerBuilder: new () => PickerBuilder; DocsView: new (viewId: string) => PickerDocsView; ViewId: { DOCS: string }; Action: { PICKED: string } }
+
+declare global {
+  interface Window {
+    gapi?: { load: (name: string, callback: () => void) => void }
+    google?: { picker?: PickerApi }
+  }
+}
+
+let pickerApiPromise: Promise<void> | null = null
+const loadPickerApi = (): Promise<void> => {
+  if (window.google?.picker) return Promise.resolve()
+  if (pickerApiPromise) return pickerApiPromise
+  pickerApiPromise = new Promise<void>((resolve, reject) => {
+    const loadPicker = () => {
+      if (!window.gapi) { reject(new Error('Google Picker no está disponible')); return }
+      window.gapi.load('picker', () => window.google?.picker ? resolve() : reject(new Error('Google Picker no pudo cargarse')))
+    }
+    const existing = document.getElementById('google-picker-api') as HTMLScriptElement | null
+    if (existing) { loadPicker(); return }
+    const script = document.createElement('script')
+    script.id = 'google-picker-api'
+    script.src = 'https://apis.google.com/js/api.js'
+    script.async = true
+    script.defer = true
+    script.onload = loadPicker
+    script.onerror = () => reject(new Error('No se pudo cargar Google Picker'))
+    document.head.appendChild(script)
+  }).catch((error) => {
+    pickerApiPromise = null
+    throw error
+  })
+  return pickerApiPromise
+}
 
 type CompanyDraft = { name: string; identification: string; industry: string; description: string; adminEnabled: boolean; adminName: string; adminEmail: string; adminPassword: string }
 
@@ -57,6 +98,19 @@ const priorities: Array<{ value: TicketPriority; label: string }> = [
   { value: 'MEDIUM', label: 'Media' },
   { value: 'HIGH', label: 'Alta' },
   { value: 'URGENT', label: 'Urgente' },]
+
+const ticketEventTypes: Array<{ value: TicketHistoryEvent['eventType']; label: string }> = [
+  { value: 'TICKET_CREATED', label: 'Creación' },
+  { value: 'TICKET_UPDATED', label: 'Edición' },
+  { value: 'TICKET_ASSIGNED', label: 'Asignación' },
+  { value: 'TICKET_UNASSIGNED', label: 'Desasignación' },
+  { value: 'TICKET_STATUS_CHANGED', label: 'Cambio de estado' },
+  { value: 'TICKET_PRIORITY_CHANGED', label: 'Cambio de prioridad' },
+  { value: 'TICKET_DUE_DATE_CHANGED', label: 'Cambio de vencimiento' },
+  { value: 'EVIDENCE_ATTACHED', label: 'Evidencia adjunta' },
+  { value: 'EVIDENCE_DELETED', label: 'Evidencia eliminada' },
+  { value: 'TICKET_DELETED', label: 'Eliminación' },
+]
 
 const emptyDraft: TicketDraft = { title: '', description: '', priority: 'MEDIUM', status: 'OPEN', assignedToId: '' }
 
@@ -311,6 +365,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setTicketFocusId(ticketId)
     navigateToView('tickets')
   }
+  function openCompanyDiagnostics(companyId: string) {
+    navigateToView('companies', { kind: 'open-company', companyId })
+  }
   async function logout() {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
     onLogout()
@@ -422,7 +479,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     {view === 'tickets' && <Tickets user={user} onOpenRisk={openRisk} initialTicketId={ticketFocusId} onConsumeInitialTicketId={consumeTicketFocus} />}
     {view === 'approvals' && <ApprovalsInbox user={user} initialApprovalId={approvalFocusId} onConsumeInitialId={consumeApprovalFocus} onOpenRisk={openRisk} onChanged={() => void refreshInbox()} />}
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
-        {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} onOpenApproval={openApproval} onOpenTicket={openTicket} />}
+        {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} onOpenApproval={openApproval} onOpenTicket={openTicket} onOpenCompanyDiagnostics={openCompanyDiagnostics} />}
         {view === 'quality' && <QualityPage user={user} />}
         {(view === 'companies' || view === 'swot' || view === 'recommendations' || view === 'action-plans') && (
           <Companies user={user} intent={companiesIntent} onConsumeIntent={consumeCompaniesIntent} diagnosticActive={diagnosticActive} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />
@@ -880,7 +937,131 @@ function Companies({ user, intent, onConsumeIntent, diagnosticActive, onDiagnost
 
 function CompanyForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: CompanyDraft; setDraft: React.Dispatch<React.SetStateAction<CompanyDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▥</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR EMPRESA' : 'NUEVA EMPRESA'}</p><h2>{isEdit ? 'Actualizar empresa' : 'Crear empresa'}</h2><p className="company-modal-subtitle">Registra la información de la empresa en el sistema</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Nombre de la empresa<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Acme Consultores" minLength={2} required /></label><div className="form-grid"><label>Identificación<input value={draft.identification} onChange={(event) => setDraft({ ...draft, identification: event.target.value })} placeholder="NIT o identificación" minLength={3} required /></label><label>Industria<input value={draft.industry} onChange={(event) => setDraft({ ...draft, industry: event.target.value })} placeholder="Ej. Tecnología" minLength={2} required /></label></div><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade contexto sobre la empresa..." rows={6} minLength={3} required /></label>{!isEdit && <div className="admin-create-section"><label className="admin-create-toggle"><input type="checkbox" checked={draft.adminEnabled} onChange={(event) => setDraft({ ...draft, adminEnabled: event.target.checked })} /><span className="admin-create-check" aria-hidden="true">✓</span><div className="admin-create-copy"><strong>Crear administrador para esta empresa</strong><small>Se creará un usuario administrador con rol de COMPANY_ADMIN.</small></div></label>{draft.adminEnabled && <div className="admin-fields"><div className="form-grid"><label>Nombre del administrador<input value={draft.adminName} onChange={(event) => setDraft({ ...draft, adminName: event.target.value })} placeholder="Ej. Ana López" minLength={2} required /></label><label>Correo del administrador<input type="email" value={draft.adminEmail} onChange={(event) => setDraft({ ...draft, adminEmail: event.target.value })} placeholder="admin@empresa.com" autoComplete="off" required /></label></div><label>Contraseña inicial<input type="password" value={draft.adminPassword} onChange={(event) => setDraft({ ...draft, adminPassword: event.target.value })} placeholder="Mínimo 8 caracteres" minLength={8} autoComplete="new-password" required /></label></div>}</div>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear empresa'}</button></div></form></div> }
 
-function CompanyDetail({ company: companyToShow, user, onEdit, onDelete, onClose, detailIntent, onConsumeDetailIntent, onDiagnosticActiveChange, diagStage, onDiagStageChange }: { company: Company; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; detailIntent: DetailIntent | null; onConsumeDetailIntent: () => void; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }) {
+function CompanyGoogleDriveSection({ companyId, user }: { companyId: string; user: User }) {
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => { setPortalTarget(document.querySelector('.detail-drawer')) }, [companyId])
+  if (!portalTarget) return null
+  return createPortal(<CompanyGoogleDriveContent companyId={companyId} user={user} />, portalTarget)
+}
+
+function CompanyGoogleDriveContent({ companyId, user }: { companyId: string; user: User }) {
+  const [status, setStatus] = useState<GoogleDriveStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [action, setAction] = useState<'connect' | 'disconnect' | null>(null)
+  const [error, setError] = useState('')
+  const [oauthPending, setOauthPending] = useState(false)
+  const requestId = useRef(0)
+  const oauthWindow = useRef<Window | null>(null)
+  const oauthTimer = useRef<number | null>(null)
+  const canManage = canManageGoogleDrive(user.role)
+  const paths = googleDrivePaths(companyId)
+
+  const stopOAuthPolling = useCallback(() => {
+    if (oauthTimer.current !== null) window.clearInterval(oauthTimer.current)
+    oauthTimer.current = null
+    oauthWindow.current = null
+    setOauthPending(false)
+  }, [])
+
+  const loadStatus = useCallback(async (showLoading = true): Promise<GoogleDriveStatus | null> => {
+    const currentRequest = ++requestId.current
+    if (showLoading) setLoading(true)
+    setError('')
+    try {
+      const result = await api<GoogleDriveStatus>(paths.connection)
+      if (currentRequest !== requestId.current) return null
+      setStatus(result)
+      return result
+    } catch (requestError) {
+      if (currentRequest === requestId.current) setError(requestError instanceof ApiError ? requestError.message : 'No se pudo consultar la conexión de Google Drive.')
+      return null
+    } finally {
+      if (currentRequest === requestId.current && showLoading) setLoading(false)
+    }
+  }, [paths.connection])
+
+  useEffect(() => {
+    setStatus(null)
+    setError('')
+    void loadStatus()
+    return () => { requestId.current += 1; stopOAuthPolling() }
+  }, [loadStatus, stopOAuthPolling])
+
+  const pollOAuthStatus = useCallback(async () => {
+    const result = await loadStatus(false)
+    if (result?.connected) {
+      const completedWindow = oauthWindow.current
+      stopOAuthPolling()
+      completedWindow?.close()
+      return
+    }
+    if (oauthWindow.current?.closed) {
+      stopOAuthPolling()
+      setError('La conexión no se completó. Puedes intentarlo de nuevo.')
+    }
+  }, [loadStatus, stopOAuthPolling])
+
+  useEffect(() => {
+    if (!oauthPending) return
+    const refreshOnReturn = () => { void pollOAuthStatus() }
+    window.addEventListener('focus', refreshOnReturn)
+    document.addEventListener('visibilitychange', refreshOnReturn)
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn)
+      document.removeEventListener('visibilitychange', refreshOnReturn)
+    }
+  }, [oauthPending, pollOAuthStatus])
+
+  useEffect(() => () => stopOAuthPolling(), [stopOAuthPolling])
+
+  async function connectGoogleDrive() {
+    const openedWindow = window.open('', '_blank')
+    if (!openedWindow) {
+      setError('El navegador bloqueó la ventana de Google. Permite ventanas emergentes e inténtalo de nuevo.')
+      return
+    }
+    setAction('connect')
+    setError('')
+    try {
+      const result = await api<{ authorizationUrl: string }>(paths.oauthStart, { method: 'POST' })
+      openedWindow.location.href = result.authorizationUrl
+      oauthWindow.current = openedWindow
+      setOauthPending(true)
+      oauthTimer.current = window.setInterval(() => { void pollOAuthStatus() }, 1500)
+    } catch (requestError) {
+      openedWindow.close()
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo iniciar la conexión con Google Drive.')
+    } finally {
+      setAction(null)
+    }
+  }
+
+  async function disconnectGoogleDrive() {
+    const confirmed = await askConfirm({ title: 'Desconectar Google Drive', message: 'Se revocará el acceso de Google Drive para esta empresa. Los archivos originales no se eliminarán.', confirmLabel: 'Desconectar', variant: 'danger' })
+    if (!confirmed) return
+    setAction('disconnect')
+    setError('')
+    try {
+      await api(paths.connection, { method: 'DELETE' })
+      setStatus({ connected: false, connection: null })
+    } catch (requestError) {
+      setError(requestError instanceof ApiError ? requestError.message : 'No se pudo desconectar Google Drive.')
+    } finally {
+      setAction(null)
+    }
+  }
+
+  const connection = status?.connection
+  return <section className="google-drive-section" aria-labelledby="google-drive-heading"><div className="section-heading"><div><p className="detail-label">Integraciones</p><h3 id="google-drive-heading">Google Drive</h3></div>{status?.connected && <span className="google-drive-status connected">Conectado</span>}{status && !status.connected && <span className="google-drive-status">Desconectado</span>}</div>{loading ? <div className="inline-loading"><span className="loader" />Consultando conexión...</div> : error && !status ? <div className="form-error" role="alert">{error}<button type="button" className="text-button google-drive-retry" onClick={() => void loadStatus()}>Reintentar</button></div> : status?.connected && connection ? <div className="google-drive-connected"><div className="google-drive-account"><span className="google-drive-mark" aria-hidden="true">G</span><div><strong>{connection.googleAccountEmail ?? 'Cuenta de Google conectada'}</strong><small>Conectada el {new Date(connection.connectedAt).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })}</small></div></div>{connection.scopes.length > 0 && <div className="google-drive-scopes"><span>Permisos concedidos</span><ul>{connection.scopes.map((scope) => <li key={scope}>{googleDriveScopeLabel(scope)}</li>)}</ul></div>}{error && <div className="form-error" role="alert">{error}</div>}{canManage ? <button type="button" className="button danger small-button" onClick={() => void disconnectGoogleDrive()} disabled={action !== null}>{action === 'disconnect' ? 'Desconectando...' : 'Desconectar Google Drive'}</button> : <p className="google-drive-note">La conexión solo puede ser gestionada por un administrador.</p>}</div> : <div className="google-drive-empty"><p>Conecta una cuenta para usar Google Drive con esta empresa.</p>{error && <div className="form-error" role="alert">{error}</div>}{canManage ? <button type="button" className="button primary small-button" onClick={() => void connectGoogleDrive()} disabled={action !== null || oauthPending}>{action === 'connect' ? 'Preparando...' : oauthPending ? 'Esperando autorización...' : 'Conectar Google Drive'}</button> : <p className="google-drive-note">La conexión solo puede ser gestionada por un administrador.</p>}{oauthPending && <small className="google-drive-pending">Completa la autorización en la ventana de Google y vuelve aquí.</small>}</div>}</section>
+}
+
+type CompanyDetailProps = { company: Company; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; detailIntent: DetailIntent | null; onConsumeDetailIntent: () => void; onDiagnosticActiveChange: (active: boolean) => void; diagStage: DiagStage; onDiagStageChange: (stage: DiagStage) => void }
+
+function CompanyDetail(props: CompanyDetailProps) {
+  return <><CompanyDetailContent {...props} /><CompanyGoogleDriveSection companyId={props.company.id} user={props.user} /></>
+}
+
+function CompanyDetailContent({ company: companyToShow, user, onEdit, onDelete, onClose, detailIntent, onConsumeDetailIntent, onDiagnosticActiveChange, diagStage, onDiagStageChange }: CompanyDetailProps) {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [selectedDiagnostic, setSelectedDiagnostic] = useState<Diagnostic | null>(null)
   const [diagnosticDraft, setDiagnosticDraft] = useState<DiagnosticDraft>(emptyDiagnosticDraft)
@@ -1663,7 +1844,40 @@ export function StrategyWeightingScreen({ diagnostic, canValue, initialStrategie
 
 function SWOTItemForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { draft: SWOTDraft; setDraft: React.Dispatch<React.SetStateAction<SWOTDraft>>; isEdit: boolean; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { const detected = swotTypes.find((item) => item.value === draft.type); const detectedSymbol = draft.type === 'STRENGTH' ? '+' : draft.type === 'WEAKNESS' ? '−' : draft.type === 'OPPORTUNITY' ? '↗' : '!'; return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className={`company-modal-icon factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</div><div className="company-modal-title"><p className="eyebrow">MATRIZ DOFA</p><h2>{isEdit ? 'Editar factor' : 'Agregar factor'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información del factor.' : 'Detectado automáticamente'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{!isEdit && <div className="factor-type-detect"><span className={`swot-symbol factor-type-icon ${draft.type.toLowerCase()}`}>{detectedSymbol}</span><div className="factor-type-copy"><p className="detail-label">Tipo detectado</p><strong>{detected?.label}</strong></div><span className="factor-type-badge">Detectado automáticamente</span></div>}{isEdit && <label>Tipo<input type="text" value={detected?.label ?? ''} readOnly /></label>}<label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe el factor..." rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar factor' : 'Agregar factor'}</button></div></form></div> }
 
-function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: { user: User; onOpenRisk: (processId: string, riskId: string) => void; initialTicketId?: string | null; onConsumeInitialTicketId?: () => void }) {
+type TicketsProps = { user: User; onOpenRisk: (processId: string, riskId: string) => void; initialTicketId?: string | null; onConsumeInitialTicketId?: () => void }
+
+function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: TicketsProps) {
+  const [historyEvents, setHistoryEvents] = useState<TicketHistoryEvent[]>([])
+  const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyPage, setHistoryPage] = useState(1)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
+  const [historySearch, setHistorySearch] = useState('')
+  const [historyStatus, setHistoryStatus] = useState('')
+  const [historyPriority, setHistoryPriority] = useState('')
+  const [historyAssignee, setHistoryAssignee] = useState('')
+  const [historyEventType, setHistoryEventType] = useState('')
+  const [users, setUsers] = useState<User[]>([])
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true); setHistoryError('')
+    try {
+      const params = new URLSearchParams({ page: String(historyPage), pageSize: '12' })
+      if (historySearch) params.set('search', historySearch)
+      if (historyStatus) params.set('status', historyStatus)
+      if (historyPriority) params.set('priority', historyPriority)
+      if (historyAssignee) params.set('assignedToId', historyAssignee)
+      if (historyEventType) params.set('eventType', historyEventType)
+      const result = await api<{ events: TicketHistoryEvent[]; total: number }>(`/tickets/history?${params}`)
+      setHistoryEvents(result.events); setHistoryTotal(result.total)
+    } catch { setHistoryError('No pudimos cargar el historial de tickets.') } finally { setHistoryLoading(false) }
+  }, [historyAssignee, historyEventType, historyPage, historyPriority, historySearch, historyStatus])
+  useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
+  useEffect(() => { const timer = window.setTimeout(() => { void loadHistory() }, 0); return () => window.clearTimeout(timer) }, [loadHistory])
+  const updateHistoryFilter = (setter: (value: string) => void, value: string) => { setter(value); setHistoryPage(1) }
+  return <><TicketsList user={user} onOpenRisk={onOpenRisk} initialTicketId={initialTicketId} onConsumeInitialTicketId={onConsumeInitialTicketId} /><div className="page ticket-history-page"><TicketHistoryPanel events={historyEvents} total={historyTotal} page={historyPage} pageSize={12} loading={historyLoading} error={historyError} users={users} search={historySearch} status={historyStatus} priority={historyPriority} assignee={historyAssignee} eventType={historyEventType} onSearch={(value) => updateHistoryFilter(setHistorySearch, value)} onStatus={(value) => updateHistoryFilter(setHistoryStatus, value)} onPriority={(value) => updateHistoryFilter(setHistoryPriority, value)} onAssignee={(value) => updateHistoryFilter(setHistoryAssignee, value)} onEventType={(value) => updateHistoryFilter(setHistoryEventType, value)} onPage={setHistoryPage} onRetry={() => void loadHistory()} /></div></>
+}
+
+function TicketsList({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: TicketsProps) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [selected, setSelected] = useState<Ticket | null>(null)
@@ -1741,6 +1955,12 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
   const [evidenceError, setEvidenceError] = useState('')
   const [uploading, setUploading] = useState(false)
   const evidenceInput = useRef<HTMLInputElement>(null)
+  const [driveReferences, setDriveReferences] = useState<TicketDriveReference[]>([])
+  const [driveLoading, setDriveLoading] = useState(true)
+  const [driveOpening, setDriveOpening] = useState(false)
+  const [history, setHistory] = useState<TicketHistoryEvent[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
   const loadEvidence = useCallback(async () => {
     setEvidenceLoading(true)
     setEvidenceError('')
@@ -1759,6 +1979,44 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
     const timer = window.setTimeout(() => { void loadEvidence() }, 0)
     return () => window.clearTimeout(timer)
   }, [loadEvidence])
+  const loadDriveReferences = useCallback(async () => {
+    setDriveLoading(true)
+    try {
+      const result = await api<{ references: TicketDriveReference[] }>(`/tickets/${ticket.id}/drive-evidence`)
+      setDriveReferences(result.references)
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar las referencias de Drive.')
+    } finally {
+      setDriveLoading(false)
+    }
+  }, [ticket.id])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadDriveReferences() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadDriveReferences])
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true); setHistoryError('')
+    try {
+      const result = await api<{ events: TicketHistoryEvent[] }>(`/tickets/${ticket.id}/history?page=1&pageSize=50`)
+      setHistory(result.events)
+    } catch (requestError) {
+      setHistoryError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar el historial.')
+    } finally { setHistoryLoading(false) }
+  }, [ticket.id])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadHistory() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadHistory])
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
   async function uploadEvidence(file: File) {
     if (uploading) return
     setUploading(true)
@@ -1783,9 +2041,65 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
       setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la evidencia.')
     }
   }
+  async function openDrivePicker() {
+    if (driveOpening) return
+    setDriveOpening(true)
+    setEvidenceError('')
+    try {
+      const config = await api<{ accessToken: string; developerKey: string; appId: string; rootFolderId: string; companyFolderId: string }>(`/tickets/${ticket.id}/google-drive/picker-config`)
+      await loadPickerApi()
+      const picker = window.google?.picker
+      if (!picker) throw new Error('Google Picker no está disponible')
+      const viewConfig = drivePickerViewConfig(config)
+      const view = new picker.DocsView(picker.ViewId.DOCS)
+        .setParent(viewConfig.parentFolderId)
+        .setMimeTypes(viewConfig.mimeTypes)
+        .setIncludeFolders(viewConfig.includeFolders)
+        .setSelectFolderEnabled(viewConfig.selectFolderEnabled)
+        .setMode(viewConfig.mode)
+      const pickerDialog = new picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(config.accessToken)
+        .setDeveloperKey(config.developerKey)
+        .setAppId(config.appId)
+        .setCallback((data) => {
+          if (data.action !== picker.Action.PICKED) return
+          const selected = data.docs?.[0]?.id
+          if (!selected) {
+            setEvidenceError('Google Picker no devolvió un archivo válido.')
+            return
+          }
+          void (async () => {
+            try {
+              await api(`/tickets/${ticket.id}/drive-evidence`, { method: 'POST', body: JSON.stringify({ driveFileId: selected }) })
+              await loadDriveReferences()
+            } catch (requestError) {
+              setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo asociar el archivo de Drive.')
+            }
+          })()
+        })
+        .build()
+      pickerDialog.setVisible(true)
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : requestError instanceof Error ? requestError.message : 'No se pudo abrir Google Picker.')
+    } finally {
+      setDriveOpening(false)
+    }
+  }
+  async function removeDriveReference(reference: TicketDriveReference) {
+    const confirmed = await askConfirm({ title: 'Retirar referencia', message: `Se retirará «${reference.filename}» del ticket. El archivo original permanecerá en Google Drive.`, confirmLabel: 'Retirar' })
+    if (!confirmed) return
+    setEvidenceError('')
+    try {
+      await api(`/tickets/${ticket.id}/drive-evidence/${reference.id}`, { method: 'DELETE' })
+      setDriveReferences((current) => current.filter((item) => item.id !== reference.id))
+    } catch (requestError) {
+      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo retirar la referencia de Drive.')
+    }
+  }
   return (
-    <div className="drawer-backdrop"><aside className="drawer detail-drawer">
-      <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2>{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button className="icon-button" onClick={onClose}>×</button></div>
+    <div className="drawer-backdrop centered-backdrop ticket-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><aside className="drawer detail-drawer ticket-detail-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-detail-title" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2 id="ticket-detail-title">{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar detalle del ticket">×</button></div>
       <div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div>
       <div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div>
       {ticket.actionItem?.actionPlan.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}
@@ -1811,12 +2125,15 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
             if (file) void uploadEvidence(file)
           }}
         />
-        <div className="ticket-evidence-toolbar">
-          <button type="button" className="button secondary small-button" disabled={uploading} onClick={() => evidenceInput.current?.click()}>
-            {uploading ? 'Subiendo...' : '+ Adjuntar PDF'}
-          </button>
-          <span className="ticket-evidence-hint">Solo PDF · máximo 10 MB</span>
-        </div>
+         <div className="ticket-evidence-toolbar">
+           <button type="button" className="button secondary small-button" disabled={uploading} onClick={() => evidenceInput.current?.click()}>
+             {uploading ? 'Subiendo...' : '+ Adjuntar PDF'}
+           </button>
+           <button type="button" className="button secondary small-button" disabled={driveOpening || driveLoading} onClick={() => void openDrivePicker()}>
+             {driveOpening ? 'Abriendo Drive...' : '+ Seleccionar de Google Drive'}
+           </button>
+           <span className="ticket-evidence-hint">Solo PDF · máximo 10 MB</span>
+         </div>
         {evidenceError && <p className="form-error ticket-evidence-error" role="alert">{evidenceError}</p>}
         {evidenceLoading
           ? <div className="inline-loading"><span className="loader" />Cargando evidencia...</div>
@@ -1837,13 +2154,84 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
                     </span>
                   </li>
                 ))}
-              </ul>
-            )}
-      </section>
+               </ul>
+             )}
+       {driveLoading
+         ? <div className="inline-loading"><span className="loader" />Cargando referencias de Drive...</div>
+         : driveReferences.length > 0 && (
+           <ul className="ticket-evidence-list ticket-drive-reference-list" aria-label="Referencias de Google Drive">
+             {driveReferences.map((item) => (
+               <li key={item.id} className="ticket-evidence-item ticket-drive-reference-item">
+                 <span className="ticket-evidence-kind ticket-drive-kind">DRIVE</span>
+                 <div className="ticket-evidence-info">
+                   <strong title={item.filename}>{item.filename}</strong>
+                   <small>{item.size === null ? 'Tamaño no disponible' : fileSize(item.size)} · {item.createdBy.name} · {relativeDate(item.createdAt)}</small>
+                 </div>
+                 <span className="ticket-evidence-actions">
+                   {item.driveUrl && <a className="text-button" href={item.driveUrl} target="_blank" rel="noreferrer">Abrir</a>}
+                   <button type="button" className="text-button ticket-evidence-remove" onClick={() => void removeDriveReference(item)}>Retirar</button>
+                 </span>
+               </li>
+             ))}
+           </ul>
+         )}
+       </section>
+      <TicketHistoryList events={history} loading={historyLoading} error={historyError} showTicket={false} onRetry={() => void loadHistory()} />
       <div className="drawer-actions"><button className="button secondary" onClick={onEdit}>Editar</button>{(user.role === 'SUPERUSER' || ticket.createdBy.id === user.id) && <button className="button danger" onClick={onDelete}>Eliminar</button>}</div>
     </aside></div>
   )
 }
+
+function TicketHistoryPanel({ events, total, page, pageSize, loading, error, users, search, status, priority, assignee, eventType, onSearch, onStatus, onPriority, onAssignee, onEventType, onPage, onRetry }: { events: TicketHistoryEvent[]; total: number; page: number; pageSize: number; loading: boolean; error: string; users: User[]; search: string; status: string; priority: string; assignee: string; eventType: string; onSearch: (value: string) => void; onStatus: (value: string) => void; onPriority: (value: string) => void; onAssignee: (value: string) => void; onEventType: (value: string) => void; onPage: (value: number) => void; onRetry: () => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  return <div className="process-risk-page ticket-history-native">
+    <div className="risk-page-header">
+      <div className="risk-page-heading">
+        <div><p className="eyebrow">GESTIÓN OPERATIVA / TRAZABILIDAD</p><h1>Histórico de Tickets</h1><p className="muted">Revisa la evolución de cada ticket, su responsable y las decisiones registradas.</p></div>
+        <span className="risk-process-chip">{total} eventos</span>
+      </div>
+    </div>
+    <section className="panel risk-process-context ticket-history-context"><div><span>Registros visibles</span><strong>{total}</strong></div><div><span>Eventos por página</span><strong>{pageSize}</strong></div><div><span>Página actual</span><strong>{page} de {totalPages}</strong></div></section>
+    <section className="panel risk-detail-panel ticket-history-panel">
+      <div className="risk-detail-section ticket-history-toolbar-section">
+        <div className="risk-section-heading"><div><p className="detail-label">SEGUIMIENTO</p><h2>HISTORIAL DE CAMBIOS</h2></div><span className="risk-method-note">Ordenado del más reciente al más antiguo</span></div>
+        <div className="risk-evidence-block ticket-history-filter-block">
+          <div className="risk-controls-heading"><div><p className="detail-label">FILTROS</p><h3>Buscar y acotar resultados</h3></div><span className="risk-method-note">Los permisos se aplican en el servidor</span></div>
+          <div className="risk-base-grid ticket-history-filter-grid">
+            <label className="risk-base-wide">Buscar en tickets<input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Código, título o descripción" /></label>
+            <label>Estado<select value={status} onChange={(event) => onStatus(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+            <label>Prioridad<select value={priority} onChange={(event) => onPriority(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+            <label>Responsable<select value={assignee} onChange={(event) => onAssignee(event.target.value)}><option value="">Todos los responsables</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label>Tipo de evento<select value={eventType} onChange={(event) => onEventType(event.target.value)}><option value="">Todos los eventos</option>{ticketEventTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          </div>
+        </div>
+        {loading ? <div className="inline-loading" role="status"><span className="loader" />Cargando historial...</div> : error ? <ErrorBanner message={error} onRetry={onRetry} /> : <TicketHistoryTable events={events} />}
+      </div>
+      {!loading && !error && <div className="risk-detail-toolbar ticket-history-pagination"><span className="risk-method-note">Página {page} de {totalPages}</span><div><button type="button" className="button secondary small-button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Anterior</button><button type="button" className="button secondary small-button" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Siguiente</button></div></div>}
+    </section>
+  </div>
+}
+
+function TicketHistoryTable({ events }: { events: TicketHistoryEvent[] }) {
+  if (events.length === 0) return <div className="risk-empty"><span className="risk-empty-icon">↺</span><h3>Sin eventos todavía</h3><p>Los cambios de los tickets aparecerán aquí.</p></div>
+  return <div className="ticket-history-table-scroll"><div className="risk-list ticket-history-table" role="table" aria-label="Histórico de tickets"><div className="risk-list-head ticket-history-table-head" role="row"><span>Código</span><span>Ticket</span><span>Evento</span><span>Responsable</span><span>Estado</span><span>Prioridad</span><span>Fecha</span></div>{events.map((event) => {
+    const ticket = event.ticket
+    const responsibility = event.changes.find((change) => change.field === 'assignedToId')
+    const ticketCode = event.ticketId ? `#${event.ticketId.slice(-6).toUpperCase()}` : '—'
+    return <div className="risk-list-item ticket-history-row" role="row" key={event.id}><div className="risk-list-main" role="gridcell"><span className="risk-list-code">{ticketCode}</span><span className="risk-list-name"><strong>{ticket?.title ?? event.ticketTitle ?? 'Ticket eliminado'}</strong><small>{event.summary}</small></span><span className="ticket-history-event-chip">{ticketEventLabel(event.eventType)}</span><span className="ticket-history-responsible">{responsibility ? historyValue(responsibility.newValue ?? responsibility.previousValue) : event.actorName ?? event.actor?.name ?? 'Sistema'}</span><span>{ticket ? <Badge type="status" value={ticket.status} /> : '—'}</span><span>{ticket ? <Badge type="priority" value={ticket.priority} /> : '—'}</span><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })}</time></div></div>
+  })}</div></div>
+}
+
+function TicketHistoryList({ events, loading, error, showTicket, onRetry }: { events: TicketHistoryEvent[]; loading: boolean; error: string; showTicket: boolean; onRetry: () => void }) {
+  if (loading) return <section className="ticket-history-section"><div className="inline-loading"><span className="loader" />Cargando historial...</div></section>
+  if (error) return <section className="ticket-history-section"><ErrorBanner message={error} onRetry={onRetry} /></section>
+  if (events.length === 0) return <section className="ticket-history-section"><div className="ticket-history-empty"><strong>Sin eventos todavía</strong><p>Los cambios del ticket aparecerán aquí.</p></div></section>
+  return <section className="ticket-history-section" aria-label="Historial del ticket"><div className="ticket-history-list">{events.map((event) => <article className="ticket-history-entry" key={event.id}><div className="ticket-history-marker"><span /></div><div className="ticket-history-body"><div className="ticket-history-event-head"><div><span className="ticket-history-chip">{ticketEventLabel(event.eventType)}</span>{showTicket && event.ticket && <strong>{event.ticket.title}</strong>}<h3>{event.summary}</h3></div><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}</time></div><p className="ticket-history-actor">Por <strong>{event.actorName ?? event.actor?.name ?? 'Sistema'}</strong></p>{event.changes.length > 0 && <div className="ticket-history-changes">{event.changes.map((change) => <div className="ticket-history-change" key={`${event.id}-${change.field}`}><span>{change.label}</span><strong>{historyValue(change.previousValue)}</strong><b>→</b><strong>{historyValue(change.newValue)}</strong></div>)}</div>}</div></article>)}</div></section>
+}
+
+function ticketEventLabel(eventType: TicketHistoryEvent['eventType']) { return ticketEventTypes.find((item) => item.value === eventType)?.label ?? 'Evento' }
+
+function historyValue(value: string | boolean | number | null) { if (value === null || value === '') return 'Sin valor'; if (typeof value === 'boolean') return value ? 'Sí' : 'No'; return String(value) }
 
 function PageError({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="page"><div className="error-state"><div>!</div><h2>Algo salió mal</h2><p>{message}</p>{onRetry && <button className="button primary" onClick={onRetry}>Reintentar</button>}</div></div> }
 

@@ -80,13 +80,21 @@ Crea un ticket. Solo `SUPERUSER` puede asignar (`assignedToId`). `201` `{ "ticke
 
 Detalle de un ticket visible para el usuario.
 
+### `GET /api/tickets/history`
+
+Lista eventos append-only de tickets visibles. Query opcional: `page`, `pageSize` (1-100), `status`, `priority`, `search`, `assignedToId`, `eventType`, `from` y `to`. Responde `{ "events": [...], "total", "page", "pageSize" }` y ordena de más reciente a más antiguo.
+
+### `GET /api/tickets/:id/history`
+
+Lista el historial paginado de un ticket visible con los mismos filtros de evento y fecha. Los eventos guardan actor, resumen, cambios before/after y metadata no sensible; no existe endpoint de escritura de eventos.
+
 ### `PATCH /api/tickets/:id`
 
 Actualiza campos permitidos (título, descripción, estado, prioridad, asignación). Cambiar la asignación requiere `SUPERUSER`.
 
 ### `DELETE /api/tickets/:id`
 
-Elimina el ticket. Solo el creador o un `SUPERUSER`. `204` (las evidencias PDF se eliminan en cascada).
+Elimina el ticket. Solo el creador o un `SUPERUSER`. `204` (las evidencias PDF se eliminan en cascada y queda un evento `TICKET_DELETED` con el título y empresa del ticket).
 
 ## Evidencias de mitigación (PDF)
 
@@ -111,11 +119,27 @@ Descarga el PDF (`Content-Type: application/pdf`, `Content-Disposition: attachme
 
 Elimina la evidencia para cualquier usuario con acceso al ticket. `204`. La fila se borra primero y después el archivo del disco (un unlink fallido queda registrado, nunca con la fila viva).
 
+### `GET /api/tickets/:id/google-drive/picker-config`
+
+Prepara Google Picker para un ticket visible. Devuelve un access token temporal, `developerKey`, `appId`, `rootFolderId` (raíz autorizada resuelta) y `companyFolderId` (carpeta de la empresa en la que se abre el Picker); nunca devuelve el refresh token. Responde `409` sin conexión Drive activa y `503` si faltan las variables de Picker o la carpeta raíz.
+
+### `GET /api/tickets/:id/drive-evidence`
+
+Lista las referencias Drive del ticket: `{ "references": [...] }`. Solo contiene metadatos, `driveFileId`, URL de visualización y el usuario que la asoció; no descarga ni copia el archivo.
+
+### `POST /api/tickets/:id/drive-evidence`
+
+Asocia un archivo seleccionado con Picker. Cuerpo JSON: `{ "driveFileId": "..." }`. El servidor vuelve a consultar el archivo con la conexión Drive de la empresa, verifica la ascendencia hasta la raíz efectiva (la configurada o, si no es visible con `drive.file`, la raíz creada en la conexión OAuth) y la subcarpeta autorizada de la empresa —los ancestros por encima de esa raíz no son legibles con `drive.file` y no invalidan una cadena ya verificada—, y solo acepta PDF de hasta 10 MB. El motivo de un rechazo de ascendencia queda registrado como `reason` en el log del servidor sin identificadores. `201` devuelve `{ "reference": ... }`; `409` evita duplicados; `404` oculta tickets no visibles; `415` rechaza tipos distintos de PDF; `422` indica que el archivo no está disponible o está fuera de la carpeta autorizada.
+
+### `DELETE /api/tickets/:id/drive-evidence/:referenceId`
+
+Retira la referencia del ticket y registra el evento de auditoría. No elimina ni modifica el archivo original en Drive. `204`.
+
 ### `GET /api/processes/:processId/risks/:riskId/plan-evidence`
 
 Evidencia visible de un riesgo: los PDF de los tickets de las actividades de los planes de acción vinculados a ese riesgo, con el alcance del usuario sobre los tickets. `{ "evidence": [...] }`.
 
-**Gate de cierre (`409`):** `PATCH /api/tickets/:id` y `PATCH /api/action-items/:id` responden `409` con `{ "error": "...PDF...", "reason": "MITIGATION_EVIDENCE_REQUIRED" }` cuando la transición marca la actividad como completada y su plan está ligado a un riesgo, pero el ticket aún no tiene ningún PDF. Las actividades canceladas no exigen evidencia, y el ticket se cierra normalmente si el plan no está ligado a un riesgo.
+**Gate de cierre (`409`):** `PATCH /api/tickets/:id` y `PATCH /api/action-items/:id` responden `409` con `{ "error": "...PDF...", "reason": "MITIGATION_EVIDENCE_REQUIRED" }` cuando la transición marca la actividad como completada y su plan está ligado a un riesgo, pero el ticket aún no tiene ningún PDF local ni referencia PDF de Drive. Las actividades canceladas no exigen evidencia, y el ticket se cierra normalmente si el plan no está ligado a un riesgo.
 
 ### `GET /api/processes/:processId/risks/:riskId/plan-activities`
 
@@ -125,7 +149,7 @@ Actividades de mitigación de un riesgo: los ítems de todos los planes de acci�
 
 Agrega una actividad al plan de mitigación del riesgo (SUPERUSER o COMPANY_ADMIN), sin vincular planes a mano. Cuerpo: `{ "title", "description?", "responsibleId", "dueDate" }` (la descripción, si falta, se rellena con el título).
 
-- El plan «primario» del riesgo es el más antiguo con `riskId` = riesgo; si el riesgo todavía no tiene plan, se crea uno nuevo «Plan de mitigación <código>» bajo el diagnóstico más reciente de la empresa (`400` si la empresa no tiene diagnóstico). Los planes existentes no se renombran ni se duplican.
+- El plan «primario» del riesgo es el más antiguo con `riskId` = riesgo; si el riesgo todavía no tiene plan, se crea uno nuevo «Plan de mitigación <código>» bajo el diagnóstico más reciente de la empresa. Si no existe diagnóstico, responde `400` con `reason: DIAGNOSTIC_REQUIRED`; el cliente debe llevar al usuario a la empresa del proceso para seleccionar o crear uno. Los planes existentes no se renombran ni se duplican.
 - La actividad nace `PENDING`/`MEDIUM` con su ticket y el aviso de asignación al responsable en la misma transacción (si el aviso falla, no queda ni actividad ni ticket).
 - `400` con datos inválidos o responsable inexistente; `403` si el responsable pertenece a otra empresa; `404` si el proceso o el riesgo no son accesibles; `201` `{ "activity": ... }`.
 - `409` si el riesgo no supera la compuerta por etapas (evaluación inherente completa, tratamiento definido y aceptado por el dueño del riesgo); el mensaje indica la etapa que falta. El bloqueo escribe: los controles, planes y actividades ya guardados siguen siendo consultables con `GET`.
@@ -334,10 +358,18 @@ Módulo de auditorías de calidad sobre procesos. Rutas anidadas bajo `/api/proc
 
 ### Evidencias PDF (archivos)
 
-- `POST /api/audits/:auditId/evidence-files` — sube un PDF (multipart, campos opcionales `findingId` / `actionId` / `itemId` para anclar). Validación: extensión `.pdf`, MIME, firma `%PDF-`, ≤10 MB.
+- `POST /api/companies/:companyId/google-drive/oauth/start` — inicia OAuth para la empresa y devuelve la URL de autorización.
+- `GET /api/google-drive/oauth/callback` — callback OAuth; requiere la sesión que inició el flujo.
+- `GET /api/companies/:companyId/google-drive` — consulta el estado de conexión sin exponer tokens.
+- `DELETE /api/companies/:companyId/google-drive` — desconecta la cuenta y conserva las referencias históricas.
+- `POST /api/audits/:auditId/evidence-files` — sube un PDF (multipart, campos opcionales `findingId` / `actionId` / `itemId` para anclar). Validación: extensión `.pdf`, MIME, firma `%PDF-`, ≤10 MB. El proveedor se configura con `EVIDENCE_STORAGE_PROVIDER`; los nuevos archivos pueden guardarse en Drive privado bajo `raíz/empresa/auditoría`.
 - `GET /api/audits/:auditId/evidence-files` — lista los archivos.
-- `GET /api/audits/:auditId/evidence-files/:fileId` — descarga el PDF (`nosniff`, `no-store`).
-- `DELETE /api/audits/:auditId/evidence-files/:fileId` — elimina el registro y el archivo del disco.
+- `GET /api/audits/:auditId/evidence-files/:fileId` — descarga el PDF (`nosniff`, `no-store`) a través del backend autenticado, también cuando el archivo está en Drive.
+- `DELETE /api/audits/:auditId/evidence-files/:fileId` — elimina el registro y el recurso del proveedor configurado.
+- `GET /api/audits/:auditId/evidence-operations/:operationId` — consulta el estado de una carga o eliminación asíncrona.
+
+La respuesta de cada archivo incluye `storageProvider` (`LOCAL` o `GOOGLE_DRIVE`) y `storageState`.
+Las cargas Drive pueden responder `202` con `operationId`; el reconciliador reintenta errores transitorios y las respuestas de estado permanecen auditables. Los identificadores internos de Drive y las credenciales nunca forman parte de la respuesta HTTP.
 
 Errores de dominio relevantes: `409` con `reason: CHECKLIST_PENDING` o `ACTIONS_PENDING` al intentar cerrar/resolver con pendientes; `409` al borrar hallazgos con acciones o acciones con progreso; `400` al verificar una no conformidad sin verificación de eficacia.
 
