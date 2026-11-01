@@ -48,10 +48,53 @@ cp .env.example .env
 | `SEED_PASSWORD` | Contraseña de los usuarios del seed | — |
 | `OPENAI_API_KEY` | Clave de OpenAI (opcional; sin ella la IA responde 503) | — |
 | `OPENAI_MODEL` | Modelo para el análisis IA | `gpt-4o-mini` |
-| `EVIDENCE_UPLOAD_DIR` | Carpeta de los PDF de evidencia de los tickets | `var/evidence` |
+| `EVIDENCE_STORAGE_PROVIDER` | Proveedor de los PDF de auditoría (`local` o `google-drive`) | `local` |
+| `EVIDENCE_UPLOAD_DIR` | Carpeta de los PDF de evidencia local | `var/evidence` |
+| `GOOGLE_OAUTH_CLIENT_ID` | Client ID OAuth de Google | — |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Client secret OAuth de Google | — |
+| `GOOGLE_OAUTH_REDIRECT_URI` | URI callback registrada en Google Cloud | — |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | Clave base64 de 32 bytes para refresh tokens | — |
+| `GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID` | Carpeta raíz Drive privada validada para el Picker de tickets | `GOOGLE_DRIVE_FOLDER_ID` |
+| `GOOGLE_PICKER_API_KEY` | API key restringida para Google Picker API y Drive API | — |
+| `GOOGLE_PICKER_APP_ID` | Número del proyecto de Google Cloud usado por Picker | — |
+| `EVIDENCE_OPERATION_WORKER_ENABLED` | Activa el reconciliador de cargas/eliminaciones | `false` |
+| `EVIDENCE_OPERATION_INTERVAL_MS` | Intervalo del reconciliador en milisegundos | `30000` |
+| `EVIDENCE_OPERATION_MAX_ATTEMPTS` | Máximo de intentos antes de marcar `FAILED` | `8` |
+| `TICKET_NOTIFICATION_INTERVAL_MS` | Intervalo del worker server-side de vencimientos de tickets en milisegundos | `60000` |
 
 > No se incluyen secretos reales en el repositorio. `.env` está en `.gitignore`.
 > `var/` (donde se guardan las evidencias) también está en `.gitignore`: en producción apunta a un volumen persistente con `EVIDENCE_UPLOAD_DIR`.
+> Con `google-drive`, cada administrador conecta la cuenta de su empresa mediante OAuth. Los refresh tokens se
+> cifran antes de persistirse; la API conserva la descarga autenticada y nunca crea permisos públicos.
+
+Para usar el selector de tickets, habilita **Google Picker API** y **Google Drive API** en el mismo
+proyecto de Google Cloud. Restringe `GOOGLE_PICKER_API_KEY` al dominio de la aplicación y a
+`https://docs.google.com/*` (el Picker se renderiza dentro de un iframe de Google); limita las APIs
+permitidas a Google Picker API y Google Drive API. `GOOGLE_PICKER_APP_ID` es el número del proyecto,
+no el Client ID OAuth. El Client ID OAuth debe conservar el origen JavaScript de la aplicación y la
+URI callback server-side ya documentada. La carpeta `GOOGLE_DRIVE_FOLDER_ID` se valida
+por ID y tipo folder en cada flujo; la aplicación crea de forma idempotente una subcarpeta marcada
+para cada empresa y rechaza archivos fuera de esa ascendencia.
+
+La migración de OAuth mantiene en SQL el índice parcial `CompanyGoogleDriveConnection_one_active_per_company`, porque
+Prisma no puede expresar un `UNIQUE ... WHERE status = 'CONNECTED'`. Las migraciones futuras deben conservar ese índice
+y revisar cualquier `prisma migrate diff` antes de aplicarlo.
+
+La migración `20261026010000_add_ticket_drive_references` crea las referencias Drive de tickets y su validación tenant.
+No se aplica automáticamente: usa `npx prisma migrate deploy` en el entorno correspondiente después de revisar el SQL.
+
+La prueba opcional `server/tenant-integrity.test.ts` usa una transacción con rollback y solo se ejecuta cuando la
+migración ya está aplicada y `POSTGRES_TENANT_INTEGRATION=1`; no modifica datos persistentes.
+
+La carrera real con dos clientes PostgreSQL requiere `POSTGRES_TENANT_CONCURRENCY_DATABASE_URL` apuntando a una
+base aislada que ya tenga la migración aplicada. El test crea una conexión y una evidencia con IDs temporales,
+coordina dos transacciones independientes y limpia esas filas al finalizar.
+
+Los triggers de integridad tenant adquieren locks advisory transaccionales en este orden estable:
+`company`, `process`, `audit`, `evidence`, `connection`, `operation`. Después del lock vuelven a leer las filas
+relacionadas. Las referencias tenant de una evidencia y el proceso de una auditoría son inmutables; una evidencia
+Drive heredada sin `driveConnectionId` no se borra ni se reasigna, y las operaciones de recuperación la dejan
+identificada como no recuperable hasta que exista una decisión explícita.
 
 ## Prisma
 

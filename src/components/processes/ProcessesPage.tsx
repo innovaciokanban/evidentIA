@@ -107,7 +107,7 @@ export function createProcessPayload(draft: ProcessDraft) {
   return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
 }
 
-export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket }: { user: User; riskIntent?: { processId: string; riskId: string; section?: 'residual' | null } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
+export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket, onOpenCompanyDiagnostics }: { user: User; riskIntent?: { processId: string; riskId: string; section?: 'residual' | null } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void; onOpenCompanyDiagnostics?: (companyId: string) => void }) {
   const canCreate = canManageProcesses(user.role)
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
@@ -381,7 +381,7 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
         {showChangeHistory && editing ? (
            <ProcessChangeHistory process={editing} onBack={returnToCharacterization} />
          ) : showRisks && editing ? (
-          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus?.riskId ?? null} focusRiskSection={riskFocus?.section ?? null} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />
+          <ProcessRiskPanel process={editing} users={users} canWrite={canCreate} focusRiskId={riskFocus?.riskId ?? null} focusRiskSection={riskFocus?.section ?? null} onFocusConsumed={() => setRiskFocus(null)} onBack={() => { setShowRisks(false); setShowForm(true) }} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} onOpenCompanyDiagnostics={onOpenCompanyDiagnostics} />
         ) : showKpis && editing ? (
           <ProcessKpiPanel process={editing} users={users} canWrite={canCreate} onBack={returnToCharacterization} />
         ) : showProcedures && editing ? (
@@ -389,9 +389,10 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
         ) : showForm ? (
           <ProcessForm
            draft={draft}
-           setDraft={setDraft}
-           users={users}
-           companies={companies}
+            setDraft={setDraft}
+            users={users}
+            historicalResponsible={editing?.responsible ? { ...editing.responsible, companyId: editing.companyId } as ProcessUser : null}
+            companies={companies}
            editing={Boolean(editing)}
            readOnly={readOnly}
             saving={saving}

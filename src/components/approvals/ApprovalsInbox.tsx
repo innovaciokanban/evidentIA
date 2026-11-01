@@ -5,6 +5,7 @@ import { askConfirm } from '../ui/useConfirm'
 import { EmptyState } from '../ui/EmptyState'
 import { LoadingState } from '../ui/LoadingState'
 import type { RiskApproval, RiskApprovalStatus, RiskTreatment, User } from '../../types'
+import { userOptionLabel } from '../../user-status'
 
 export const approvalStatusLabels: Record<RiskApprovalStatus, string> = {
   PENDING: 'Pendiente',
@@ -79,7 +80,7 @@ export function ApprovalReviewDetail({ approval, user, deciding, error, onApprov
             <div><span>Residual</span><LevelBadge impact={approval.risk.residualImpact} probability={approval.risk.residualProbability} /></div>
           </div>
           <div className="detail-meta">
-            <div><span>Dueño</span><strong>{approval.risk.riskOwner?.name ?? 'Sin asignar'}</strong></div>
+            <div><span>Dueño</span><strong>{approval.risk.riskOwner ? userOptionLabel(approval.risk.riskOwner) : 'Sin asignar'}</strong></div>
             <div><span>Tratamiento</span><strong>{treatmentLabel(approval.risk.treatment)}</strong></div>
             <div><span>Aceptación formal</span><strong>{acceptanceLabels[approval.risk.acceptanceStatus] ?? approval.risk.acceptanceStatus}</strong></div>
             <div><span>Solicitado</span><strong>{formatDate(approval.requestedAt)} por {approval.requestedBy.name}</strong></div>
@@ -129,7 +130,7 @@ export function ApprovalReviewDetail({ approval, user, deciding, error, onApprov
         </div>
       )}
       {!canDecide && approval.status === 'PENDING' && (
-        <p className="muted approval-readonly-note">Solo {approval.risk.riskOwner?.name ?? 'el dueño del riesgo'} puede decidir esta solicitud.</p>
+        <p className="muted approval-readonly-note">Solo {approval.risk.riskOwner ? userOptionLabel(approval.risk.riskOwner) : 'el dueño del riesgo'} puede decidir esta solicitud.</p>
       )}
     </div>
   )
@@ -299,7 +300,7 @@ export function ApprovalsInbox({ user, initialApprovalId, onConsumeInitialId, on
                 <span>Solicitado {formatDate(approval.requestedAt)}</span>
               </div>
               <div className="approval-card-footer">
-                <span>{approval.risk.riskOwner?.name ?? 'Sin dueño'}</span>
+                <span>{approval.risk.riskOwner ? userOptionLabel(approval.risk.riskOwner) : 'Sin dueño'}</span>
                 {approval.status === 'PENDING' && canDecideApproval(approval, user) && <span className="approval-card-cta">Revisar →</span>}
               </div>
             </button>

@@ -1,5 +1,6 @@
 import type { Dispatch, FormEvent, SetStateAction } from 'react'
 import type { Company, ProcessState, ProcessType, User } from '../../types'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 import { ProcessSipocSection } from './ProcessSipocSection'
 
 export type ProcessDraft = {
@@ -32,12 +33,13 @@ const processTypeOptions: { value: ProcessType; label: string }[] = [
 const frequencyOptions = ['Diaria', 'Semanal', 'Mensual', 'Trimestral', 'Semestral', 'Anual', 'Eventual']
 const executionTypeOptions = ['Interna', 'Externa', 'Mixta']
 
-export type ProcessUser = Pick<User, 'id' | 'name'> & { companyId: string | null }
+export type ProcessUser = Pick<User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 
 type ProcessFormProps = {
   draft: ProcessDraft
   setDraft: Dispatch<SetStateAction<ProcessDraft>>
   users: ProcessUser[]
+  historicalResponsible?: ProcessUser | null
   companies: Company[]
   editing: boolean
   readOnly: boolean
@@ -66,9 +68,9 @@ function ToggleField({ label, value, onChange }: { label: string; value: boolean
   )
 }
 
-export function ProcessForm({ draft, setDraft, users, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, onOpenProcedures, processId }: ProcessFormProps) {
+export function ProcessForm({ draft, setDraft, users, historicalResponsible, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, onOpenProcedures, processId }: ProcessFormProps) {
   // El servidor vuelve a validar esta relación; aquí evitamos ofrecer responsables de otra empresa.
-  const availableUsers = users.filter((user) => !draft.companyId || user.companyId === draft.companyId)
+  const availableUsers = activeUserOptions(users.filter((user) => !draft.companyId || user.companyId === draft.companyId), historicalResponsible ? [historicalResponsible] : [])
   const selectedCompany = companies.find((company) => company.id === draft.companyId)
   const update = <K extends keyof ProcessDraft>(field: K, value: ProcessDraft[K]) => setDraft((current) => ({ ...current, [field]: value }))
 
@@ -141,7 +143,7 @@ export function ProcessForm({ draft, setDraft, users, companies, editing, readOn
           <label>Área del organigrama<input value={draft.organizationalArea} onChange={(event) => update('organizationalArea', event.target.value)} placeholder="Ej. Operaciones" maxLength={120} /></label>
 
           <label>Supervisión<input value={draft.supervision} onChange={(event) => update('supervision', event.target.value)} placeholder="Área o cargo supervisor" maxLength={120} /></label>
-          <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{availableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+            <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{availableUsers.map((user) => <option key={user.id} value={user.id}>{userOptionLabel(user)}</option>)}</select></label>
           <label>Tipo de ejecución<select value={draft.executionType} onChange={(event) => update('executionType', event.target.value)}><option value="">Selecciona un tipo</option>{executionTypeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
 
           <label>Nombre del proceso<input value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Gestión Comercial" minLength={3} required /></label>

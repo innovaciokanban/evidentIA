@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, apiUpload, apiUrl, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, GoogleDriveStatus, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketDriveReference, TicketEvidence, TicketHistoryEvent, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, GoogleDriveStatus, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketAssignmentApproval, TicketDriveReference, TicketEvidence, TicketHistoryEvent, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -11,7 +11,7 @@ import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
 import { QualityPage } from './components/quality/QualityPage'
-import { ApprovalsInbox } from './components/approvals/ApprovalsInbox'
+import { ApprovalsHub } from './components/approvals/ApprovalsHub'
 import { NotificationsBell } from './components/approvals/NotificationsBell'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
@@ -21,6 +21,8 @@ import { canManageGoogleDrive, drivePickerViewConfig, googleDrivePaths, googleDr
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import { TicketHistorySection } from './components/tickets/TicketHistorySection'
 import { ticketEventMeta } from './components/tickets/ticket-history-meta'
+import { calendarRelativeDate, formatCalendarDate, isCalendarDateBeforeToday } from './calendar-dates'
+import { userOptionLabel } from './user-status'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
@@ -33,7 +35,7 @@ type CompaniesIntent = { kind: 'create-company' } | { kind: 'create-diagnostic' 
 
 type DetailIntent = { kind: 'create-diagnostic' } | { kind: 'open-first-diagnostic' } | { kind: 'open-diagnostic'; diagnosticId: string }
 
-type TicketDraft = { title: string; description: string; priority: TicketPriority; status: TicketStatus; assignedToId: string }
+type TicketDraft = { title: string; description: string; priority: TicketPriority; status: TicketStatus; assignedToId: string; dueDate: string }
 
 type PickerDocument = { id?: string; name?: string; mimeType?: string }
 type PickerResponse = { action?: string; docs?: PickerDocument[] }
@@ -88,6 +90,9 @@ type StrategyTaskDraft = { title: string; responsibleId: string; dueDate: string
 type UserFormRole = 'COMPANY_ADMIN' | 'COMPANY_USER'
 
 type UserDraft = { name: string; email: string; password: string; role: UserFormRole; companyId: string }
+type UserStatusAction = { kind: 'deactivate' | 'reactivate'; user: User }
+
+const ActionPlansUserContext = createContext<User | null>(null)
 
 const statuses: Array<{ value: TicketStatus; label: string }> = [
   { value: 'OPEN', label: 'Abierto' },
@@ -101,7 +106,7 @@ const priorities: Array<{ value: TicketPriority; label: string }> = [
   { value: 'HIGH', label: 'Alta' },
   { value: 'URGENT', label: 'Urgente' },]
 
-const emptyDraft: TicketDraft = { title: '', description: '', priority: 'MEDIUM', status: 'OPEN', assignedToId: '' }
+const emptyDraft: TicketDraft = { title: '', description: '', priority: 'MEDIUM', status: 'OPEN', assignedToId: '', dueDate: '' }
 
 const emptyCompanyDraft: CompanyDraft = { name: '', identification: '', industry: '', description: '', adminEnabled: false, adminName: '', adminEmail: '', adminPassword: '' }
 
@@ -298,18 +303,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const consumeRiskIntent = useCallback(() => setRiskIntent(null), [])
   const [approvalFocusId, setApprovalFocusId] = useState<string | null>(null)
   const consumeApprovalFocus = useCallback(() => setApprovalFocusId(null), [])
+  const [assignmentApprovalTicketId, setAssignmentApprovalTicketId] = useState<string | null>(null)
+  const consumeAssignmentApprovalTicketId = useCallback(() => setAssignmentApprovalTicketId(null), [])
   // Foco de ticket: llega desde el historial de un riesgo ("Ver ticket") y se consume al abrirlo.
   const [ticketFocusId, setTicketFocusId] = useState<string | null>(null)
   const consumeTicketFocus = useCallback(() => setTicketFocusId(null), [])
   const refreshInbox = useCallback(async () => {
     try {
-      const [inbox, pending] = await Promise.all([
+      const [inbox, pending, assignmentPending] = await Promise.all([
         api<{ notifications: AppNotification[]; unread: number }>('/notifications'),
         api<{ approvals: RiskApproval[] }>('/approvals?status=PENDING'),
+        api<{ approvals: TicketAssignmentApproval[] }>('/ticket-assignment-approvals?status=PENDING'),
       ])
       setNotifications(inbox.notifications)
       setUnreadNotifications(inbox.unread)
-      setPendingApprovals(pending.approvals.length)
+      setPendingApprovals(pending.approvals.length + assignmentPending.approvals.length)
     } catch {
       // Sin conexión se conserva el último estado conocido; la bandeja reporta su propio error.
     }
@@ -325,6 +333,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     const target = parseNotificationLink(notification.link)
     if (target?.kind === 'approval') {
       setApprovalFocusId(target.approvalId)
+      navigateToView('approvals')
+    }
+    if (target?.kind === 'assignment-approval') {
+      setAssignmentApprovalTicketId(target.ticketId)
       navigateToView('approvals')
     }
     if (target?.kind === 'risk') {
@@ -466,7 +478,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         </header>
         {view === 'dashboard' && <Dashboard user={user} onNavigate={navigateToView} />}
     {view === 'tickets' && <Tickets user={user} onOpenRisk={openRisk} initialTicketId={ticketFocusId} onConsumeInitialTicketId={consumeTicketFocus} />}
-    {view === 'approvals' && <ApprovalsInbox user={user} initialApprovalId={approvalFocusId} onConsumeInitialId={consumeApprovalFocus} onOpenRisk={openRisk} onChanged={() => void refreshInbox()} />}
+        {view === 'approvals' && <ApprovalsHub user={user} initialApprovalId={approvalFocusId} onConsumeInitialApprovalId={consumeApprovalFocus} initialAssignmentTicketId={assignmentApprovalTicketId} onConsumeInitialAssignmentTicketId={consumeAssignmentApprovalTicketId} onOpenRisk={openRisk} onOpenTicket={openTicket} onChanged={() => void refreshInbox()} />}
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
         {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} onOpenApproval={openApproval} onOpenTicket={openTicket} onOpenCompanyDiagnostics={openCompanyDiagnostics} />}
         {view === 'quality' && <QualityPage user={user} />}
@@ -609,12 +621,15 @@ function Users({ user }: { user: User }) {
   const [notice, setNotice] = useState('')
   const [draft, setDraft] = useState<UserDraft>(emptyUserDraft)
   const [editing, setEditing] = useState<User | null>(null)
+  const [statusAction, setStatusAction] = useState<UserStatusAction | null>(null)
+  const [statusReason, setStatusReason] = useState('')
+  const [statusSaving, setStatusSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [loadError, setLoadError] = useState('')
   const loadUsers = useCallback(async () => {
     setLoading(true); setLoadError('')
     try {
-      const result = await api<{ users: User[] }>('/users')
+      const result = await api<{ users: User[] }>('/users?includeInactive=true')
       setUsers(result.users)
     } catch { setLoadError('No pudimos cargar los usuarios.') } finally { setLoading(false) }
   }, [])
@@ -655,15 +670,39 @@ function Users({ user }: { user: User }) {
       setShowForm(false); setEditing(null); setNotice(`Usuario ${result.user.name} guardado correctamente.`)
     } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el usuario.') } finally { setSaving(false) }
   }
-  async function removeUser(target: User) {
-    const confirmed = await askConfirm({ title: 'Eliminar usuario', message: `Se eliminará el acceso de ${target.name}. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
-    if (!confirmed) return
-    setError(''); setNotice('')
+  function canManageStatus(target: User) {
+    if (target.id === user.id || target.role === 'SUPERUSER') return false
+    return isSuperuser || (target.role === 'COMPANY_USER' && target.companyId === user.companyId)
+  }
+  function isLastActiveCompanyAdmin(target: User) {
+    return target.role === 'COMPANY_ADMIN'
+      && users.filter((item) => item.role === 'COMPANY_ADMIN' && item.companyId === target.companyId && item.isActive !== false).length <= 1
+  }
+  function openStatusAction(kind: UserStatusAction['kind'], target: User) {
+    if (!canManageStatus(target)) return
+    setStatusAction({ kind, user: target })
+    setStatusReason('')
+    setError('')
+  }
+  async function submitStatusAction(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!statusAction || statusSaving) return
+    const reason = statusReason.trim()
+    if (statusAction.kind === 'deactivate' && reason.length < 3) {
+      setError('Escribe un motivo de al menos 3 caracteres.')
+      return
+    }
+    setStatusSaving(true); setError(''); setNotice('')
     try {
-      await api(`/users/${target.id}`, { method: 'DELETE' })
-      setUsers((current) => current.filter((item) => item.id !== target.id))
-      setNotice('Usuario eliminado correctamente.')
-    } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el usuario.') }
+      const payload = statusAction.kind === 'deactivate' ? { reason } : {}
+      const result = await api<{ user: User }>(`/users/${statusAction.user.id}/${statusAction.kind}`, { method: 'POST', body: JSON.stringify(payload) })
+      setUsers((current) => current.map((item) => item.id === result.user.id ? result.user : item))
+      setStatusAction(null)
+      setStatusReason('')
+      setNotice(statusAction.kind === 'deactivate'
+        ? `Se desactivó a ${result.user.name}. Sus sesiones y aprobaciones pendientes fueron revocadas.`
+        : `Se reactivó a ${result.user.name}. Deberá iniciar una sesión nueva.`)
+    } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : `No se pudo ${statusAction.kind === 'deactivate' ? 'desactivar' : 'reactivar'} el usuario.`) } finally { setStatusSaving(false) }
   }
   return (
     <div className="page">
@@ -689,19 +728,22 @@ function Users({ user }: { user: User }) {
                   <th>Nombre</th>
                   <th>Email</th>
                   <th>Rol</th>
+                  <th>Estado</th>
                   <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {users.map((item) => {
                   const editable = isSuperuser ? true : item.role === 'COMPANY_USER'
-                  const deletable = isSuperuser ? item.role !== 'SUPERUSER' : item.role === 'COMPANY_USER'
+                  const active = item.isActive !== false
+                  const statusManageable = canManageStatus(item) && !(active && isLastActiveCompanyAdmin(item))
                   return (
                     <tr key={item.id}>
                       <td><div className="assignee"><span className="avatar tiny">{initials(item.name)}</span><strong>{item.name}</strong></div></td>
                       <td>{item.email}</td>
                       <td><span className={`role-chip ${item.role.toLowerCase()}`}>{roleLabels[item.role]}</span></td>
-                      <td><div className="row-links">{editable && <button className="row-link" onClick={() => openEdit(item)}>Editar</button>}{deletable && <button className="row-link danger" onClick={() => void removeUser(item)}>Eliminar</button>}</div></td>
+                      <td><span className={`user-status-badge ${active ? 'active' : 'inactive'}`}><span aria-hidden="true" />{active ? 'Activo' : 'Inactivo'}</span></td>
+                      <td><div className="row-links">{editable && <button className="row-link" onClick={() => openEdit(item)}>Editar</button>}{statusManageable && (active ? <button className="row-link danger" onClick={() => openStatusAction('deactivate', item)}>Desactivar</button> : <button className="row-link" onClick={() => openStatusAction('reactivate', item)}>Reactivar</button>)}</div></td>
                     </tr>
                   )
                 })}
@@ -722,8 +764,34 @@ function Users({ user }: { user: User }) {
           onClose={() => setShowForm(false)}
         />
       )}
+      {statusAction && <UserStatusModal action={statusAction} reason={statusReason} setReason={setStatusReason} saving={statusSaving} onSubmit={(event) => void submitStatusAction(event)} onClose={() => { if (!statusSaving) setStatusAction(null) }} />}
     </div>
   )}
+
+function UserStatusModal({ action, reason, setReason, saving, onSubmit, onClose }: { action: UserStatusAction; reason: string; setReason: (value: string) => void; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
+  const deactivating = action.kind === 'deactivate'
+  return (
+    <div className="drawer-backdrop centered-backdrop" role="presentation">
+      <form className="drawer centered-modal company-modal user-status-modal" onSubmit={onSubmit} role="dialog" aria-modal="true" aria-labelledby="user-status-title">
+        <div className="company-modal-header">
+          <div className={`company-modal-icon ${deactivating ? 'status-warning' : 'status-positive'}`} aria-hidden="true">{deactivating ? '!' : '✓'}</div>
+          <div className="company-modal-title"><p className="eyebrow">ESTADO DE CUENTA</p><h2 id="user-status-title">{deactivating ? 'Desactivar usuario' : 'Reactivar usuario'}</h2><p className="company-modal-subtitle">{deactivating ? 'El acceso se detendrá sin borrar su historial.' : 'El acceso volverá a estar disponible para una nueva sesión.'}</p></div>
+          <button type="button" className="icon-button" onClick={onClose} disabled={saving} aria-label="Cerrar">×</button>
+        </div>
+        <div className="status-user-summary"><div className="avatar">{initials(action.user.name)}</div><div><strong>{action.user.name}</strong><span>{action.user.email}</span></div></div>
+        {deactivating ? (
+          <>
+            <div className="status-impact-list"><p><strong>Se revocarán sus sesiones activas.</strong> Tendrá que volver a autenticarse cuando sea reactivado.</p><p><strong>Se cancelarán sus aprobaciones pendientes.</strong> Reactivar la cuenta no las restaurará.</p></div>
+            <label>Motivo de la desactivación<textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Ej. Terminación temporal de la relación laboral" minLength={3} maxLength={500} rows={4} required autoFocus /></label>
+          </>
+        ) : (
+          <div className="status-impact-list status-reactivate-copy"><p>El usuario podrá iniciar una sesión nueva después de la reactivación.</p><p>Las aprobaciones canceladas durante la desactivación no se restaurarán.</p></div>
+        )}
+        <div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose} disabled={saving}>Cancelar</button><button type="submit" className={`button ${deactivating ? 'danger' : 'primary'}`} disabled={saving}>{saving ? 'Guardando…' : deactivating ? 'Confirmar desactivación' : 'Confirmar reactivación'}</button></div>
+      </form>
+    </div>
+  )
+}
 
 function UserForm({ draft, setDraft, editing, isSuperuser, companies, saving, onSubmit, onClose }: { draft: UserDraft; setDraft: React.Dispatch<React.SetStateAction<UserDraft>>; editing: User | null; isSuperuser: boolean; companies: Company[]; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
   const isNew = !editing
@@ -1646,7 +1714,7 @@ function StrategyTasksModal({ strategy, drafts, users, error, saving, onDraftsCh
           {drafts.map((task, index) => <div className="strategy-task-row" key={index}>
             <label>Descripción de la tarea<input value={task.title} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Ej. Implementar el procedimiento aprobado" minLength={3} maxLength={120} required /></label>
             <div className="form-grid">
-              <label>Responsable<select value={task.responsibleId} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleId: event.target.value } : item))} required><option value="">Selecciona un responsable</option>{users.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label>
+              <label>Responsable<select value={task.responsibleId} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleId: event.target.value } : item))} required><option value="">Selecciona un responsable</option>{users.filter((user) => user.isActive !== false).map((user) => <option value={user.id} key={user.id}>{userOptionLabel(user)}</option>)}</select></label>
               <label>Fecha de entrega<input type="date" value={task.dueDate} onChange={(event) => onDraftsChange((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, dueDate: event.target.value } : item))} required /></label>
             </div>
             <button type="button" className="text-button" onClick={() => onRemove(index)}>Eliminar tarea</button>
@@ -1881,7 +1949,18 @@ function Tickets({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }
   }, [historyLoading, historyLoadingMore, historyPage, historyParams])
   useEffect(() => { api<{ users: User[] }>('/users').then((result) => setUsers(result.users)).catch(() => undefined) }, [])
   useEffect(() => { const timer = window.setTimeout(() => { void loadHistory() }, 0); return () => window.clearTimeout(timer) }, [loadHistory])
-  return <><TicketsList user={user} onOpenRisk={onOpenRisk} initialTicketId={initialTicketId} onConsumeInitialTicketId={onConsumeInitialTicketId} /><div className="page ticket-history-page"><TicketHistoryPanel events={historyEvents} total={historyTotal} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} users={users} search={historySearch} status={historyStatus} priority={historyPriority} assignee={historyAssignee} eventType={historyEventType} onSearch={setHistorySearch} onStatus={setHistoryStatus} onPriority={setHistoryPriority} onAssignee={setHistoryAssignee} onEventType={setHistoryEventType} onRetry={() => void loadHistory()} onLoadMore={() => void loadMoreHistory()} /></div></>
+  return <><PendingAssignmentNotice user={user} /><TicketsList user={user} onOpenRisk={onOpenRisk} initialTicketId={initialTicketId} onConsumeInitialTicketId={onConsumeInitialTicketId} /><div className="page ticket-history-page"><TicketHistoryPanel events={historyEvents} total={historyTotal} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} users={users} search={historySearch} status={historyStatus} priority={historyPriority} assignee={historyAssignee} eventType={historyEventType} onSearch={setHistorySearch} onStatus={setHistoryStatus} onPriority={setHistoryPriority} onAssignee={setHistoryAssignee} onEventType={setHistoryEventType} onRetry={() => void loadHistory()} onLoadMore={() => void loadMoreHistory()} /></div></>
+}
+
+function PendingAssignmentNotice({ user }: { user: User }) {
+  const [approvals, setApprovals] = useState<TicketAssignmentApproval[]>([])
+  useEffect(() => {
+    api<{ approvals: TicketAssignmentApproval[] }>('/ticket-assignment-approvals?status=PENDING').then((result) => setApprovals(result.approvals)).catch(() => undefined)
+  }, [])
+  if (approvals.length === 0) return null
+  const mine = approvals.filter((item) => item.proposedAssignee.id === user.id)
+  const titles = approvals.slice(0, 3).map((item) => item.ticket?.title).filter(Boolean).join(' · ')
+  return <div className="pending-assignment-notice" role="status"><strong>{approvals.length} {approvals.length === 1 ? 'ticket tiene' : 'tickets tienen'} una asignación pendiente.</strong><span>{titles}{mine.length > 0 ? ` · ${mine.length} espera tu confirmación.` : ' · La asignación confirmada sigue siendo el responsable actual.'}</span></div>
 }
 
 function TicketsList({ user, onOpenRisk, initialTicketId, onConsumeInitialTicketId }: TicketsProps) {
@@ -1930,14 +2009,26 @@ function TicketsList({ user, onOpenRisk, initialTicketId, onConsumeInitialTicket
     return () => { cancelled = true }
   }, [initialTicketId, onConsumeInitialTicketId])
   function startCreate() { setSelected(null); setDraft(emptyDraft); setShowForm(true) }
-  function startEdit(ticket: Ticket) { setSelected(ticket); setDraft({ title: ticket.title, description: ticket.description, priority: ticket.priority, status: ticket.status, assignedToId: ticket.assignedTo?.id ?? '' }); setShowForm(true) }
+  function startEdit(ticket: Ticket) { setSelected(ticket); setDraft({ title: ticket.title, description: ticket.description, priority: ticket.priority, status: ticket.status, assignedToId: ticket.assignedTo?.id ?? '', dueDate: ticket.dueDate ? ticket.dueDate.slice(0, 10) : '' }); setShowForm(true) }
   async function saveTicket(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setSaving(true); setError('')
+    event.preventDefault()
+    if (saving) return
+    setSaving(true); setError('')
     try {
-      const { assignedToId, ...draftWithoutAssignment } = draft
-      const payload = user.role === 'SUPERUSER' ? { ...draft, assignedToId: assignedToId || null } : draftWithoutAssignment
-      const result = selected ? await api<{ ticket: Ticket }>(`/tickets/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) }) : await api<{ ticket: Ticket }>('/tickets', { method: 'POST', body: JSON.stringify(payload) })
-      setShowForm(false); setSelected(result.ticket); await loadTickets()
+      const currentAssigneeId = selected?.assignedTo?.id ?? ''
+      const assignmentChanged = (user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN') && (!selected ? Boolean(draft.assignedToId) : draft.assignedToId !== currentAssigneeId)
+      const payload = assignmentChanged ? { ...draft, assignedToId: draft.assignedToId || null, dueDate: draft.dueDate || null } : { title: draft.title, description: draft.description, priority: draft.priority, status: draft.status, dueDate: draft.dueDate || null }
+      const result = selected
+        ? await api<{ ticket: Ticket; assignmentApproval?: TicketAssignmentApproval | null }>(`/tickets/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : await api<{ ticket: Ticket; assignmentApproval?: TicketAssignmentApproval | null }>('/tickets', { method: 'POST', body: JSON.stringify(payload) })
+      if (!result.ticket) throw new Error('La respuesta del servidor no contiene el ticket guardado.')
+      const saveMessage = result.assignmentApproval?.status === 'PENDING'
+        ? 'Solicitud de asignación guardada. El responsable propuesto debe aceptarla.'
+        : 'Ticket actualizado correctamente.'
+      const pendingAssignment = result.assignmentApproval ?? selected?.assignmentApproval ?? null
+      setShowForm(false)
+      setSelected({ ...result.ticket, assignmentApproval: pendingAssignment, saveMessage })
+      await loadTickets()
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo guardar el ticket.')
       // El backend devuelve 409 con motivo MITIGATION_EVIDENCE_REQUIRED cuando una actividad de
@@ -1949,9 +2040,9 @@ function TicketsList({ user, onOpenRisk, initialTicketId, onConsumeInitialTicket
   async function removeTicket(ticket: Ticket) { const confirmed = await askConfirm({ title: 'Eliminar ticket', message: `Se eliminará «${ticket.title}». Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }); if (!confirmed) return; try { await api(`/tickets/${ticket.id}`, { method: 'DELETE' }); setSelected(null); await loadTickets() } catch (requestError) { setError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar el ticket.') } }
   return <div className="page"><div className="page-heading"><div><p className="eyebrow">GESTIÓN OPERATIVA</p><h1>Tickets</h1><p className="muted">Gestiona solicitudes y mantén el trabajo en movimiento.</p></div><button className="button primary" onClick={startCreate}>+ Crear ticket</button></div>{error && <div className="form-error page-alert" role="alert">{error}</div>}{loadError && <ErrorBanner message={loadError} onRetry={() => void loadTickets()} />}<section className="panel"><div className="filters"><div className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tickets..." /></div><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}><option value="">Todas las prioridades</option>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>{loading ? <LoadingState /> : tickets.length === 0 ? <EmptyState title={search || statusFilter || priorityFilter ? 'Sin resultados' : 'No encontramos tickets'} text={search || statusFilter || priorityFilter ? 'Ningún ticket coincide con tu búsqueda o filtros.' : 'Crea el primer ticket para comenzar.'} action={<button className="button secondary" onClick={startCreate}>Crear ticket</button>} /> : <div className="ticket-table-wrap"><table><thead><tr><th>Ticket</th><th>Estado</th><th>Prioridad</th><th>Responsable</th><th>Actualizado</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className={selected?.id === ticket.id ? 'selected-row' : ''} onClick={() => setSelected(ticket)}><td><div className="ticket-title"><strong>{ticket.title}</strong><small>#{ticket.id.slice(-6).toUpperCase()}</small>{ticket.actionItemId && <small className="ticket-origin">Origen: plan de acción</small>}</div></td><td><Badge type="status" value={ticket.status} /></td><td><Badge type="priority" value={ticket.priority} /></td><td>{ticket.assignedTo ? <div className="assignee"><span className="avatar tiny">{initials(ticket.assignedTo.name)}</span>{ticket.assignedTo.name}</div> : <span className="unassigned">Sin asignar</span>}</td><td className="date-cell">{relativeDate(ticket.updatedAt)}</td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); startEdit(ticket) }}>⋯</button></td></tr>)}</tbody></table></div>}</section>{selected && !showForm && <TicketDetail ticket={selected} user={user} onEdit={() => startEdit(selected)} onDelete={() => removeTicket(selected)} onClose={() => setSelected(null)} onOpenRisk={onOpenRisk} />}{showForm && <TicketForm draft={draft} setDraft={setDraft} users={users} isEdit={Boolean(selected)} saving={saving} canAssign={user.role === 'SUPERUSER'} onSubmit={saveTicket} onClose={() => setShowForm(false)} />}</div>}
 
-function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
+function TicketForm({ draft, setDraft, users, isEdit, saving, canAssign, onSubmit, onClose }: { draft: TicketDraft; setDraft: React.Dispatch<React.SetStateAction<TicketDraft>>; users: User[]; isEdit: boolean; saving: boolean; canAssign: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal ticket-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">{isEdit ? 'EDITAR TICKET' : 'GESTIÓN DE TICKETS'}</p><h2>{isEdit ? 'Actualizar solicitud' : 'Crear ticket'}</h2><p className="company-modal-subtitle">{isEdit ? 'Modifica la información de la solicitud.' : 'Registra una nueva tarea o incidencia para darle seguimiento'}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Describe brevemente la solicitud" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Añade el contexto necesario..." rows={6} minLength={3} required /></label><div className="form-grid"><label>Prioridad<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as TicketPriority })}>{priorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Estado<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TicketStatus })}>{statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div><div className="form-grid"><label>Fecha límite<input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} disabled={saving} /></label>{canAssign && <label>Asignar a<select value={draft.assignedToId} onChange={(event) => setDraft({ ...draft, assignedToId: event.target.value })}><option value="">Sin asignar</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}</div><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : 'Crear ticket'}</button></div></form></div> }
 
-function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; onOpenRisk: (processId: string, riskId: string) => void }) {
+export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: { ticket: Ticket; user: User; onEdit: () => void; onDelete: () => void; onClose: () => void; onOpenRisk: (processId: string, riskId: string) => void }) {
   // Los tickets generados por una aprobación traen el riesgo de origen para poder volver a él.
   const originRisk = ticket.riskApprovals?.[0]?.risk
   // Evidencia PDF del ticket: se pide al servidor al abrir el detalle y se refresca tras cada
@@ -2125,7 +2216,7 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
       <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2 id="ticket-detail-title">{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar detalle del ticket">×</button></div>
       <div className="detail-badges"><Badge type="status" value={ticket.status} /><Badge type="priority" value={ticket.priority} /></div>
       <div className="detail-section"><p className="detail-label">Descripción</p><p className="detail-description">{ticket.description}</p></div>
-      {ticket.actionItem?.actionPlan.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}
+       {ticket.actionItem?.actionPlan?.strategyTitle && <div className="detail-section"><p className="detail-label">ESTRATEGIA DE ORIGEN</p><strong>{ticket.actionItem.actionPlan.strategyTitle}</strong>{ticket.actionItem.actionPlan.strategyDescription && <p className="detail-description">{ticket.actionItem.actionPlan.strategyDescription}</p>}</div>}
       {originRisk && (
         <div className="detail-section ticket-origin-risk">
           <p className="detail-label">RIESGO DE ORIGEN</p>
@@ -2133,7 +2224,9 @@ function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRisk }: {
           <button type="button" className="text-button" onClick={() => onOpenRisk(originRisk.processId, originRisk.id)}>Ver riesgo →</button>
         </div>
       )}
-      <div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy.name}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo?.name ?? 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{originRisk ? 'Aprobación de riesgo' : ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fechas</span><strong>{ticket.dueDate ? `Vence ${relativeDate(ticket.dueDate)}` : 'Sin fecha límite'}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div>
+       {ticket.saveMessage && <div className="form-success page-alert" role="status">{ticket.saveMessage}</div>}
+       {ticket.assignmentApproval?.status === 'PENDING' && <div className="pending-assignment-notice" role="status"><strong>Asignación pendiente</strong><span>{userOptionLabel(ticket.assignmentApproval.proposedAssignee)} debe aceptar esta solicitud. El responsable confirmado sigue siendo {ticket.assignedTo ? userOptionLabel(ticket.assignedTo) : 'Sin asignar'}.</span></div>}
+         <div className="detail-meta"><div><span>Creado por</span><strong>{ticket.createdBy ? userOptionLabel(ticket.createdBy) : 'Usuario no disponible'}</strong></div><div><span>Asignado a</span><strong>{ticket.assignedTo ? userOptionLabel(ticket.assignedTo) : 'Sin asignar'}</strong></div><div><span>Origen</span><strong>{originRisk ? 'Aprobación de riesgo' : ticket.actionItemId ? 'Plan de acción' : 'Solicitud directa'}</strong></div><div><span>Fecha límite</span><strong className={ticketDueDateClass(ticket)}>{ticketDueDateLabel(ticket)}</strong></div><div><span>Última actualización</span><strong>{relativeDate(ticket.updatedAt)}</strong></div></div>
       <section className="detail-section ticket-evidence-section" aria-label="Evidencia del ticket">
         <p className="detail-label">EVIDENCIA (PDF)</p>
         <p className="detail-description">Adjunta el PDF que respalda esta actividad. Para cerrar una actividad de mitigación el sistema exige al menos un PDF.</p>
@@ -2272,6 +2365,18 @@ function initials(name: string) { return name.split(' ').map((part) => part[0]).
 function firstName(name: string) { return name.split(' ')[0] }
 
 function relativeDate(date: string) { const value = new Date(date); const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const target = new Date(value.getFullYear(), value.getMonth(), value.getDate()); const days = Math.round((target.getTime() - today.getTime()) / 86400000); if (days === 0) return 'Hoy'; if (days === -1) return 'Ayer'; if (days === 1) return 'Mañana'; if (days < 0 && days > -7) return `Hace ${Math.abs(days)} días`; if (days > 1 && days < 7) return `En ${days} días`; return value.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) }
+
+function ticketDueDateLabel(ticket: Pick<Ticket, 'dueDate' | 'status'>) {
+  if (!ticket.dueDate) return 'Sin fecha límite'
+  const absolute = formatCalendarDate(ticket.dueDate)
+  const overdue = ticket.status !== 'RESOLVED' && ticket.status !== 'CLOSED' && isCalendarDateBeforeToday(ticket.dueDate)
+  return overdue ? `Vencido · ${absolute}` : `Vence ${absolute} (${calendarRelativeDate(ticket.dueDate)})`
+}
+
+function ticketDueDateClass(ticket: Pick<Ticket, 'dueDate' | 'status'>) {
+  if (!ticket.dueDate || ticket.status === 'RESOLVED' || ticket.status === 'CLOSED') return undefined
+  return isCalendarDateBeforeToday(ticket.dueDate) ? 'ticket-due-overdue' : undefined
+}
 
 /** Tamaño legible de un archivo adjunto (B / KB / MB), para la lista de evidencia de un ticket. */
 function fileSize(bytes: number) {
@@ -2438,11 +2543,11 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           <div className="diag-actionbar-info"><p className="detail-label">GESTIÓN</p><span>Prioriza las recomendaciones y conviértelas en acciones del plan.</span></div>
         </div>
         {recError && <div className="form-error">{recError}</div>}
-        <RecommendationsPanel analysis={analysis} recommendations={recommendations} onImport={importRecommendations} onSetStatus={setRecommendationStatus} onRequestCreateAction={(recommendation) => { setDiagStage('planes'); setCreateActionFor(recommendation) }} importing={importing} />
+         <RecommendationsPanel analysis={analysis} recommendations={recommendations} onImport={importRecommendations} onSetStatus={setRecommendationStatus} onRequestCreateAction={user.role === 'COMPANY_USER' ? () => undefined : (recommendation) => { setDiagStage('planes'); setCreateActionFor(recommendation) }} importing={importing} />
         <div className="diag-next"><button className="button primary" onClick={() => setDiagStage('planes')}>Siguiente: Plan de acción →</button></div>
       </section>
       <section className={`diag-stage${diagStage === 'planes' ? ' active' : ''}`}>
-        <ActionPlansPanel diagnostic={diagnostic} recommendations={recommendations} createActionFor={createActionFor} onCreateActionClose={() => setCreateActionFor(null)} />
+         <div className={user.role === 'COMPANY_USER' ? 'action-plans-readonly' : undefined}><ActionPlansUserContext.Provider value={user}><ActionPlansPanel diagnostic={diagnostic} recommendations={recommendations} createActionFor={createActionFor} onCreateActionClose={() => setCreateActionFor(null)} /></ActionPlansUserContext.Provider></div>
       </section>
     </div>
   )}
@@ -2567,6 +2672,11 @@ function ActionPlansPanel({ diagnostic, recommendations, createActionFor, onCrea
 function KanbanActionCard({ item, isDragging, onDragStart, onDragEnd, onChangeStatus, onEdit, onRemove }: { item: ActionItem; isDragging: boolean; onDragStart: (item: ActionItem) => void; onDragEnd: () => void; onChangeStatus: (item: ActionItem, status: ActionItemStatus) => void; onEdit: (item: ActionItem) => void; onRemove: (item: ActionItem) => void }) {
   const [expanded, setExpanded] = useState(false)
   const longDescription = item.description.length > 110
+  const currentUser = useContext(ActionPlansUserContext)
+  const canUpdateOwnStatus = currentUser?.role !== 'COMPANY_USER' || item.responsibleId === currentUser.id
+  if (currentUser?.role === 'COMPANY_USER') {
+    return <article className={`kanban-card${isDragging ? ' dragging' : ''}`} draggable={canUpdateOwnStatus} onDragStart={canUpdateOwnStatus ? () => onDragStart(item) : undefined} onDragEnd={canUpdateOwnStatus ? onDragEnd : undefined}><div className="kanban-card-head"><strong className="kanban-card-title">{item.title}</strong></div><div className="kanban-card-status"><span className={`kanban-status-badge ${item.status.toLowerCase()}`}>{actionItemStatusLabel[item.status]}</span><select value={item.status} disabled={!canUpdateOwnStatus} onChange={(event) => onChangeStatus(item, event.target.value as ActionItemStatus)} aria-label="Estado de la acción">{actionItemStatuses.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div><p className={`kanban-card-description${expanded ? ' expanded' : ''}`}>{item.description}</p>{longDescription && <button type="button" className="kanban-more" onClick={() => setExpanded(!expanded)}>{expanded ? 'Ver menos' : 'Ver más'}</button>}<div className="kanban-meta-row"><span className={`level-pill ${item.priority.toLowerCase()}`}>P. {recPriorityLabel[item.priority]}</span>{item.responsible && <span className="assignee"><span className="avatar tiny">{initials(item.responsible.name)}</span>{item.responsible.name}</span>}{item.dueDate && <span className="kanban-meta-cell kanban-due">Vence {relativeDate(item.dueDate)}</span>}</div><div className="kanban-card-foot"><div className="kanban-foot-row"><span className="kanban-meta-cell kanban-origin">Origen: {item.recommendation ? 'recomendación' : 'plan de acción'}</span>{item.ticket && <span className="kanban-meta-cell kanban-ticket">Ticket #{item.ticket.id.slice(-6).toUpperCase()}</span>}</div>{item.responsibleId === currentUser.id && <span className="kanban-rec">Actividad asignada a ti</span>}</div></article>
+  }
   return <article className={`kanban-card${isDragging ? ' dragging' : ''}`} draggable onDragStart={() => onDragStart(item)} onDragEnd={onDragEnd}><div className="kanban-card-head"><strong className="kanban-card-title">{item.title}</strong><div className="kanban-card-controls"><button type="button" className="text-button" onClick={() => onEdit(item)}>Editar</button><button type="button" className="row-action" onClick={() => onRemove(item)} aria-label="Eliminar">×</button></div></div><div className="kanban-card-status"><span className={`kanban-status-badge ${item.status.toLowerCase()}`}>{actionItemStatusLabel[item.status]}</span><select value={item.status} onChange={(event) => onChangeStatus(item, event.target.value as ActionItemStatus)} aria-label="Estado de la acción">{actionItemStatuses.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></div><p className={`kanban-card-description${expanded ? ' expanded' : ''}`}>{item.description}</p>{longDescription && <button type="button" className="kanban-more" onClick={() => setExpanded(!expanded)}>{expanded ? 'Ver menos' : 'Ver más'}</button>}<div className="kanban-meta-row"><span className={`level-pill ${item.priority.toLowerCase()}`}>P. {recPriorityLabel[item.priority]}</span>{item.responsible && <span className="assignee"><span className="avatar tiny">{initials(item.responsible.name)}</span>{item.responsible.name}</span>}{item.dueDate && <span className="kanban-meta-cell kanban-due">Vence {relativeDate(item.dueDate)}</span>}</div><div className="kanban-card-foot"><div className="kanban-foot-row"><span className="kanban-meta-cell kanban-origin">Origen: {item.recommendation ? 'recomendación' : 'plan de acción'}</span>{item.ticket && <span className="kanban-meta-cell kanban-ticket">Ticket #{item.ticket.id.slice(-6).toUpperCase()}</span>}</div>{item.recommendation && <span className="kanban-rec" title={item.recommendation.title}>{item.recommendation.title}</span>}</div></article>}
 
 function PlanEditForm({ draft, setDraft, saving, onSubmit, onClose }: { draft: PlanDraft; setDraft: React.Dispatch<React.SetStateAction<PlanDraft>>; saving: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) { return <div className="drawer-backdrop centered-backdrop"><form className="drawer centered-modal company-modal" onSubmit={onSubmit}><div className="company-modal-header"><div className="company-modal-icon">▤</div><div className="company-modal-title"><p className="eyebrow">PLAN DE ACCIÓN</p><h2>Editar plan</h2><p className="company-modal-subtitle">Actualiza la información del plan de acción.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Ej. Plan de mejora 2026" minLength={3} required /></label><label>Descripción<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={3} minLength={3} required /></label><div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</button></div></form></div> }

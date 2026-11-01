@@ -13,6 +13,7 @@ import { LoadingState } from '../ui/LoadingState'
 import { askConfirm } from '../ui/useConfirm'
 import { AuditDetailView } from './AuditDetailView'
 import { AuditScopeSelect } from './AuditScopeSelect'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 import {
   auditKinds,
   auditStatusLabels,
@@ -60,7 +61,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
     () => (user.role === 'SUPERUSER' ? allProcesses : allProcesses.filter((process) => process.companyId === user.companyId)),
     [allProcesses, user],
   )
-  const users = allUsers
+  const users = allUsers.filter((person) => person.isActive !== false)
   const companyProcesses = processes
 
   const [audits, setAudits] = useState<Audit[]>(initialAudits)
@@ -76,6 +77,8 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
   const [saving, setSaving] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [procedures, setProcedures] = useState<Procedure[]>([])
+  const historicalAuditUsers: QualityUser[] = editing ? [editing.leadAuditor, editing.responsible].filter((person): person is NonNullable<typeof person> => Boolean(person)).map((person) => ({ ...person, companyId: editing.companyId })) : []
+  const auditUsers = activeUserOptions<QualityUser>(users, historicalAuditUsers)
 
   const selected = audits.find((audit) => audit.id === selectedId) ?? null
 
@@ -254,16 +257,16 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                 <label>Auditor líder
                   <select value={draft.leadAuditorId} onChange={(event) => setDraft((current) => ({ ...current, leadAuditorId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {users.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
-                      <option key={person.id} value={person.id}>{person.name}</option>
+                    {auditUsers.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
+                      <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>
                     ))}
                   </select>
                 </label>
                 <label>Responsable
                   <select value={draft.responsibleId} onChange={(event) => setDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {users.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
-                      <option key={person.id} value={person.id}>{person.name}</option>
+                    {auditUsers.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
+                      <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>
                     ))}
                   </select>
                 </label>
@@ -382,7 +385,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                       </div>
                     )}
                     <div className="quality-audit-card-footer">
-                      <div className="quality-audit-owner"><span className="avatar tiny">{(audit.responsible?.name ?? audit.leadAuditor?.name ?? '?').slice(0, 1).toUpperCase()}</span><span><small>Responsable</small><strong>{audit.responsible?.name ?? audit.leadAuditor?.name ?? 'Sin asignar'}</strong></span></div>
+                      <div className="quality-audit-owner"><span className="avatar tiny">{(audit.responsible?.name ?? audit.leadAuditor?.name ?? '?').slice(0, 1).toUpperCase()}</span><span><small>Responsable</small><strong>{audit.responsible ? userOptionLabel(audit.responsible) : audit.leadAuditor ? userOptionLabel(audit.leadAuditor) : 'Sin asignar'}</strong></span></div>
                       <span className="quality-audit-date">Planeada {formatMaybeDate(audit.plannedDate)}</span>
                       {checklistTotal > 0 && <div className="quality-required-progress" title={`${requiredPending} de ${checklistTotal} ítems obligatorios pendientes`}><span><small>Checklist</small><b>{requiredPending}/{checklistTotal} pendientes</b></span><span className="quality-progress-track"><i style={{ width: `${pendingRatio}%` }} /></span></div>}
                     </div>

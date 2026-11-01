@@ -11,7 +11,7 @@ import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
-import request from 'supertest'
+import request from './test-request.js'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Request } from 'express'
 import type { PrismaClient, Role } from '@prisma/client'
@@ -193,6 +193,13 @@ function makeEvidenceDb() {
         return removed
       }),
       count: vi.fn(async () => evidenceRows.length),
+    },
+    ticketAssignmentApproval: {
+      findMany: vi.fn(async () => []),
+      updateMany: vi.fn(async () => ({ count: 0 })),
+    },
+    ticketDriveReference: {
+      count: vi.fn(async () => 0),
     },
     // Ningún fallo de escritura se prueba aquí: las rutas de evidencia no usan transacciones
     // (la subida escribe disco primero y la fila después; el borrado, la fila primero).

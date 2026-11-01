@@ -46,7 +46,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
  * por ejemplo, puede llegar vacío o como application/octet-stream). `fields` permite adjuntar
  * campos de texto adicionales (p. ej. el anclaje de una evidencia de auditoría).
  */
-export async function apiUpload<T>(path: string, file: File, fields: Record<string, string> = {}): Promise<T> {
+export async function apiUpload<T>(path: string, file: File, fields: Record<string, string> = {}, onProgress?: (progress: number) => void): Promise<T> {
   if (!/\.pdf$/i.test(file.name)) throw new ApiError('La evidencia debe ser un archivo PDF (.pdf).', 415)
   if (file.size > MAX_UPLOAD_BYTES) throw new ApiError('El PDF supera el tamaño máximo de 10 MB.', 413)
   const form = new FormData()
@@ -55,7 +55,30 @@ export async function apiUpload<T>(path: string, file: File, fields: Record<stri
   for (const [key, value] of Object.entries(fields)) {
     if (value) form.append(key, value)
   }
-  const response = await fetch(apiUrl(path), { method: 'POST', credentials: 'include', body: form })
-  if (!response.ok) await failureFrom(response)
-  return response.json() as Promise<T>
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', apiUrl(path))
+    request.withCredentials = true
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100))
+    })
+    request.addEventListener('error', () => reject(new ApiError('No se pudo completar la subida.', 0)))
+    request.addEventListener('load', () => {
+      let body: { error?: string; reason?: string } & T
+      try {
+        body = JSON.parse(request.responseText) as { error?: string; reason?: string } & T
+      } catch {
+        reject(new ApiError('La respuesta del servidor no es válida.', request.status))
+        return
+      }
+      if (request.status === 401) window.dispatchEvent(new Event('app:unauthorized'))
+      if (request.status < 200 || request.status >= 300) {
+        reject(new ApiError(body.error ?? 'No se pudo completar la solicitud', request.status, body.reason))
+        return
+      }
+      onProgress?.(100)
+      resolve(body as T)
+    })
+    request.send(form)
+  })
 }

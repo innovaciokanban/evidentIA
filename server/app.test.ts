@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import supertest from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp, nextProcessCode, nextProcessVersion, swotFingerprint } from './app.js'
@@ -9,6 +9,24 @@ import { dashboardScopesFor } from './dashboard-service.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { strategySourceRef } from './strategy-weighting-service.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, aiAnalysisSchema, buildCheckyConsultSchema, companyCreateSchema, companyUpdateSchema, crossCreateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, loginSchema, processCreateSchema, processQuerySchema, processUpdateSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+
+const TEST_ORIGIN = 'http://localhost:5173'
+const testRequestMethods = new Set(['get', 'post', 'put', 'patch', 'delete'])
+type TestClient = ReturnType<typeof supertest>
+type TestRequestMethod = (...args: unknown[]) => { set: (name: string, value: string) => unknown }
+
+const withTrustedOrigin = (client: TestClient): TestClient => new Proxy(client, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver)
+    if (typeof property !== 'string' || !testRequestMethods.has(property) || typeof value !== 'function') return value
+    return (...args: unknown[]) => (value as TestRequestMethod).apply(target, args).set('Origin', TEST_ORIGIN)
+  },
+})
+
+const request = Object.assign(
+  (app: Parameters<typeof supertest>[0]) => withTrustedOrigin(supertest(app)),
+  { agent: (app: Parameters<typeof supertest.agent>[0]) => withTrustedOrigin(supertest.agent(app)) },
+)
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -161,14 +179,21 @@ const checkyInsufficientResult = {
   findings: [],
 }
 
-function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssigneeId: string | null = null, userCompanyId: string | null = company.id, existingRecommendations: typeof recommendation[] = [], seededCrosses: SeededCross[] = []) {
-  const currentUser = role === 'SUPERUSER' ? admin : { ...member, role, companyId: userCompanyId }
+function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssigneeId: string | null = null, userCompanyId: string | null = company.id, existingRecommendations: typeof recommendation[] = [], seededCrosses: SeededCross[] = [], activeUser = true) {
+  let currentUser = { ...(role === 'SUPERUSER' ? admin : { ...member, role, companyId: userCompanyId }), isActive: activeUser }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   const users = [admin, member, companyUser, otherCompanyUser, uuidMember, uuidOtherCompanyUser]
+  let storedUsers = users.map((user) => ({ ...user, isActive: true }))
   let sessionActive = false
   let storedRecommendations: typeof recommendation[] = existingRecommendations
   type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; createdById: string; assignedToId: string | null; actionItemId: string | null; dueDate: Date | null }
   let storedTickets: StoredTicket[] = []
+  type StoredAssignmentApproval = { id: string; ticketId: string | null; requestedById: string; proposedAssigneeId: string; previousAssigneeId: string | null; decidedById: string | null; riskApprovalId: string | null; status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'SUPERSEDED'; source: 'DIRECT' | 'RISK_APPROVAL' | 'ACTION_ITEM' | 'STRATEGY_TASK'; comment: string | null; createdAt: Date; decidedAt: Date | null; updatedAt: Date }
+  let storedAssignmentApprovals: StoredAssignmentApproval[] = []
+  type StoredTicketAuditEvent = { id: string; ticketId: string; eventType: string; summary: string; actorId: string | null; actorName: string | null; actorEmail: string | null; changes?: unknown; metadata?: unknown; occurredAt: Date }
+  let storedTicketAuditEvents: StoredTicketAuditEvent[] = []
+  type StoredUserStatusEvent = { id: string; userId: string; actorId: string | null; eventType: string; reason: string | null; actorName: string | null; actorEmail: string | null; occurredAt: Date }
+  let storedUserStatusEvents: StoredUserStatusEvent[] = []
   type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
   const storedNotifications: StoredNotification[] = []
   let storedCheckyMessages: typeof checkyMessageFixture[] = []
@@ -193,6 +218,52 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
     const assignee = assigneeId ? users.find((user) => user.id === assigneeId) ?? null : null
     return { ...stored, createdById: owner.id, assignedToId: assigneeId, createdBy: { id: owner.id, name: owner.name, email: owner.email, companyId: owner.companyId }, assignedTo: assignee ? { id: assignee.id, name: assignee.name, email: assignee.email, companyId: assignee.companyId } : null }
   }
+  const assignmentApprovalUser = (userId: string | null) => {
+    const user = storedUsers.find((item) => item.id === userId) ?? users.find((item) => item.id === userId)
+    return user ? { id: user.id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, isActive: 'isActive' in user ? user.isActive : true } : null
+  }
+  const assignmentApprovalView = (approval: StoredAssignmentApproval) => ({
+    ...approval,
+    requestedBy: assignmentApprovalUser(approval.requestedById),
+    proposedAssignee: assignmentApprovalUser(approval.proposedAssigneeId),
+    previousAssignee: approval.previousAssigneeId ? assignmentApprovalUser(approval.previousAssigneeId) : null,
+    decidedBy: approval.decidedById ? assignmentApprovalUser(approval.decidedById) : null,
+    ticket: approval.ticketId ? (() => { const stored = storedTickets.find((item) => item.id === approval.ticketId); return stored ? normalizeTicket(stored, stored.createdById, stored.assignedToId) : null })() : null,
+    riskApproval: null,
+  })
+  const matchesAssignmentWhere = (approval: StoredAssignmentApproval, where: any): boolean => {
+    if (!where) return true
+    if (where.AND && !where.AND.every((part: any) => matchesAssignmentWhere(approval, part))) return false
+    if (where.OR && !where.OR.some((part: any) => matchesAssignmentWhere(approval, part))) return false
+    if (where.id && approval.id !== where.id) return false
+    if (where.ticketId && typeof where.ticketId === 'object' && where.ticketId.not === null && approval.ticketId === null) return false
+    if (typeof where.ticketId === 'string' && approval.ticketId !== where.ticketId) return false
+    if (where.requestedById && approval.requestedById !== where.requestedById) return false
+    if (where.proposedAssigneeId && approval.proposedAssigneeId !== where.proposedAssigneeId) return false
+    if (where.status && approval.status !== where.status) return false
+    if (where.ticket) {
+      const stored = approval.ticketId ? storedTickets.find((item) => item.id === approval.ticketId) : null
+      if (!stored) return false
+      const normalized = normalizeTicket(stored, stored.createdById, stored.assignedToId)
+      if (where.ticket.OR && !where.ticket.OR.some((part: any) => {
+        if (part.assignedToId === null) return normalized.assignedTo === null
+        const expected = part.createdBy?.companyId ?? part.assignedTo?.companyId
+        const actual = part.createdBy ? normalized.createdBy.companyId : normalized.assignedTo?.companyId
+        return expected === actual
+      })) return false
+    }
+    if (where.requestedBy?.OR) {
+      const user = users.find((item) => item.id === approval.requestedById)
+      if (!where.requestedBy.OR.some((part: any) => (part.companyId === undefined || user?.companyId === part.companyId) && (part.role === undefined || user?.role === part.role))) return false
+    }
+    if (where.proposedAssignee?.companyId) {
+      if (users.find((user) => user.id === approval.proposedAssigneeId)?.companyId !== where.proposedAssignee.companyId) return false
+    }
+    if (where.requestedBy?.companyId) {
+      if (users.find((user) => user.id === approval.requestedById)?.companyId !== where.requestedBy.companyId) return false
+    }
+    return true
+  }
   const db = {
     $queryRaw: vi.fn(async (strings: TemplateStringsArray) => {
       const sql = Array.from(strings).join('')
@@ -201,25 +272,37 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       }
       return [{ locked: true }]
     }),
+    setCurrentUserActive: (isActive: boolean) => { currentUser = { ...currentUser, isActive } },
     user: {
       findUnique: vi.fn(async ({ where }: { where: { email?: string; id?: string } }) => {
         if (where.email) return where.email === currentUser.email ? { ...currentUser, passwordHash } : null
-        const match = users.find((user) => user.id === where.id)
+        if (where.id === currentUser.id) return { ...currentUser, passwordHash }
+        const match = storedUsers.find((user) => user.id === where.id)
         return match ? { ...match, passwordHash } : null
       }),
-      findMany: vi.fn(async ({ select }: { select?: { id?: true; name?: true; email?: true; role?: true; companyId?: true } }) => users.map((user) => ({
+      findMany: vi.fn(async ({ select }: { select?: { id?: true; name?: true; email?: true; role?: true; companyId?: true; isActive?: true } }) => storedUsers.map((user) => ({
         id: user.id,
         name: user.name,
         ...(select?.email ? { email: user.email } : {}),
         ...(select?.role ? { role: user.role } : {}),
         ...(select?.companyId ? { companyId: user.companyId } : {}),
+        ...(select?.isActive ? { isActive: user.isActive } : {}),
       }))),
       create: vi.fn(async ({ data }: { data: { name: string; email: string; role: Role; companyId: string | null } }) => ({ id: 'cmnewuser0000000000000001', name: data.name, email: data.email, role: data.role, companyId: data.companyId })),
-      update: vi.fn(async ({ where, data }: { where: { id: string }; data: { name?: string; email?: string; role?: Role; companyId?: string | null } }) => {
-        const base = users.find((user) => user.id === where.id) ?? member
-        return { id: base.id, name: data.name ?? base.name, email: data.email ?? base.email, role: data.role ?? base.role, companyId: data.companyId !== undefined ? data.companyId : base.companyId }
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: { name?: string; email?: string; role?: Role; companyId?: string | null; isActive?: boolean } }) => {
+        const base = storedUsers.find((user) => user.id === where.id) ?? { ...member, isActive: true }
+        storedUsers = storedUsers.map((user) => user.id === where.id ? { ...user, ...data } : user)
+        return { id: base.id, name: data.name ?? base.name, email: data.email ?? base.email, role: data.role ?? base.role, companyId: data.companyId !== undefined ? data.companyId : base.companyId, isActive: data.isActive !== undefined ? data.isActive : base.isActive }
       }),
+      count: vi.fn(async ({ where }: { where: { companyId: string; role: Role; isActive: boolean; NOT: { id: string } } }) => storedUsers.filter((user) => user.id !== where.NOT.id && user.companyId === where.companyId && user.role === where.role && user.isActive === where.isActive).length),
       delete: vi.fn(),
+    },
+    userStatusEvent: {
+      create: vi.fn(async ({ data }: { data: Omit<StoredUserStatusEvent, 'id' | 'occurredAt'> }) => {
+        const event = { id: `cmuserstatusevent${storedUserStatusEvents.length + 1}`, occurredAt: new Date(), ...data }
+        storedUserStatusEvents.push(event)
+        return event
+      }),
     },
     // Notificaciones in-app: la campana de asignación y el aviso de plan completado se escriben
     // con estos dos métodos y deduplican por (usuario, link), igual que en producción; los tests
@@ -242,10 +325,27 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmevidence${Date.now()}`, createdAt: new Date(), ...data })),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
     },
+    ticketDriveReference: {
+      count: vi.fn(async () => 0),
+      findUnique: vi.fn(async () => null),
+      findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async () => []),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmdrivereference${Date.now()}`, createdAt: new Date(), updatedAt: new Date(), createdBy: member, ...data })),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
+    },
+    ticketAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Omit<StoredTicketAuditEvent, 'id' | 'occurredAt'> }) => {
+        const event = { id: `cmticketaudit${String(storedTicketAuditEvents.length + 1).padStart(10, '0')}`, occurredAt: new Date(), ...data }
+        storedTicketAuditEvents = [event, ...storedTicketAuditEvents]
+        return { ...event, actor: event.actorId ? users.find((user) => user.id === event.actorId) ?? null : null, ticket: ticket }
+      }),
+      count: vi.fn(async ({ where }: { where?: { ticketId?: string } } = {}) => storedTicketAuditEvents.filter((event) => !where?.ticketId || event.ticketId === where.ticketId).length),
+      findMany: vi.fn(async ({ where }: { where?: { ticketId?: string }; skip?: number; take?: number } = {}) => storedTicketAuditEvents.filter((event) => !where?.ticketId || event.ticketId === where.ticketId).map((event) => ({ ...event, actor: event.actorId ? users.find((user) => user.id === event.actorId) ?? null : null, ticket }))),
+    },
     session: {
       create: vi.fn(async () => { sessionActive = true; return { id: 'session-1', expiresAt: new Date(Date.now() + 86400000) } }),
       findUnique: vi.fn(async () => sessionActive ? ({ id: 'session-1', expiresAt: new Date(Date.now() + 86400000), user: currentUser }) : null),
-      delete: vi.fn(),
+      delete: vi.fn(async () => { sessionActive = false; return { id: 'session-1' } }),
       deleteMany: vi.fn(async () => { sessionActive = false; return { count: 1 } }),
     },
     ticket: {
@@ -292,6 +392,25 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
         return { id: where.id }
       }),
       count: vi.fn(async () => 1),
+    },
+    ticketAssignmentApproval: {
+      findFirst: vi.fn(async ({ where }: { where?: any } = {}) => storedAssignmentApprovals.find((approval) => matchesAssignmentWhere(approval, where)) ? assignmentApprovalView(storedAssignmentApprovals.find((approval) => matchesAssignmentWhere(approval, where))!) : null),
+      findMany: vi.fn(async ({ where }: { where?: any } = {}) => storedAssignmentApprovals.filter((approval) => matchesAssignmentWhere(approval, where)).map(assignmentApprovalView)),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const approval = storedAssignmentApprovals.find((item) => item.id === where.id)
+        return approval ? assignmentApprovalView(approval) : null
+      }),
+      create: vi.fn(async ({ data }: { data: Omit<StoredAssignmentApproval, 'id' | 'createdAt' | 'updatedAt' | 'decidedAt' | 'decidedById' | 'comment'> }) => {
+        const now = new Date()
+        const approval: StoredAssignmentApproval = { ...data, id: `cmassignment${String(storedAssignmentApprovals.length + 1).padStart(10, '0')}`, decidedById: null, decidedAt: null, comment: null, createdAt: now, updatedAt: now }
+        storedAssignmentApprovals.push(approval)
+        return approval
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: any; data: Partial<StoredAssignmentApproval> }) => {
+        const targets = storedAssignmentApprovals.filter((approval) => matchesAssignmentWhere(approval, where))
+        for (const approval of targets) Object.assign(approval, data, { updatedAt: new Date() })
+        return { count: targets.length }
+      }),
     },
     company: {
       create: vi.fn(async () => ({ ...company, users: company.users })),
@@ -374,7 +493,7 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
     actionItem: {
       findMany: vi.fn(async () => [{ ...actionItem, actionPlan: { id: actionPlan.id, title: actionPlan.title, diagnostic: { id: diagnostic.id, title: diagnostic.title, company: { id: company.id, name: company.name } } }, responsible: member }]),
       findUnique: vi.fn(async () => ({ ...actionItem, actionPlan: { diagnosticId: actionPlan.id, diagnostic: { companyId: company.id, company: { id: company.id, name: company.name } } }, recommendation: { id: recommendation.id, title: recommendation.title, priority: recommendation.priority, status: recommendation.status }, responsible: member })),
-      create: vi.fn(async () => ({ ...actionItem, recommendation: { id: recommendation.id, title: recommendation.title, priority: recommendation.priority, status: recommendation.status }, responsible: member })),
+      create: vi.fn(async ({ data }: { data?: { responsibleId?: string | null } } = {}) => ({ ...actionItem, ...(data ?? {}), recommendation: { id: recommendation.id, title: recommendation.title, priority: recommendation.priority, status: recommendation.status }, responsible: data?.responsibleId ? users.find((user) => user.id === data.responsibleId) ?? null : null })),
       update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...actionItem, ...data, recommendation: { id: recommendation.id, title: recommendation.title, priority: recommendation.priority, status: recommendation.status }, responsible: member })),
       delete: vi.fn(),
       count: vi.fn(async () => 1),
@@ -492,19 +611,27 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   // Interactive transaction: the same client is handed to the callback, and the message store is
   // rolled back when the callback throws so atomicity is actually observable in tests.
   ;(db as unknown as { $transaction: unknown }).$transaction = async (callback: (tx: unknown) => unknown) => {
-    const messagesBefore = storedCheckyMessages
-    const processChangesBefore = storedProcessChanges
-    const processesBefore = storedProcesses
+  const messagesBefore = storedCheckyMessages
+  const processChangesBefore = storedProcessChanges
+  const processesBefore = storedProcesses
+  const ticketAuditEventsBefore = storedTicketAuditEvents
+  const assignmentApprovalsBefore = storedAssignmentApprovals.map((approval) => ({ ...approval }))
+  const usersBefore = storedUsers.map((user) => ({ ...user }))
+  const userStatusEventsBefore = storedUserStatusEvents
     try {
       return await callback(db as never)
     } catch (error) {
       storedCheckyMessages = messagesBefore
       storedProcessChanges = processChangesBefore
       storedProcesses = processesBefore
+      storedTicketAuditEvents = ticketAuditEventsBefore
+      storedAssignmentApprovals = assignmentApprovalsBefore
+      storedUsers = usersBefore
+      storedUserStatusEvents = userStatusEventsBefore
       throw error
     }
   }
-  return db as unknown as PrismaClient
+  return db as unknown as PrismaClient & { setCurrentUserActive: (isActive: boolean) => void }
 }
 
 describe('validation schemas', () => {
@@ -512,6 +639,7 @@ describe('validation schemas', () => {
     expect(loginSchema.safeParse({ email: 'not-an-email', password: 'short' }).success).toBe(false)
     expect(ticketCreateSchema.safeParse({ title: 'x', description: '' }).success).toBe(false)
     expect(ticketUpdateSchema.safeParse({}).success).toBe(false)
+    expect(userUpdateSchema.safeParse({ name: 'Usuario', isActive: false }).success).toBe(false)
     expect(companyCreateSchema.safeParse({ name: 'A', identification: '', industry: 'x', description: '' }).success).toBe(false)
     expect(companyCreateSchema.safeParse({ name: 'Acme', identification: '900123', industry: 'Servicios', description: 'Empresa', admin: { name: 'Ana', email: 'ana@test.local', password: 'Password123!' } }).success).toBe(true)
     expect(companyCreateSchema.safeParse({ name: 'Acme', identification: '900123', industry: 'Servicios', description: 'Empresa', admin: { name: 'Ana', email: 'malformed', password: 'Password123!' } }).success).toBe(false)
@@ -577,6 +705,9 @@ describe('validation schemas', () => {
     expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: uuidMember.id }).success).toBe(true)
     expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: companyUser.id }).success).toBe(true)
     expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: null }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, dueDate: '2026-12-15' }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, dueDate: null }).success).toBe(true)
+    expect(ticketCreateSchema.safeParse({ ...baseTicket, dueDate: 'not-a-date' }).success).toBe(false)
     expect(ticketCreateSchema.safeParse({ ...baseTicket, assignedToId: 'not-an-id' }).success).toBe(false)
     expect(ticketUpdateSchema.safeParse({ assignedToId: uuidMember.id }).success).toBe(true)
     expect(ticketUpdateSchema.safeParse({ assignedToId: 'not-an-id' }).success).toBe(false)
@@ -623,6 +754,12 @@ describe('environment validation', () => {
     expect(result.success).toBe(true)
     expect(result.success ? result.data.TRUST_PROXY_HOPS : -1).toBe(0)
   })
+
+  it('requires Drive credentials whenever the Drive evidence provider is selected', () => {
+    const result = envSchema.safeParse({ EVIDENCE_STORAGE_PROVIDER: 'google-drive' })
+    expect(result.success).toBe(false)
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['GOOGLE_OAUTH_CLIENT_ID', 'OAUTH_TOKEN_ENCRYPTION_KEY']))
+  })
 })
 
 describe('authentication and authorization API', () => {
@@ -638,6 +775,48 @@ describe('authentication and authorization API', () => {
     const me = await agent.get('/api/auth/me')
     expect(me.status).toBe(200)
     expect(me.body.user.email).toBe(admin.email)
+  })
+
+  it('rejects inactive users with the same generic login error', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id, [], [], false)
+    const response = await request(createApp(db)).post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect(response.status).toBe(401)
+    expect(response.body).toEqual({ error: 'Invalid email or password' })
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it('rejects and revokes a cookie session after the user becomes inactive', async () => {
+    const db = makeDb('COMPANY_ADMIN')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await agent.get('/api/auth/me')).status).toBe(200)
+
+    db.setCurrentUserActive(false)
+    const blocked = await agent.get('/api/auth/me')
+    expect(blocked.status).toBe(401)
+    expect(blocked.body).toEqual({ error: 'Authentication required' })
+    expect(blocked.headers['set-cookie'][0]).toContain('Expires=Thu, 01 Jan 1970')
+
+    db.setCurrentUserActive(true)
+    expect((await agent.get('/api/auth/me')).status).toBe(401)
+    const relogin = await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect(relogin.status).toBe(200)
+  })
+
+  it('rejects and revokes a bearer session for an inactive user', async () => {
+    const db = makeDb('COMPANY_ADMIN')
+    const app = createApp(db)
+    const login = await request(app).post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const cookie = login.headers['set-cookie'][0] as string
+    const token = cookie.split(';', 1)[0].split('=').slice(1).join('=')
+    db.setCurrentUserActive(false)
+
+    const blocked = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)
+    expect(blocked.status).toBe(401)
+    expect(blocked.body).toEqual({ error: 'Authentication required' })
+
+    db.setCurrentUserActive(true)
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401)
   })
 
   it('does not reveal whether an account exists and blocks unauthorized roles', async () => {
@@ -665,6 +844,23 @@ describe('authentication and authorization API', () => {
     expect(list.status).toBe(200)
     expect(list.body.users[0]).toMatchObject({ id: admin.id, name: admin.name, role: 'SUPERUSER' })
     expect(list.body.users[0]).not.toHaveProperty('email')
+  })
+
+  it('lists active users by default and allows inactive users only to administrators', async () => {
+    const db = makeDb('COMPANY_ADMIN')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    expect((await agent.get('/api/users')).status).toBe(200)
+    expect((db.user.findMany as unknown as { mock: { calls: Array<[{ where: Record<string, unknown> }]> } }).mock.calls.at(-1)?.[0].where).toEqual({ companyId, isActive: true })
+
+    expect((await agent.get('/api/users?includeInactive=true')).status).toBe(200)
+    expect((db.user.findMany as unknown as { mock: { calls: Array<[{ where: Record<string, unknown> }]> } }).mock.calls.at(-1)?.[0].where).toEqual({ companyId })
+
+    const memberAgent = request.agent(createApp(makeDb('COMPANY_USER')))
+    await memberAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const denied = await memberAgent.get('/api/users?includeInactive=true')
+    expect(denied.status).toBe(403)
   })
 
   it('sets basic security headers and disables response caching', async () => {
@@ -772,7 +968,7 @@ describe('users API', () => {
     const updated = await agent.patch(`/api/users/${companyUser.id}`).send({ name: 'Renombrado' })
     expect(updated.status).toBe(200)
     expect(updated.body.user.name).toBe('Renombrado')
-    expect((await agent.delete(`/api/users/${companyUser.id}`)).status).toBe(204)
+    expect((await agent.delete(`/api/users/${companyUser.id}`)).status).toBe(405)
   })
 
   it('blocks a company admin from updating or deleting users of another company', async () => {
@@ -780,7 +976,7 @@ describe('users API', () => {
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
 
     expect((await agent.patch(`/api/users/${companyUser.id}`).send({ name: 'Intrusión' })).status).toBe(404)
-    expect((await agent.delete(`/api/users/${companyUser.id}`)).status).toBe(404)
+    expect((await agent.delete(`/api/users/${companyUser.id}`)).status).toBe(405)
   })
 
   it('lets a superuser change a user role and company but not promote to superuser', async () => {
@@ -794,7 +990,7 @@ describe('users API', () => {
 
     const blocked = await agent.patch(`/api/users/${companyUser.id}`).send({ role: 'SUPERUSER' })
     expect(blocked.status).toBe(403)
-    expect((await agent.delete(`/api/users/${admin.id}`)).status).toBe(403)
+    expect((await agent.delete(`/api/users/${admin.id}`)).status).toBe(405)
   })
 
   it('moves a user to a UUID company and blocks a UUID company of another tenant', async () => {
@@ -818,6 +1014,106 @@ describe('users API', () => {
     const own = await companyAgent.patch(`/api/users/${companyUser.id}`).send({ companyId })
     expect(own.status).toBe(200)
     expect(own.body.user.companyId).toBe(companyId)
+  })
+
+  it('cancels pending assignment approvals when a user changes company', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const item = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'Actividad pendiente', description: 'Requiere aprobación', priority: 'HIGH', responsibleId: companyUser.id })
+    expect(item.status).toBe(201)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(1)
+
+    const moved = await agent.patch(`/api/users/${companyUser.id}`).send({ companyId: uuidCompanyId })
+    expect(moved.status).toBe(200)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(0)
+    expect((db.ticketAssignmentApproval.updateMany as unknown as { mock: { calls: Array<[{ data: { status: string } }]> } }).mock.calls.at(-1)?.[0].data.status).toBe('CANCELLED')
+  })
+
+  it('deactivates and reactivates users idempotently with an audit event and session revocation', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const deactivated = await agent.post(`/api/users/${companyUser.id}/deactivate`).send({ reason: 'Salida temporal del equipo' })
+    expect(deactivated.status).toBe(200)
+    expect(deactivated.body.user.isActive).toBe(false)
+    expect(db.userStatusEvent.create).toHaveBeenCalledTimes(1)
+    expect(db.userStatusEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ userId: companyUser.id, eventType: 'DEACTIVATED', reason: 'Salida temporal del equipo', actorId: admin.id }) }))
+    expect(db.session.deleteMany).toHaveBeenCalledWith({ where: { userId: companyUser.id } })
+
+    const repeatedDeactivationAgent = request.agent(createApp(db))
+    await repeatedDeactivationAgent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const repeatedDeactivation = await repeatedDeactivationAgent.post(`/api/users/${companyUser.id}/deactivate`).send({ reason: 'Otra razón' })
+    expect(repeatedDeactivation.status).toBe(200)
+    expect(db.userStatusEvent.create).toHaveBeenCalledTimes(1)
+
+    const reactivationAgent = request.agent(createApp(db))
+    await reactivationAgent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const reactivated = await reactivationAgent.post(`/api/users/${companyUser.id}/reactivate`).send({ reason: 'Regreso confirmado' })
+    expect(reactivated.status).toBe(200)
+    expect(reactivated.body.user.isActive).toBe(true)
+    expect(db.userStatusEvent.create).toHaveBeenCalledTimes(2)
+    expect(db.userStatusEvent.create).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ eventType: 'REACTIVATED', reason: 'Regreso confirmado' }) }))
+
+    const repeatedReactivation = await reactivationAgent.post(`/api/users/${companyUser.id}/reactivate`).send({})
+    expect(repeatedReactivation.status).toBe(200)
+    expect(db.userStatusEvent.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels pending assignment approvals for a deactivated candidate without restoring them on reactivation', async () => {
+    const db = makeDb()
+    const creator = request.agent(createApp(db))
+    await creator.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const created = await creator.post('/api/tickets').send({ title: 'Asignación pendiente', description: 'Debe cancelarse', assignedToId: companyUser.id })
+    expect(created.status).toBe(201)
+
+    const manager = request.agent(createApp(db))
+    await manager.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const deactivated = await manager.post(`/api/users/${companyUser.id}/deactivate`).send({ reason: 'Usuario fuera de servicio' })
+    expect(deactivated.status).toBe(200)
+    expect(db.ticketAssignmentApproval.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED', comment: 'Solicitud cancelada porque el candidato fue desactivado.' }) }))
+    expect((db.ticketAuditEvent.create as unknown as { mock: { calls: Array<[{ data: { eventType: string; metadata: Record<string, unknown> } }]> } }).mock.calls.some(([input]) => input.data.eventType === 'TICKET_ASSIGNMENT_CANCELLED')).toBe(true)
+
+    const reader = request.agent(createApp(db))
+    await reader.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const approvalsAfterDeactivation = await reader.get('/api/ticket-assignment-approvals')
+    expect(approvalsAfterDeactivation.status).toBe(200)
+    expect(approvalsAfterDeactivation.body.approvals[0].status).toBe('CANCELLED')
+    expect((await reader.post('/api/tickets').send({ title: 'No asignable', description: 'Candidato inactivo', assignedToId: companyUser.id })).status).toBe(409)
+    expect((await reader.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'Actividad no asignable', description: 'Candidato inactivo', priority: 'MEDIUM', responsibleId: companyUser.id })).status).toBe(409)
+    expect((await reader.patch(`/api/processes/${processFixture.id}`).send({ responsibleId: companyUser.id })).status).toBe(409)
+
+    const reactivated = await reader.post(`/api/users/${companyUser.id}/reactivate`).send({ reason: 'Regreso' })
+    expect(reactivated.status).toBe(200)
+    const approvalsAfterReactivation = await reader.get('/api/ticket-assignment-approvals')
+    expect(approvalsAfterReactivation.body.approvals[0].status).toBe('CANCELLED')
+  })
+
+  it('enforces tenant scope, role permissions, required reason and self-protection', async () => {
+    const companyAdminAgent = request.agent(createApp(makeDb('COMPANY_ADMIN')))
+    await companyAdminAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await companyAdminAgent.post(`/api/users/${otherCompanyUser.id}/deactivate`).send({ reason: 'Bloqueo' })).status).toBe(404)
+    expect((await companyAdminAgent.post(`/api/users/${companyUser.id}/deactivate`).send({})).status).toBe(400)
+    expect((await companyAdminAgent.post(`/api/users/${member.id}/deactivate`).send({ reason: 'Propia cuenta' })).status).toBe(404)
+    expect((await companyAdminAgent.patch(`/api/users/${companyUser.id}`).send({ name: 'Nombre', isActive: false })).status).toBe(400)
+
+    const companyUserAgent = request.agent(createApp(makeDb('COMPANY_USER')))
+    await companyUserAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await companyUserAgent.post(`/api/users/${companyUser.id}/deactivate`).send({ reason: 'No permitido' })).status).toBe(403)
+  })
+
+  it('protects the last active company admin during deactivation and role changes', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    expect((await agent.post(`/api/users/${member.id}/deactivate`).send({ reason: 'Prueba de cobertura' })).status).toBe(409)
+    expect((await agent.patch(`/api/users/${member.id}`).send({ role: 'COMPANY_USER' })).status).toBe(409)
+    expect((await agent.patch(`/api/users/${member.id}`).send({ companyId: uuidCompanyId })).status).toBe(409)
+    expect((await agent.post(`/api/users/${admin.id}/deactivate`).send({ reason: 'No permitido' })).status).toBe(403)
+    expect(db.userStatusEvent.create).not.toHaveBeenCalled()
   })
 })
 
@@ -866,10 +1162,13 @@ describe('tickets API', () => {
 
     const created = await agent.post('/api/tickets').send({ title: ticket.title, description: ticket.description, assignedToId: uuidMember.id })
     expect(created.status).toBe(201)
-    expect(created.body.ticket.assignedToId).toBe(uuidMember.id)
+    expect(created.body.ticket.assignedToId).toBeNull()
+    expect(created.body.assignmentApproval.status).toBe('PENDING')
 
     const patched = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: uuidMember.id })
     expect(patched.status).toBe(200)
+    expect(patched.body.ticket.assignedTo).toBeNull()
+    expect(patched.body.assignmentApproval).toMatchObject({ status: 'PENDING', proposedAssignee: { id: uuidMember.id } })
 
     const foreign = await agent.post('/api/tickets').send({ title: ticket.title, description: ticket.description, assignedToId: uuidOtherCompanyUser.id })
     expect(foreign.status).toBe(403)
@@ -922,6 +1221,20 @@ describe('tickets API', () => {
     expect(deleted.status).toBe(204)
   })
 
+  it('cancels pending approvals and keeps cancellation history when a ticket is deleted', async () => {
+    const db = makeDb('COMPANY_ADMIN')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const created = await agent.post('/api/tickets').send({ title: 'Ticket a eliminar', description: 'Con solicitud pendiente', assignedToId: companyUser.id })
+    expect(created.status).toBe(201)
+
+    const deleted = await agent.delete(`/api/tickets/${created.body.ticket.id}`)
+    expect(deleted.status).toBe(204)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(0)
+    expect((db.ticketAssignmentApproval.updateMany as unknown as { mock: { calls: Array<[{ data: { status: string } }]> } }).mock.calls.at(-1)?.[0].data.status).toBe('CANCELLED')
+    expect((db.ticketAuditEvent.create as unknown as { mock: { calls: Array<[{ data: { eventType: string } }]> } }).mock.calls.some((call) => call[0].data.eventType === 'TICKET_ASSIGNMENT_CANCELLED')).toBe(true)
+  })
+
   it('returns the scoped ticket list', async () => {
     const agent = request.agent(createApp(makeDb('COMPANY_USER')))
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
@@ -930,7 +1243,7 @@ describe('tickets API', () => {
     expect(list.body.tickets).toHaveLength(1)
   })
 
-  it('notifies the assignee when a ticket is created or reassigned, and only when it really changes', async () => {
+  it('notifies a pending request without presenting it as a confirmed assignment', async () => {
     const db = makeDb('COMPANY_ADMIN', member.id, null, company.id)
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
@@ -938,26 +1251,30 @@ describe('tickets API', () => {
 
     const created = await agent.post('/api/tickets').send({ title: 'Ticket con responsable', description: 'Ticket que nace con responsable asignado', assignedToId: companyUser.id })
     expect(created.status).toBe(201)
-    expect(notify.mock.calls).toHaveLength(1)
+    expect(notify.mock.calls).toHaveLength(2)
     expect(notify.mock.calls[0][0].data).toMatchObject({
       userId: companyUser.id,
-      link: `tickets/${created.body.ticket.id}`,
-      title: `Ticket asignado: ${created.body.ticket.title}`,
+      title: `Solicitud de asignación: ${created.body.ticket.title}`,
     })
+    expect(notify.mock.calls[1][0].data).toMatchObject({ userId: member.id, title: `Solicitud de asignación: ${created.body.ticket.title}` })
+    expect(notify.mock.calls[0][0].data.link).toContain(`tickets/${created.body.ticket.id}/assignment-request/`)
 
     // El mismo responsable en la siguiente edición no vuelve a avisar.
     expect((await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: companyUser.id })).status).toBe(200)
-    expect(notify.mock.calls).toHaveLength(1)
+    expect(notify.mock.calls).toHaveLength(2)
 
-    // Cambiar el responsable avisa solo al nuevo.
+    // Cambiar el responsable supersede la solicitud anterior y crea una nueva.
+    const cancelled = await agent.post(`/api/ticket-assignment-approvals/${created.body.assignmentApproval.id}/cancel`).send({})
+    expect(cancelled.status).toBe(200)
     const reassigned = await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: uuidMember.id })
     expect(reassigned.status).toBe(200)
-    expect(notify.mock.calls).toHaveLength(2)
-    expect(notify.mock.calls[1][0].data.userId).toBe(uuidMember.id)
+    expect(notify.mock.calls).toHaveLength(4)
+    expect(notify.mock.calls[2][0].data.userId).toBe(uuidMember.id)
+    expect(notify.mock.calls[3][0].data.userId).toBe(member.id)
 
     // Quitar el responsable no genera aviso.
     expect((await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ assignedToId: null })).status).toBe(200)
-    expect(notify.mock.calls).toHaveLength(2)
+    expect(notify.mock.calls).toHaveLength(4)
   })
 
   it('does not notify when a ticket is created without a responsible party', async () => {
@@ -969,13 +1286,53 @@ describe('tickets API', () => {
     expect(db.notification.create).not.toHaveBeenCalled()
   })
 
-  it('does not notify when the acting user assigns the ticket to themselves', async () => {
+  it('creates a single notification when the acting user assigns the ticket to themselves', async () => {
     const db = makeDb('COMPANY_ADMIN', member.id, null, company.id)
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     const patched = await agent.patch(`/api/tickets/${ticket.id}`).send({ assignedToId: member.id })
     expect(patched.status).toBe(200)
-    expect(db.notification.create).not.toHaveBeenCalled()
+    expect(db.notification.create).toHaveBeenCalledTimes(1)
+    expect((db.notification.create as unknown as { mock: { calls: Array<[{ data: { userId: string } }]> } }).mock.calls[0][0].data.userId).toBe(member.id)
+  })
+
+  it('persists and reads ticket history with scoped access and filters', async () => {
+    const db = makeDb('COMPANY_ADMIN', member.id, null, company.id)
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const created = await agent.post('/api/tickets').send({ title: 'Historial de ticket', description: 'Validar el historial persistente', priority: 'HIGH' })
+    expect(created.status).toBe(201)
+    const updated = await agent.patch(`/api/tickets/${created.body.ticket.id}`).send({ status: 'IN_PROGRESS', title: 'Historial actualizado' })
+    expect(updated.status).toBe(200)
+
+    const detailHistory = await agent.get(`/api/tickets/${created.body.ticket.id}/history?page=1&pageSize=10&eventType=TICKET_STATUS_CHANGED`)
+    expect(detailHistory.status).toBe(200)
+    expect(detailHistory.body.total).toBeGreaterThanOrEqual(2)
+    expect(detailHistory.body.page).toBe(1)
+    expect(detailHistory.body.pageSize).toBe(10)
+    expect((db.ticketAuditEvent.findMany as unknown as { mock: { calls: Array<[{ where: Record<string, unknown> }]> } }).mock.calls.at(-1)?.[0].where).toMatchObject({ ticketId: created.body.ticket.id, eventType: 'TICKET_STATUS_CHANGED' })
+
+    const globalHistory = await agent.get('/api/tickets/history?search=Historial&pageSize=5')
+    expect(globalHistory.status).toBe(200)
+    expect(globalHistory.body.events.length).toBeGreaterThan(0)
+
+    const foreignAgent = request.agent(createApp(makeDb('COMPANY_ADMIN', admin.id, null, company.id)))
+    await foreignAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await foreignAgent.get(`/api/tickets/${created.body.ticket.id}/history`)).status).toBe(404)
+  })
+
+  it('lists Drive references only for users who can access the ticket', async () => {
+    const db = makeDb('COMPANY_USER')
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const visible = await agent.get(`/api/tickets/${ticket.id}/drive-evidence`)
+    expect(visible.status).toBe(200)
+    expect(visible.body).toEqual({ references: [] })
+
+    const foreignDb = makeDb('COMPANY_USER', member.id, null, otherCompanyId)
+    const foreignAgent = request.agent(createApp(foreignDb))
+    await foreignAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await foreignAgent.get(`/api/tickets/${ticket.id}/drive-evidence`)).status).toBe(404)
   })
 })
 
@@ -1045,6 +1402,7 @@ describe('processes API', () => {
     const db = makeDb()
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    ;(db as unknown as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw.mockClear()
 
     const mismatch = await agent.post('/api/processes').send({ name: 'Proceso inconsistente', type: 'SUPPORT', category: 'estrategico', objective: 'Objetivo válido', companyId: company.id })
     expect(mismatch.status).toBe(400)
@@ -1924,14 +2282,52 @@ describe('recommendations and action plans API', () => {
 
     const item = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: actionItem.title, description: actionItem.description, priority: 'HIGH', recommendationId: recommendation.id, responsibleId: member.id, dueDate: '2026-03-01' })
     expect(item.status).toBe(201)
-    expect(item.body.item.responsible.name).toBe(member.name)
+    expect(item.body.item.responsible).toBeNull()
     const updated = await agent.patch(`/api/action-items/${actionItem.id}`).send({ status: 'IN_PROGRESS', priority: 'MEDIUM' })
     expect(updated.status).toBe(200)
     expect(updated.body.item.status).toBe('IN_PROGRESS')
     expect((await agent.delete(`/api/action-items/${actionItem.id}`)).status).toBe(204)
   })
 
-  it('notifies the responsible party when an action item is created or reassigned', async () => {
+  it('keeps COMPANY_USER read-only for plans and non-assigned activities, but allows own status updates', async () => {
+    const agent = request.agent(createApp(makeDb('COMPANY_USER')))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+
+    expect((await agent.get(`/api/diagnostics/${diagnostic.id}/action-plans`)).status).toBe(200)
+    expect((await agent.get(`/api/action-plans/${actionPlan.id}`)).status).toBe(200)
+    expect((await agent.post(`/api/diagnostics/${diagnostic.id}/action-plans`).send({ title: 'No permitido', description: 'No permitido', status: 'DRAFT' })).status).toBe(403)
+    expect((await agent.patch(`/api/action-plans/${actionPlan.id}`).send({ status: 'COMPLETED' })).status).toBe(403)
+    expect((await agent.delete(`/api/action-plans/${actionPlan.id}`)).status).toBe(403)
+    expect((await agent.post(`/api/diagnostics/${diagnostic.id}/strategy-tasks`).send({ strategyId: 'strategy', tasks: [] })).status).toBe(403)
+    expect((await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'No permitido', description: 'No permitido', priority: 'HIGH' })).status).toBe(403)
+    expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ status: 'IN_PROGRESS' })).status).toBe(200)
+    expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ title: 'Cambio administrativo' })).status).toBe(403)
+    expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: member.id })).status).toBe(403)
+    expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ priority: 'LOW', dueDate: null })).status).toBe(403)
+    expect((await agent.delete(`/api/action-items/${actionItem.id}`)).status).toBe(403)
+
+    const foreignDb = makeDb('COMPANY_USER')
+    ;(foreignDb.actionItem.findUnique as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+      ...actionItem,
+      responsibleId: companyUser.id,
+      actionPlan: { ...actionPlan, riskId: null, strategySource: null, diagnostic: { company: { id: company.id } } },
+    })
+    const foreignActivityAgent = request.agent(createApp(foreignDb))
+    await foreignActivityAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    expect((await foreignActivityAgent.patch(`/api/action-items/${actionItem.id}`).send({ status: 'COMPLETED' })).status).toBe(403)
+  })
+
+  it('keeps full ActionItem administration for COMPANY_ADMIN and SUPERUSER', async () => {
+    for (const role of ['COMPANY_ADMIN', 'SUPERUSER'] as const) {
+      const db = makeDb(role)
+      const agent = request.agent(createApp(db))
+      await agent.post('/api/auth/login').send({ email: role === 'SUPERUSER' ? admin.email : member.email, password: 'Password123!' })
+      expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ title: 'Cambio administrativo' })).status).toBe(200)
+      expect((await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: companyUser.id })).status).toBe(200)
+    }
+  })
+
+  it('notifies the responsible party and the assigning user when an action item is created or reassigned', async () => {
     const db = makeDb()
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
@@ -1939,32 +2335,34 @@ describe('recommendations and action plans API', () => {
 
     const item = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'Actividad con responsable', description: 'Actividad que nace con responsable', priority: 'HIGH', responsibleId: member.id })
     expect(item.status).toBe(201)
-    expect(notify.mock.calls).toHaveLength(1)
+    expect(notify.mock.calls).toHaveLength(2)
     expect(notify.mock.calls[0][0].data.userId).toBe(member.id)
-    expect(notify.mock.calls[0][0].data.link).toBe(`tickets/${item.body.ticket.id}`)
+    expect(notify.mock.calls[0][0].data.link).toContain(`tickets/${item.body.ticket.id}/assignment-request/`)
+    expect(notify.mock.calls[1][0].data.userId).toBe(admin.id)
 
-    // Reasignar avisa al nuevo responsable; el que ya lo era no recibe otro aviso.
+    // Reasignar avisa al nuevo responsable y a quien hizo la reasignación.
     const reassigned = await agent.patch(`/api/action-items/${item.body.item.id}`).send({ responsibleId: companyUser.id })
     expect(reassigned.status).toBe(200)
-    expect(notify.mock.calls).toHaveLength(2)
-    expect(notify.mock.calls[1][0].data.userId).toBe(companyUser.id)
+    expect(notify.mock.calls).toHaveLength(4)
+    expect(notify.mock.calls[2][0].data.userId).toBe(companyUser.id)
+    expect(notify.mock.calls[3][0].data.userId).toBe(admin.id)
 
     // Repetir la misma asignación no vuelve a avisar.
     const same = await agent.patch(`/api/action-items/${item.body.item.id}`).send({ responsibleId: companyUser.id })
     expect(same.status).toBe(200)
-    expect(notify.mock.calls).toHaveLength(2)
+    expect(notify.mock.calls).toHaveLength(4)
   })
 
   it('updates an action item and reassigns the responsible user', async () => {
     const db = makeDb()
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
-    const updated = await agent.patch(`/api/action-items/${actionItem.id}`).send({ title: 'Proceso documentado', priority: 'MEDIUM', status: 'IN_PROGRESS', responsibleId: member.id, dueDate: '2026-05-01' })
+    const updated = await agent.patch(`/api/action-items/${actionItem.id}`).send({ title: 'Proceso documentado', priority: 'MEDIUM', status: 'IN_PROGRESS', responsibleId: companyUser.id, dueDate: '2026-05-01' })
     expect(updated.status).toBe(200)
     expect(updated.body.item.status).toBe('IN_PROGRESS')
     const data = (db.actionItem.update as unknown as { mock: { calls: Array<[{ data: { title: string; responsibleId: string; dueDate: Date } }]> } }).mock.calls[0][0].data
     expect(data.title).toBe('Proceso documentado')
-    expect(data.responsibleId).toBe(member.id)
+    expect(data.responsibleId).toBeUndefined()
     expect(data.dueDate).toBeInstanceOf(Date)
   })
 
@@ -1976,6 +2374,20 @@ describe('recommendations and action plans API', () => {
     expect(created.status).toBe(201)
     expect((await agent.delete(`/api/action-plans/${actionPlan.id}`)).status).toBe(204)
     expect((db.actionPlan.delete as unknown as { mock: { calls: Array<unknown> } }).mock.calls).toHaveLength(1)
+  })
+
+  it('cancels approvals from activities before deleting their action plan', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const created = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: 'Actividad pendiente', description: 'Se elimina con el plan', priority: 'HIGH', responsibleId: companyUser.id })
+    expect(created.status).toBe(201)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(1)
+
+    const deleted = await agent.delete(`/api/action-plans/${actionPlan.id}`)
+    expect(deleted.status).toBe(204)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(0)
+    expect((db.ticketAssignmentApproval.updateMany as unknown as { mock: { calls: Array<[{ data: { status: string } }]> } }).mock.calls.at(-1)?.[0].data.status).toBe('CANCELLED')
   })
 
   it('blocks assigning a responsible user from another company', async () => {
@@ -1993,7 +2405,7 @@ describe('recommendations and action plans API', () => {
     const created = await agent.post(`/api/action-plans/${actionPlan.id}/items`).send({ title: actionItem.title, description: actionItem.description, priority: 'HIGH', responsibleId: uuidMember.id, dueDate: '2026-03-01' })
     expect(created.status).toBe(201)
     const data = (db.actionItem.create as unknown as { mock: { calls: Array<[{ data: { responsibleId?: string | null } }]> } }).mock.calls[0][0].data
-    expect(data.responsibleId).toBe(uuidMember.id)
+    expect(data.responsibleId).toBeNull()
 
     const updated = await agent.patch(`/api/action-items/${actionItem.id}`).send({ responsibleId: uuidMember.id })
     expect(updated.status).toBe(200)
@@ -2069,7 +2481,7 @@ describe('action item to ticket integration', () => {
     const created = await createItem(agent)
     expect(created.status).toBe(201)
     expect(created.body.ticket.createdBy.companyId).toBe(company.id)
-    expect(created.body.ticket.assignedTo.companyId).toBe(company.id)
+    expect(created.body.ticket.assignedTo).toBeNull()
   })
 
   it('preserves the responsible user on the generated ticket', async () => {
@@ -2077,8 +2489,23 @@ describe('action item to ticket integration', () => {
     await login(agent)
     const created = await createItem(agent)
     expect(created.status).toBe(201)
-    expect(created.body.ticket.assignedToId).toBe(member.id)
-    expect(created.body.ticket.assignedTo.name).toBe(member.name)
+    expect(created.body.ticket.assignedToId).toBeNull()
+    expect(created.body.item.responsible).toBeNull()
+  })
+
+  it('confirms the action item and ticket together when the proposed user accepts', async () => {
+    const { db, agent } = companyAdminApp()
+    await login(agent)
+    const created = await createItem(agent)
+    const approvalId = created.body.assignmentApproval.id
+    expect(created.body.item.responsible).toBeNull()
+    expect(created.body.ticket.assignedToId).toBeNull()
+
+    const accepted = await agent.post(`/api/ticket-assignment-approvals/${approvalId}/decision`).send({ decision: 'ACCEPT' })
+    expect(accepted.status).toBe(200)
+    expect(accepted.body.approval.status).toBe('ACCEPTED')
+    expect((db.actionItem.update as unknown as { mock: { calls: Array<[{ data: { responsibleId?: string } }]> } }).mock.calls.some((call) => call[0].data.responsibleId === member.id)).toBe(true)
+    expect((db.ticket.update as unknown as { mock: { calls: Array<[{ data: { assignedToId?: string } }]> } }).mock.calls.some((call) => call[0].data.assignedToId === member.id)).toBe(true)
   })
 
   it('preserves the priority on the generated ticket', async () => {
@@ -2163,8 +2590,25 @@ describe('action item to ticket integration', () => {
     expect(data?.title).toBe('Proceso documentado')
     expect(data?.description).toBe('Nueva descripción')
     expect(data?.priority).toBe('MEDIUM')
-    expect(data?.assignedToId).toBe(companyUser.id)
+    expect(data?.assignedToId).toBeUndefined()
     expect(data?.dueDate).toBeInstanceOf(Date)
+  })
+
+  it('cancels a pending approval when an action item is unassigned', async () => {
+    const { db, agent } = companyAdminApp()
+    await login(agent)
+    const created = await createItem(agent, { responsibleId: companyUser.id })
+    expect(created.status).toBe(201)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(1)
+
+    const unassigned = await agent.patch(`/api/action-items/${created.body.item.id}`).send({ responsibleId: null })
+    expect(unassigned.status).toBe(200)
+    expect((await agent.get('/api/ticket-assignment-approvals?status=PENDING')).body.approvals).toHaveLength(0)
+    expect((db.ticketAssignmentApproval.updateMany as unknown as { mock: { calls: Array<[{ data: { status: string; comment: string } }]> } }).mock.calls.at(-1)?.[0].data).toMatchObject({
+      status: 'CANCELLED',
+      comment: 'Solicitud cancelada porque la actividad fue desasignada.',
+    })
+    expect((db.notification.create as unknown as { mock: { calls: Array<[{ data: { link: string } }]> } }).mock.calls.some((call) => call[0].data.link.includes('/assignment-cancelled/'))).toBe(true)
   })
 
   it('deletes the linked ticket when the action item is deleted', async () => {
@@ -2225,7 +2669,7 @@ describe('action item to ticket integration', () => {
     expect(created.body.ticket).toBeDefined()
     expect(created.body.ticket.actionItemId).toBe(created.body.item.id)
     expect(created.body.ticket.title).toBe(actionItem.title)
-    expect(created.body.ticket.assignedToId).toBe(member.id)
+    expect(created.body.ticket.assignedToId).toBeNull()
     const ticketId = created.body.ticket.id
 
     const list = await agent.get('/api/tickets')

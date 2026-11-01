@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { api, apiUpload, ApiError, apiUrl } from '../../api'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 import type {
   Audit,
   AuditChecklist,
@@ -119,6 +120,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const [evidenceFor, setEvidenceFor] = useState<boolean>(false)
   const [uploadFor, setUploadFor] = useState<{ findingId?: string; actionId?: string; itemId?: string } | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [closing, setClosing] = useState(false)
   const [closeSummary, setCloseSummary] = useState('')
@@ -160,7 +162,9 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [highlightItemId, activeSection])
 
-  const companyUsers = users.filter((person) => !person.companyId || person.companyId === audit.companyId)
+  const activeCompanyUsers = users.filter((person) => (!person.companyId || person.companyId === audit.companyId) && person.isActive !== false)
+  const findingUsers = activeUserOptions(activeCompanyUsers, findingFor?.finding?.responsible ? [findingFor.finding.responsible] : [])
+  const actionUsers = activeUserOptions(activeCompanyUsers, actionFor?.action?.responsible ? [actionFor.action.responsible] : [])
   const relatedProcessIds = new Set([audit.processId, ...(audit.relatedProcesses ?? []).map((process) => process.id)])
   const linkedProcedures = (audit.procedures ?? []).map((procedure) => procedure)
 
@@ -581,8 +585,9 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       return
     }
     setUploading(true)
+    setUploadProgress(0)
     try {
-      await apiUpload(`/audits/${audit.id}/evidence-files`, file, uploadFor)
+      await apiUpload(`/audits/${audit.id}/evidence-files`, file, uploadFor, setUploadProgress)
       setUploadFor(null)
       await reload()
       onNotice('PDF adjuntado correctamente.')
@@ -590,6 +595,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       onError(findErrorMessage(requestError, 'No se pudo subir el PDF.'))
     } finally {
       setUploading(false)
+      setUploadProgress(null)
     }
   }
 
@@ -669,7 +675,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               <div><small>Código</small><strong>{audit.code}</strong></div>
               <div><small>Tipo de auditoría</small><strong>{audit.auditType || '—'}</strong></div>
               <div><small>Estado</small><strong>{auditStatusLabels[audit.status]}</strong></div>
-              <div><small>Responsable</small><strong>{audit.responsible?.name ?? 'Sin asignar'}</strong></div>
+              <div><small>Responsable</small><strong>{audit.responsible ? userOptionLabel(audit.responsible) : 'Sin asignar'}</strong></div>
               <div><small>Auditor líder</small><strong>{audit.leadAuditor?.name ?? 'Sin asignar'}</strong></div>
               <div><small>Fecha planeada</small><strong>{formatMaybeDate(audit.plannedDate)}</strong></div>
               <div><small>Inicio</small><strong>{formatMaybeDate(audit.startDate)}</strong></div>
@@ -1002,7 +1008,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 <label>Responsable
                   <select value={findingDraft.responsibleId} onChange={(event) => setFindingDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {companyUsers.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                    {findingUsers.map((person) => <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>)}
                   </select>
                 </label>
                 <label>Fecha límite
@@ -1087,6 +1093,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       </header>
                       <p className="muted">{formatBytes(file.size)} · {file.uploadedBy?.name ?? '—'} · {formatMaybeDate(file.createdAt)}</p>
                       <p className="muted">{evidenceFileRelationLabel(file, audit)}</p>
+                      {file.storageState !== 'READY' && <p className="muted">Estado de almacenamiento: {file.storageState === 'DELETE_PENDING' ? 'eliminación pendiente' : 'requiere revisión'}</p>}
                     </li>
                   ))}
                 </ul>
@@ -1115,6 +1122,9 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                     )))}
                   </select>
                 </label>
+                {uploading && <span className="quality-upload-progress" role="status" aria-live="polite">
+                  {uploadProgress === null ? 'Subiendo…' : `Subiendo… ${uploadProgress}%`}
+                </span>}
                 <button type="submit" className="button primary" disabled={uploading}>{uploading ? 'Subiendo…' : 'Subir'}</button>
                 <button type="button" className="button secondary" onClick={() => setUploadFor(null)}>Cancelar</button>
               </form>
@@ -1186,7 +1196,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       </header>
                       <p>{action.description}</p>
                       <p className="muted">
-                        Responsable: {action.responsible?.name ?? 'Sin asignar'} · Vence: {formatMaybeDate(action.dueDate)}
+                        Responsable: {action.responsible ? userOptionLabel(action.responsible) : 'Sin asignar'} · Vence: {formatMaybeDate(action.dueDate)}
                         {action.completedAt ? ` · Completada ${formatMaybeDate(action.completedAt)}` : ''}
                       </p>
                       {action.progress.length > 0 && (
@@ -1236,7 +1246,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 <label>Responsable
                   <select value={actionDraft.responsibleId} onChange={(event) => setActionDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {companyUsers.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                     {actionUsers.map((person) => <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>)}
                   </select>
                 </label>
                 <label>Prioridad

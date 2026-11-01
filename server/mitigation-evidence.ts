@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 /**
  * Gate de evidencia de las actividades de mitigación: una actividad que pertenece a un plan de
  * mitigación de un riesgo (ActionPlan.riskId con valor) no puede marcarse como terminada sin
- * tener al menos un PDF adjunto en el ticket que la representa.
+ * tener al menos un PDF local o una referencia PDF de Google Drive en el ticket que la representa.
  *
  * Las reglas puras (¿cuándo aplica el gate?) viven aquí para poder probarlas sin base de datos ni
  * HTTP; la lectura del plan y del conteo de evidencias también, para que app.ts solo decida el
@@ -85,6 +85,21 @@ export const assertMitigationEvidence = async (client: EvidenceGateClient, trans
   if (!evidenceGateApplies(transition)) return
   const riskId = await mitigationPlanRiskIdForActionItem(client, transition.actionItemId!)
   if (!riskId) return
-  const evidenceCount = await client.ticketEvidenceFile.count({ where: { ticketId: transition.ticketId! } })
-  if (evidenceCount === 0) throw new MitigationEvidenceRequiredError(transition.ticketId!)
+  const ticket = await client.ticket.findUnique({
+    where: { id: transition.ticketId! },
+    select: {
+      createdBy: { select: { companyId: true } },
+      assignedTo: { select: { companyId: true } },
+      actionItem: { select: { actionPlan: { select: { diagnostic: { select: { companyId: true } } } } } },
+    },
+  })
+  const companyId = ticket?.actionItem?.actionPlan?.diagnostic?.companyId ?? ticket?.createdBy?.companyId ?? ticket?.assignedTo?.companyId
+  const uploaderScope = companyId
+    ? { OR: [{ companyId }, { companyId: null }] }
+    : { companyId: '__no_company__' }
+  const [localEvidenceCount, driveReferenceCount] = await Promise.all([
+    client.ticketEvidenceFile.count({ where: { ticketId: transition.ticketId!, uploadedBy: uploaderScope } }),
+    client.ticketDriveReference.count({ where: { ticketId: transition.ticketId!, ...(companyId ? { companyId, createdBy: uploaderScope, connection: { companyId } } : { companyId: '__no_company__' }) } }),
+  ])
+  if (localEvidenceCount + driveReferenceCount === 0) throw new MitigationEvidenceRequiredError(transition.ticketId!)
 }

@@ -3,8 +3,9 @@ import type { FormEvent } from 'react'
 import { api, ApiError } from '../../api'
 import type { Process, ProcessKpi, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 
-export type KpiUser = Pick<User, 'id' | 'name'> & { companyId: string | null }
+export type KpiUser = Pick<User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 
 export type KpiDraft = {
   name: string
@@ -73,8 +74,8 @@ function KpiForm({ draft, setDraft, users, editing, saving, error, onSubmit, onC
           <label>Frecuencia<input value={draft.frequency} onChange={(event) => update('frequency', event.target.value)} placeholder="Ej. Mensual" maxLength={80} required /></label>
           <label>Meta<input value={draft.target} onChange={(event) => update('target', event.target.value)} placeholder="Ej. 95%" maxLength={120} required /></label>
           <label>Unidad de medida<input value={draft.unit} onChange={(event) => update('unit', event.target.value)} placeholder="Ej. Porcentaje" maxLength={80} required /></label>
-          <label>Responsable de reporte<select value={draft.reportResponsibleId} onChange={(event) => updateResponsible('reportResponsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
-          <label>Responsable de monitoreo<select value={draft.monitorResponsibleId} onChange={(event) => updateResponsible('monitorResponsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+          <label>Responsable de reporte<select value={draft.reportResponsibleId} onChange={(event) => updateResponsible('reportResponsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{userOptionLabel(user)}</option>)}</select></label>
+          <label>Responsable de monitoreo<select value={draft.monitorResponsibleId} onChange={(event) => updateResponsible('monitorResponsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{userOptionLabel(user)}</option>)}</select></label>
           <label className="kpi-field-wide">Fórmula<textarea value={draft.formula} onChange={(event) => update('formula', event.target.value)} placeholder="Ej. Entregas a tiempo / total de entregas × 100" rows={3} maxLength={1000} required /></label>
           <label className="kpi-field-wide">Fuente de datos<textarea value={draft.dataSource} onChange={(event) => update('dataSource', event.target.value)} placeholder="Sistema, registro o fuente que alimenta el indicador" rows={3} maxLength={1000} required /></label>
           <label className="kpi-field-wide">Descripción<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} placeholder="Qué mide el indicador y para qué se utiliza" rows={4} maxLength={5000} required /></label>
@@ -108,7 +109,8 @@ export function ProcessKpiPanel({ process, users, canWrite, onBack }: { process:
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<KpiDraft>(emptyKpiDraft)
 
-  const availableUsers = users.filter((user) => user.companyId === process.companyId)
+  const historicalUsers: KpiUser[] = editing ? [editing.reportResponsible, editing.monitorResponsible].filter((user): user is NonNullable<typeof user> => Boolean(user)).map((user) => ({ ...user, companyId: process.companyId })) : []
+  const availableUsers = activeUserOptions<KpiUser>(users.filter((user) => user.companyId === process.companyId), historicalUsers)
   const loadKpis = useCallback(async () => {
     setLoading(true)
     setLoadError('')

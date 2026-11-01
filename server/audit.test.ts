@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp, nextAuditCode } from './app.js'

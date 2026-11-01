@@ -4,6 +4,7 @@ import { api, apiUrl, ApiError } from '../../api'
 import { riskLevelFor, riskLevelLabel, riskScoreFor } from '../../risk-matrix'
 import type { ActionItemStatus, Process, ProcessRisk, ProcessRiskControl, ProcessType, RiskAcceptanceStatus, RiskControlEvaluation, RiskLevel, RiskTreatment, MitigationActivity, TicketEvidence, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 import { ApprovalStatusChip } from '../approvals/ApprovalsInbox'
 import { RiskHeatmap, type HeatmapSelection } from './RiskHeatmap'
 import { RiskHistorySection } from './RiskHistorySection'
@@ -46,7 +47,7 @@ export function ApprovalBar({ risk, canWrite, sending, onRequest }: {
   onRequest: () => void
 }) {
   const approval = risk.approval
-  const ownerName = risk.riskOwner?.name ?? 'el dueño asignado'
+  const ownerName = risk.riskOwner ? userOptionLabel(risk.riskOwner) : 'el dueño asignado'
   const copy = !approval
     ? 'Aún no se ha enviado a aprobación.'
     : approval.status === 'PENDING'
@@ -229,14 +230,16 @@ function ControlEditor({ control, draft, saving, error, onDraftChange, onSave, o
  * paso 3 no lo afecta. La descripción es opcional: el backend usa el título si no llega. Escape
  * cierra el modal mientras no se esté guardando, igual que el resto de diálogos del sistema.
  */
-function ActivityModal({ draft, users, saving, error, onDraftChange, onSubmit, onCancel }: {
+export function ActivityModal({ draft, users, saving, error, diagnosticRequired, onDraftChange, onSubmit, onCancel, onOpenCompanyDiagnostics }: {
   draft: ActivityDraft
-  users: Array<Pick<User, 'id' | 'name'>>
+  users: Array<Pick<User, 'id' | 'name' | 'isActive'>>
   saving: boolean
   error: string
+  diagnosticRequired?: boolean
   onDraftChange: (draft: ActivityDraft) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onCancel: () => void
+  onOpenCompanyDiagnostics?: () => void
 }) {
   const titleTooShort = draft.title.trim().length > 0 && draft.title.trim().length < 3
   useEffect(() => {
@@ -267,7 +270,7 @@ function ActivityModal({ draft, users, saving, error, onDraftChange, onSubmit, o
         </label>
         <div className="form-grid">
           <label>Responsable
-            <select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })} required disabled={saving} aria-describedby="activity-responsible-hint"><option value="">Selecciona un responsable</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>
+            <select value={draft.responsibleId} onChange={(event) => onDraftChange({ ...draft, responsibleId: event.target.value })} required disabled={saving} aria-describedby="activity-responsible-hint"><option value="">Selecciona un responsable</option>{users.filter((user) => user.isActive !== false).map((user) => <option key={user.id} value={user.id}>{userOptionLabel(user)}</option>)}</select>
             <small id="activity-responsible-hint" className="activity-field-hint">Recibirá la notificación y quedará a cargo del ticket.</small>
           </label>
           <label>Fecha de entrega
@@ -276,6 +279,10 @@ function ActivityModal({ draft, users, saving, error, onDraftChange, onSubmit, o
           </label>
         </div>
         {error && <div className="form-error" role="alert">{error}</div>}
+        {diagnosticRequired && onOpenCompanyDiagnostics && <div className="form-error" role="note">
+          <p>El plan de mitigación debe quedar vinculado a un análisis estratégico de esta misma empresa.</p>
+          <button type="button" className="button secondary small-button" onClick={onOpenCompanyDiagnostics} disabled={saving}>Ir a la empresa y gestionar análisis</button>
+        </div>}
         <div className="drawer-actions">
           <button type="button" className="button secondary" onClick={onCancel} disabled={saving}>Cancelar</button>
           <button type="submit" className="button primary" disabled={saving} aria-busy={saving}>{saving ? 'Guardando...' : 'Agregar actividad'}</button>
@@ -322,7 +329,7 @@ function ActivityRow({ activity, onOpenTicket }: { activity: MitigationActivity;
       <div className="risk-activity-info">
         <strong>{activity.title}</strong>
         <div className="risk-activity-meta">
-          <span className="risk-activity-meta-cell">Responsable: {activity.responsible?.name ?? 'Sin asignar'}</span>
+          <span className="risk-activity-meta-cell">Responsable: {activity.responsible ? userOptionLabel(activity.responsible) : 'Sin asignar'}</span>
           {activity.dueDate && <span className={`risk-activity-meta-cell risk-activity-due is-${due}`}>{activityDueLabel(activity.dueDate, due)}</span>}
           {ticketId && <span className="risk-activity-meta-cell">Ticket {ticketCode(ticketId)}</span>}
         </div>
@@ -415,7 +422,7 @@ export function PlanEvidenceBlock({ evidence, hasRisk, onRetry, onOpenTicket }: 
   )
 }
 
-export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusRiskSection, onFocusConsumed, onBack, onOpenApproval, onOpenTicket }: { process: Process; users: Array<Pick<User, 'id' | 'name'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; focusRiskSection?: 'residual' | null; onFocusConsumed?: () => void; onBack: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void }) {
+export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusRiskSection, onFocusConsumed, onBack, onOpenApproval, onOpenTicket, onOpenCompanyDiagnostics }: { process: Process; users: Array<Pick<User, 'id' | 'name' | 'isActive'> & { companyId: string | null }>; canWrite: boolean; focusRiskId?: string | null; focusRiskSection?: 'residual' | null; onFocusConsumed?: () => void; onBack: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void; onOpenCompanyDiagnostics?: (companyId: string) => void }) {
   const [risks, setRisks] = useState<ProcessRisk[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -437,6 +444,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
   const [activitiesView, setActivitiesView] = useState<{ riskId: string; items: MitigationActivity[]; error: string } | null>(null)
   const [activitiesVersion, setActivitiesVersion] = useState(0)
   const [activityDraft, setActivityDraft] = useState<ActivityDraft | null>(null)
+  const [activityDiagnosticRequired, setActivityDiagnosticRequired] = useState(false)
   const [savingActivity, setSavingActivity] = useState(false)
   const [riskView, setRiskView] = useState<'list' | 'heatmap'>('list')
   const [heatmapSelection, setHeatmapSelection] = useState<HeatmapSelection | null>(null)
@@ -541,6 +549,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
     setDraft(emptyRiskDraft)
     setControlEditor(null)
     setActivityDraft(null)
+    setActivityDiagnosticRequired(false)
     setNotice('')
     setError('')
   }
@@ -551,6 +560,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
     setDraft(draftFromRisk(risk))
     setControlEditor(null)
     setActivityDraft(null)
+    setActivityDiagnosticRequired(false)
     setNotice('')
     setError('')
   }
@@ -560,6 +570,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
     setSelected(null)
     setControlEditor(null)
     setActivityDraft(null)
+    setActivityDiagnosticRequired(false)
     setError('')
   }
 
@@ -677,6 +688,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
     if (controlsWriteLocked(selected)) return
     setSavingActivity(true)
     setError('')
+    setActivityDiagnosticRequired(false)
     try {
       await api(`/processes/${process.id}/risks/${selected.id}/plan-activities`, { method: 'POST', body: JSON.stringify(activityDraft) })
       setActivityDraft(null)
@@ -685,6 +697,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
       setNotice('Actividad de mitigación agregada. El responsable fue notificado y su ticket quedó creado.')
       touchHistory()
     } catch (requestError) {
+      setActivityDiagnosticRequired(requestError instanceof ApiError && requestError.reason === 'DIAGNOSTIC_REQUIRED')
       setError(requestError instanceof ApiError ? requestError.message : 'No se pudo agregar la actividad.')
     } finally {
       setSavingActivity(false)
@@ -692,7 +705,9 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
   }
 
   const isDetail = showDetail
-  const availableRiskOwners = users.filter((user) => user.companyId === process.companyId)
+  const companyUsers = users.filter((user) => user.companyId === process.companyId)
+  const availableRiskOwners = activeUserOptions(companyUsers, selected ? [selected.riskOwner, selected.mitigationOwner].filter((user): user is NonNullable<typeof user> => Boolean(user)) : [])
+  const activeRiskOwners = companyUsers.filter((user) => user.isActive !== false)
   // Lista efectiva: solo la del riesgo abierto, para no mostrar la de otro detalle en transición.
   const activities = activitiesView && activitiesView.riskId === activityRiskId ? activitiesView : null
   // Escritura del paso 3 (controles, plan) y del paso 4 (residual) bloqueada hasta superar el
@@ -700,7 +715,8 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
   // los controles y del plan nunca se oculta: solo se diferencia lectura de escritura.
   const controlsLocked = controlsWriteLocked(selected)
   // Nombre visible del responsable del plan en el resumen del paso 3 (borrador en pantalla).
-  const planOwnerLabel = availableRiskOwners.find((user) => user.id === draft.mitigationOwnerId)?.name ?? 'Sin asignar'
+  const planOwner = availableRiskOwners.find((user) => user.id === draft.mitigationOwnerId)
+  const planOwnerLabel = planOwner ? userOptionLabel(planOwner) : 'Sin asignar'
   const renderLevel = (level: RiskLevel, score: number) => <LevelBadge level={level} score={score} />
   const heatmapMatches = heatmapSelection ? risks.filter((risk) => {
     const impact = heatmapSelection.mode === 'inherent' ? risk.inherentImpact : risk.residualImpact
@@ -736,7 +752,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
           <RiskFlowBar risk={selected} />
           <fieldset disabled={!canWrite} className="risk-detail-fields">
             {/* Paso 1: información base + evaluación inherente. */}
-            <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 1 · INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><RiskCodeInput code={selected ? selected.code : null} creating={!selected} /><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><RiskTypeInput processType={process.type} /><label>Dueño del riesgo<select value={draft.riskOwnerId} onChange={(event) => setDraft({ ...draft, riskOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
+             <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 1 · INFORMACIÓN BASE</p><h2>DETALLE DEL RIESGO</h2></div><span className="risk-process-chip">{process.code ?? 'Proceso'}</span></div><div className="risk-base-grid"><RiskCodeInput code={selected ? selected.code : null} creating={!selected} /><label>Nombre del riesgo<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Ej. Entrega tardía de información" minLength={3} maxLength={160} required /></label><RiskTypeInput processType={process.type} /><label>Dueño del riesgo<select value={draft.riskOwnerId} onChange={(event) => setDraft({ ...draft, riskOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{userOptionLabel(user)}</option>)}</select></label><label className="risk-base-wide">Descripción del riesgo<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Qué puede ocurrir, por qué y qué efecto tendría." rows={4} maxLength={5000} required /></label></div></section>
             <section className="risk-detail-section risk-evaluation-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 1 · VALORACIÓN</p><h2>EVALUACIÓN DE RIESGOS</h2></div><span className="risk-method-note">Matriz 5 × 5 · impacto × probabilidad</span></div><div className="risk-evaluation-layout"><EvaluationCard title="RIESGO INHERENTE" variant="inherent" impact={draft.inherentImpact} probability={draft.inherentProbability} onImpact={(value) => setDraft({ ...draft, inherentImpact: value })} onProbability={(value) => setDraft({ ...draft, inherentProbability: value })} disabled={!canWrite} /></div></section>
             {/* Paso 2: tratamiento y aceptación. Deben decidirse aquí antes de gestionar controles. */}
             <section className="risk-detail-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 2 · TRATAMIENTO</p><h2>TRATAMIENTO Y ACEPTACIÓN</h2></div><span className="risk-method-note">Independiente de los niveles inherente y residual</span></div><div className="risk-base-grid"><label>Tratamiento del riesgo<select value={draft.treatment} onChange={(event) => setDraft({ ...draft, treatment: event.target.value })}><option value="">Sin tratamiento definido</option>{treatmentOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><AcceptanceStatusField value={draft.acceptanceStatus} /><p className="risk-field-note">El tratamiento lo decides aquí y define cómo se gestionará el riesgo; la aceptación es el veredicto formal del ciclo de aprobación: un riesgo nuevo nace «Pendiente» y solo cambia cuando el dueño aprueba o rechaza, nunca desde este formulario. Con el tratamiento definido y la aceptación decidida se habilita la gestión de controles del paso 3.</p></div></section>
@@ -745,7 +761,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
           </fieldset>
           {/* Paso 3 (seguimiento): vive fuera del fieldset para que, en modo lectura, sigan
               siendo utilizables las acciones de las filas (ver ticket, descargar evidencia PDF). */}
-          <section className="risk-detail-section risk-plan-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 3 · SEGUIMIENTO</p><h2>PLAN DE MITIGACIÓN</h2></div><span className="risk-method-note">Responsable, vencimiento y evidencias</span></div>{controlsLocked && <p className="risk-field-note" role="note">{riskStageMessage(selected)}</p>}<div className="risk-base-grid"><label>Responsable del plan<select disabled={!canWrite || controlsLocked} value={draft.mitigationOwnerId} onChange={(event) => setDraft({ ...draft, mitigationOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label><label>Fecha de vencimiento<input type="date" disabled={!canWrite || controlsLocked} value={draft.mitigationDueDate} onChange={(event) => setDraft({ ...draft, mitigationDueDate: event.target.value })} /></label></div>{selected && <RiskPlanSummary ownerLabel={planOwnerLabel} dueDate={draft.mitigationDueDate || null} progress={activities && !activities.error && activities.items.length > 0 ? activityProgressSummary(activities.items) : null} />}<PlanActivitiesBlock activities={activities} hasRisk={Boolean(selected)} canWrite={canWrite && !controlsLocked} saving={savingActivity} onAdd={() => setActivityDraft({ ...emptyActivityDraft })} onRetry={() => setActivitiesVersion((value) => value + 1)} onOpenTicket={onOpenTicket} /><PlanEvidenceBlock evidence={planEvidenceView} hasRisk={Boolean(selected)} onRetry={() => setPlanEvidenceVersion((value) => value + 1)} onOpenTicket={onOpenTicket} /></section>
+           <section className="risk-detail-section risk-plan-section"><div className="risk-section-heading"><div><p className="detail-label">PASO 3 · SEGUIMIENTO</p><h2>PLAN DE MITIGACIÓN</h2></div><span className="risk-method-note">Responsable, vencimiento y evidencias</span></div>{controlsLocked && <p className="risk-field-note" role="note">{riskStageMessage(selected)}</p>}<div className="risk-base-grid"><label>Responsable del plan<select disabled={!canWrite || controlsLocked} value={draft.mitigationOwnerId} onChange={(event) => setDraft({ ...draft, mitigationOwnerId: event.target.value })}><option value="">Sin asignar</option>{availableRiskOwners.map((user) => <option value={user.id} key={user.id}>{userOptionLabel(user)}</option>)}</select></label><label>Fecha de vencimiento<input type="date" disabled={!canWrite || controlsLocked} value={draft.mitigationDueDate} onChange={(event) => setDraft({ ...draft, mitigationDueDate: event.target.value })} /></label></div>{selected && <RiskPlanSummary ownerLabel={planOwnerLabel} dueDate={draft.mitigationDueDate || null} progress={activities && !activities.error && activities.items.length > 0 ? activityProgressSummary(activities.items) : null} />}<PlanActivitiesBlock activities={activities} hasRisk={Boolean(selected)} canWrite={canWrite && !controlsLocked} saving={savingActivity} onAdd={() => setActivityDraft({ ...emptyActivityDraft })} onRetry={() => setActivitiesVersion((value) => value + 1)} onOpenTicket={onOpenTicket} /><PlanEvidenceBlock evidence={planEvidenceView} hasRisk={Boolean(selected)} onRetry={() => setPlanEvidenceVersion((value) => value + 1)} onOpenTicket={onOpenTicket} /></section>
           {/* Paso 4: evaluación residual (habilitada por los controles del paso 3). Un fieldset
               propio mantiene los campos deshabilitados en modo lectura, como el resto del detalle. */}
           <fieldset disabled={!canWrite} className="risk-detail-fields">
@@ -754,7 +770,7 @@ export function ProcessRiskPanel({ process, users, canWrite, focusRiskId, focusR
           {error && !controlEditor && !activityDraft && <div className="form-error risk-detail-error" role="alert">{error}</div>}
           <footer className="risk-detail-footer"><button type="button" className="button secondary" onClick={closeDetail}>Cancelar</button>{canWrite && <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : selected ? 'Guardar cambios' : 'Guardar riesgo'}</button>}</footer>
         </form>
-        {activityDraft && selected && <ActivityModal draft={activityDraft} users={availableRiskOwners} saving={savingActivity} error={error} onDraftChange={setActivityDraft} onSubmit={(event) => void saveActivity(event)} onCancel={() => { setActivityDraft(null); setError('') }} />}
+         {activityDraft && selected && <ActivityModal draft={activityDraft} users={activeRiskOwners} saving={savingActivity} error={error} diagnosticRequired={activityDiagnosticRequired} onDraftChange={setActivityDraft} onSubmit={(event) => void saveActivity(event)} onCancel={() => { setActivityDraft(null); setActivityDiagnosticRequired(false); setError('') }} onOpenCompanyDiagnostics={() => onOpenCompanyDiagnostics?.(process.companyId)} />}
         {selected && <RiskHistorySection processId={process.id} riskId={selected.id} refreshVersion={historyVersion} onOpenApproval={onOpenApproval} onOpenTicket={onOpenTicket} />}
         </>
       ) : (

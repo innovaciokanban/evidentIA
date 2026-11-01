@@ -28,6 +28,14 @@ describe('parseNotificationLink', () => {
     expect(parseNotificationLink('tickets/cmticket000000000000001')).toEqual({ kind: 'ticket', ticketId: 'cmticket000000000000001' })
   })
 
+  it('lleva una solicitud de asignación a la sección de asignaciones', () => {
+    expect(parseNotificationLink('tickets/cmticket000000000000001/assignment-request/audit/cmrecipient')).toEqual({ kind: 'assignment-approval', ticketId: 'cmticket000000000000001' })
+  })
+
+  it('conserva la navegación de los ciclos de asignación y vencimiento', () => {
+    expect(parseNotificationLink('tickets/cmticket000000000000001/overdue/cmaudit000000000000001/cmuser000000000000001')).toEqual({ kind: 'ticket', ticketId: 'cmticket000000000000001' })
+  })
+
   it('ignora secciones desconocidas o enlaces incompletos en vez de adivinar', () => {
     expect(parseNotificationLink('')).toBeNull()
     expect(parseNotificationLink('risks')).toBeNull()

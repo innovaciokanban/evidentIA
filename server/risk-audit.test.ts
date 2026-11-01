@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
@@ -9,6 +9,7 @@ type AcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 type StoredApproval = { id: string; riskId: string; requestedById: string; status: ApprovalStatus; openKey: string | null; decidedById: string | null; decidedAt: Date | null; comment: string | null; ticketId: string | null; createdAt: Date; updatedAt: Date }
 type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
 type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; dueDate: Date | null; createdById: string; assignedToId: string | null; actionItemId: string | null; createdAt: Date; updatedAt: Date }
+type StoredAssignmentApproval = { id: string; ticketId: string | null; requestedById: string; proposedAssigneeId: string; previousAssigneeId: string | null; decidedById: string | null; riskApprovalId: string | null; status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'SUPERSEDED'; source: 'DIRECT' | 'RISK_APPROVAL' | 'ACTION_ITEM' | 'STRATEGY_TASK'; comment: string | null; createdAt: Date; decidedAt: Date | null; updatedAt: Date }
 type StoredControl = { id: string; riskId: string; description: string; evaluation: string; createdAt: Date; updatedAt: Date }
 type StoredEvidence = { id: string; riskId: string; name: string; description: string; url: string; createdAt: Date; updatedAt: Date }
 type StoredRisk = {
@@ -57,6 +58,7 @@ function makeAuditDb() {
   const storedRisks: StoredRisk[] = []
   const storedNotifications: StoredNotification[] = []
   const storedTickets: StoredTicket[] = []
+  const storedAssignmentApprovals: StoredAssignmentApproval[] = []
   const storedAuditEvents: StoredAuditEvent[] = []
   const codeSequences: Record<string, number> = {}
   let nextRisk = 1
@@ -96,6 +98,15 @@ function makeAuditDb() {
       return { id: approval.id, riskId: approval.riskId, risk: { id: risk.id, code: risk.code, name: risk.name, processId: risk.processId } }
     }),
   })
+  const assignmentApprovalView = (approval: StoredAssignmentApproval) => ({
+    ...approval,
+    requestedBy: publicUserView(approval.requestedById),
+    proposedAssignee: publicUserView(approval.proposedAssigneeId),
+    previousAssignee: publicUserView(approval.previousAssigneeId),
+    decidedBy: publicUserView(approval.decidedById),
+    ticket: approval.ticketId ? ticketWithInclude(ticketFor(approval.ticketId)!) : null,
+    riskApproval: null,
+  })
   const approvalDetail = (approval: StoredApproval) => {
     const risk = riskFor(approval.riskId)!
     const process = processFor(risk.processId)!
@@ -109,7 +120,7 @@ function makeAuditDb() {
         riskOwner: userView(risk.riskOwnerId),
         mitigationOwner: userView(risk.mitigationOwnerId),
         controls: risk.controls,
-        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId },
+        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId, type: process.type },
       },
     }
   }
@@ -147,12 +158,14 @@ function makeAuditDb() {
     tickets: structuredClone(storedTickets),
     notifications: structuredClone(storedNotifications),
     auditEvents: structuredClone(storedAuditEvents),
+    assignmentApprovals: structuredClone(storedAssignmentApprovals),
   })
   const restore = (state: ReturnType<typeof snapshot>) => {
     storedRisks.splice(0, storedRisks.length, ...state.risks)
     storedTickets.splice(0, storedTickets.length, ...state.tickets)
     storedNotifications.splice(0, storedNotifications.length, ...state.notifications)
     storedAuditEvents.splice(0, storedAuditEvents.length, ...state.auditEvents)
+    storedAssignmentApprovals.splice(0, storedAssignmentApprovals.length, ...state.assignmentApprovals)
   }
 
   const db = {
@@ -424,6 +437,26 @@ function makeAuditDb() {
         ticket.updatedAt = stamp()
         return ticketWithInclude(ticket)
       }),
+    },
+    ticketAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmticketaudit${String(nextAudit).padStart(10, '0')}`, ...data })),
+    },
+    ticketAssignmentApproval: {
+      findFirst: vi.fn(async ({ where }: { where?: any } = {}) => {
+        const found = storedAssignmentApprovals.find((approval) => (!where?.ticketId || approval.ticketId === where.ticketId) && (!where?.status || approval.status === where.status))
+        return found ? assignmentApprovalView(found) : null
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const found = storedAssignmentApprovals.find((approval) => approval.id === where.id)
+        return found ? assignmentApprovalView(found) : null
+      }),
+      create: vi.fn(async ({ data }: { data: Omit<StoredAssignmentApproval, 'id' | 'createdAt' | 'updatedAt' | 'decidedAt' | 'decidedById' | 'comment'> }) => {
+        const now = stamp()
+        const created: StoredAssignmentApproval = { ...data, id: `cmassignment${String(storedAssignmentApprovals.length + 1).padStart(10, '0')}`, decidedById: null, decidedAt: null, comment: null, createdAt: now, updatedAt: now }
+        storedAssignmentApprovals.push(created)
+        return created
+      }),
+      updateMany: vi.fn(async () => ({ count: 0 })),
     },
     $transaction: vi.fn(async (operation: (client: unknown) => Promise<unknown>) => {
       const backup = snapshot()

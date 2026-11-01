@@ -6,11 +6,12 @@ const qualityEvidenceDir = vi.hoisted(() => {
 
 import bcrypt from 'bcryptjs'
 import { readdir, rm } from 'node:fs/promises'
-import request from 'supertest'
+import request from './test-request.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
 import { evidenceDirectory } from './evidence-storage.js'
+import type { EvidenceStorage } from './evidence-provider.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -42,6 +43,7 @@ type AnyWhere = {
   checklistId?: string
   required?: boolean
   result?: string
+  storageProvider?: string
   type?: string
   process?: { companyId?: string; id?: string }
   finding?: { auditId?: string }
@@ -64,6 +66,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   const storedActions: Array<Record<string, unknown>> = []
   const storedProgress: Array<Record<string, unknown>> = []
   const storedFiles: Array<Record<string, unknown>> = []
+  const storedOperations: Array<Record<string, unknown>> = []
   const storedAuditProcesses: Array<Record<string, unknown>> = []
   const storedAuditProcedures: Array<Record<string, unknown>> = []
   let auditSeq = 0
@@ -75,6 +78,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   let actionSeq = 0
   let progressSeq = 0
   let fileSeq = 0
+  let operationSeq = 0
 
   const userView = (id: unknown) => {
     const user = users.find((item) => item.id === id)
@@ -101,7 +105,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   })
   const auditView = (audit: Record<string, unknown>) => ({
     ...audit,
-    process: { id: processId, companyId: process.companyId, name: process.name, code: process.code },
+    process: { id: processId, companyId: process.companyId, name: process.name, code: process.code, company: { id: process.companyId, driveFolderId: null } },
     leadAuditor: userView(audit.leadAuditorId),
     responsible: userView(audit.responsibleId),
     findings: storedFindings
@@ -161,8 +165,14 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   const fileMatches = (file: Record<string, unknown>, where?: AnyWhere) => {
     if (typeof where?.id === 'string' && file.id !== where.id) return false
     if (where?.auditId && file.auditId !== where.auditId) return false
+    if (where?.storageProvider && (file.storageProvider ?? 'LOCAL') !== where.storageProvider) return false
     return true
   }
+  const operationView = (operation: Record<string, unknown>) => ({
+    ...operation,
+    evidenceFile: storedFiles.find((file) => file.id === operation.evidenceFileId) ?? null,
+    connection: operation.connectionId ? { id: operation.connectionId, companyId, encryptedRefreshToken: 'test-token', rootFolderId: 'drive-company-folder', status: 'CONNECTED' } : null,
+  })
   const eventMatches = (event: Record<string, unknown>, where?: AnyWhere) => {
     if (where?.auditId && event.auditId !== where.auditId) return false
     return true
@@ -189,6 +199,17 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
         if (where?.id?.in && where.companyId) return where.id.in.filter((id) => id === processId).length
         return 1
       }),
+    },
+    company: {
+      findUnique: vi.fn(async () => ({ driveFolderId: null })),
+      update: vi.fn(async () => ({ driveFolderId: 'drive-company-folder' })),
+    },
+    companyGoogleDriveConnection: {
+      findFirst: vi.fn(async () => ({ id: 'drive-connection', companyId, encryptedRefreshToken: 'test-token', rootFolderId: 'drive-company-folder', status: 'CONNECTED' })),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => where.id === 'drive-connection' ? ({ id: 'drive-connection', companyId, encryptedRefreshToken: 'test-token', rootFolderId: 'drive-company-folder', status: 'CONNECTED' }) : null),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({ id: where.id, companyId, encryptedRefreshToken: 'test-token', rootFolderId: data.rootFolderId ?? 'drive-company-folder', status: 'CONNECTED' })),
+      updateMany: vi.fn(async () => ({ count: 0 })),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'drive-connection', ...data })),
     },
     procedure: {
       findMany: vi.fn(async () => []),
@@ -412,6 +433,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     auditEvidenceFile: {
       findMany: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedFiles.filter((file) => fileMatches(file, where))),
       findFirst: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedFiles.find((file) => fileMatches(file, where)) ?? null),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => storedFiles.find((file) => file.id === where.id) ?? null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         fileSeq += 1
         const file = { id: `cmfile${String(fileSeq).padStart(22, '0')}`, createdAt: new Date(), updatedAt: new Date(), ...data }
@@ -442,6 +464,49 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
           if (fileMatches(storedFiles[index], where)) storedFiles.splice(index, 1)
         }
         return { count: before - storedFiles.length }
+      }),
+    },
+    evidenceStorageOperation: {
+      findMany: vi.fn(async () => storedOperations.map(operationView)),
+      findFirst: vi.fn(async ({ where }: { where: { id?: string; idempotencyKey?: string } }) => {
+        const found = storedOperations.find((operation) => (where.id ? operation.id === where.id : true) && (where.idempotencyKey ? operation.idempotencyKey === where.idempotencyKey : true))
+        return found ? operationView(found) : null
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id?: string; idempotencyKey?: string } }) => {
+        const found = storedOperations.find((operation) => (where.id ? operation.id === where.id : true) && (where.idempotencyKey ? operation.idempotencyKey === where.idempotencyKey : true))
+        return found ? operationView(found) : null
+      }),
+      create: vi.fn(async ({ data, select }: { data: Record<string, unknown>; select?: unknown }) => {
+        operationSeq += 1
+        const operation = { id: `cmoperation${String(operationSeq).padStart(20, '0')}`, status: 'PENDING', attemptCount: 0, nextAttemptAt: null, leaseUntil: null, ...data }
+        storedOperations.push(operation)
+        return select ? { id: operation.id } : operationView(operation)
+      }),
+      upsert: vi.fn(async ({ where, create, update, select }: { where: { idempotencyKey: string }; create: Record<string, unknown>; update: Record<string, unknown>; select?: unknown }) => {
+        let operation = storedOperations.find((candidate) => candidate.idempotencyKey === where.idempotencyKey)
+        if (!operation) {
+          operationSeq += 1
+          operation = { id: `cmoperation${String(operationSeq).padStart(20, '0')}`, status: 'PENDING', attemptCount: 0, nextAttemptAt: null, leaseUntil: null, ...create }
+          storedOperations.push(operation)
+        } else Object.assign(operation, update)
+        return select ? { id: operation.id } : operationView(operation)
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const operation = storedOperations.find((candidate) => candidate.id === where.id)
+        if (!operation) throw new Error('Operation not found')
+        for (const [key, value] of Object.entries(data)) operation[key] = typeof value === 'object' && value !== null && 'increment' in value ? Number(operation[key] ?? 0) + Number((value as { increment: number }).increment) : value
+        return operationView(operation)
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: { id?: string }; data: Record<string, unknown> }) => {
+        const operation = storedOperations.find((candidate) => !where.id || candidate.id === where.id)
+        if (!operation) return { count: 0 }
+        for (const [key, value] of Object.entries(data)) operation[key] = typeof value === 'object' && value !== null && 'increment' in value ? Number(operation[key] ?? 0) + Number((value as { increment: number }).increment) : value
+        return { count: 1 }
+      }),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const index = storedOperations.findIndex((operation) => operation.id === where.id)
+        if (index >= 0) storedOperations.splice(index, 1)
+        return { id: where.id }
       }),
     },
     auditProcess: {
@@ -483,7 +548,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   }
   db.$queryRaw = vi.fn(async () => [{ locked: true }])
   db.$transaction = vi.fn(async (fn: (client: Record<string, unknown>) => Promise<unknown>) => {
-    const collections = [storedAudits, storedFindings, storedEvidences, storedEvents, storedChecklists, storedItems, storedActions, storedProgress, storedFiles, storedAuditProcesses, storedAuditProcedures]
+    const collections = [storedAudits, storedFindings, storedEvidences, storedEvents, storedChecklists, storedItems, storedActions, storedProgress, storedFiles, storedOperations, storedAuditProcesses, storedAuditProcedures]
     const snapshots = collections.map((collection) => collection.map((row) => ({ ...row })))
     try {
       return await fn(db)
@@ -503,6 +568,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     storedActions,
     storedProgress,
     storedFiles,
+    storedOperations,
     storedEvents,
     storedAuditProcesses,
   }
@@ -984,6 +1050,37 @@ describe('quality assurance API', () => {
     expect(badSignature.status).toBe(415)
     expect(tooLarge.status).toBe(413)
     expect(storedFiles).toHaveLength(1)
+  })
+
+  it('uses the injected private Drive provider without exposing its file id', async () => {
+    const { db, storedFiles } = makeQualityDb()
+    const remote = new Map<string, Buffer>()
+    const driveStorage: EvidenceStorage = {
+      kind: 'GOOGLE_DRIVE',
+      ensureAuditFolder: vi.fn(async () => ({ auditFolderId: 'drive-audit-folder', companyFolderId: 'drive-company-folder', rootFolderId: 'drive-company-folder' })),
+      upload: vi.fn(async ({ data }) => {
+        remote.set('drive-file-1', data)
+        return { storedName: null, driveFileId: 'drive-file-1', driveUrl: 'https://drive.google.com/file/d/drive-file-1/view' }
+      }),
+      read: vi.fn(async ({ driveFileId }) => remote.get(driveFileId ?? '') ?? Buffer.alloc(0)),
+      remove: vi.fn(async ({ driveFileId }) => { if (driveFileId) remote.delete(driveFileId) }),
+    }
+    const agent = request.agent(createApp(db, undefined, driveStorage))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const auditId = await createStartedAudit(agent)
+
+    const uploaded = await agent.post(`/api/audits/${auditId}/evidence-files`).attach('file', Buffer.from('%PDF-1.7\ndrive'), { filename: 'drive.pdf', contentType: 'application/pdf' })
+    expect(uploaded.status).toBe(201)
+    expect(uploaded.body.file).toMatchObject({ storageProvider: 'GOOGLE_DRIVE', storageState: 'READY', filename: 'drive.pdf' })
+    expect(uploaded.body.file).not.toHaveProperty('driveFileId')
+    expect(storedFiles[0]).toMatchObject({ driveFileId: 'drive-file-1', storedName: null })
+
+    const downloaded = await agent.get(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
+    expect(downloaded.status).toBe(200)
+    expect(downloaded.body.toString()).toContain('%PDF-1.7')
+    const removed = await agent.delete(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
+    expect(removed.status).toBe(204)
+    expect(remote.size).toBe(0)
   })
 
   it('rolls back the file row and removes the PDF when history persistence fails', async () => {

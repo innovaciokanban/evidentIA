@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
@@ -9,6 +9,7 @@ type AcceptanceStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 type StoredApproval = { id: string; riskId: string; requestedById: string; status: ApprovalStatus; openKey: string | null; decidedById: string | null; decidedAt: Date | null; comment: string | null; ticketId: string | null; createdAt: Date; updatedAt: Date }
 type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
 type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; dueDate: Date | null; createdById: string; assignedToId: string | null; actionItemId: string | null; createdAt: Date; updatedAt: Date }
+type StoredAssignmentApproval = { id: string; ticketId: string | null; requestedById: string; proposedAssigneeId: string; previousAssigneeId: string | null; decidedById: string | null; riskApprovalId: string | null; status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'SUPERSEDED'; source: 'DIRECT' | 'RISK_APPROVAL' | 'ACTION_ITEM' | 'STRATEGY_TASK'; comment: string | null; createdAt: Date; decidedAt: Date | null; updatedAt: Date }
 type StoredControl = { id: string; riskId: string; description: string; evaluation: string; createdAt: Date; updatedAt: Date }
 type StoredRisk = {
   id: string; processId: string; name: string; description: string; riskType: string; code: string | null; bpmnActivity: string
@@ -56,6 +57,7 @@ function makeApprovalDb() {
   const storedRisks: StoredRisk[] = []
   const storedNotifications: StoredNotification[] = []
   const storedTickets: StoredTicket[] = []
+  const storedAssignmentApprovals: StoredAssignmentApproval[] = []
   const storedAuditEvents: StoredAuditEvent[] = []
   const codeSequences: Record<string, number> = {}
   let nextRisk = 1
@@ -92,6 +94,15 @@ function makeApprovalDb() {
       return { id: approval.id, riskId: approval.riskId, risk: { id: risk.id, code: risk.code, name: risk.name, processId: risk.processId } }
     }),
   })
+  const assignmentApprovalView = (approval: StoredAssignmentApproval) => ({
+    ...approval,
+    requestedBy: publicUserView(approval.requestedById),
+    proposedAssignee: publicUserView(approval.proposedAssigneeId),
+    previousAssignee: publicUserView(approval.previousAssigneeId),
+    decidedBy: publicUserView(approval.decidedById),
+    ticket: approval.ticketId ? ticketWithInclude(ticketFor(approval.ticketId)!) : null,
+    riskApproval: null,
+  })
   const approvalDetail = (approval: StoredApproval) => {
     const risk = riskFor(approval.riskId)!
     const process = processFor(risk.processId)!
@@ -105,7 +116,7 @@ function makeApprovalDb() {
         riskOwner: userView(risk.riskOwnerId),
         mitigationOwner: userView(risk.mitigationOwnerId),
         controls: risk.controls,
-        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId },
+        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId, type: process.type },
       },
     }
   }
@@ -134,12 +145,14 @@ function makeApprovalDb() {
   const snapshot = () => ({
     risks: structuredClone(storedRisks),
     tickets: structuredClone(storedTickets),
+    assignmentApprovals: structuredClone(storedAssignmentApprovals),
     notifications: structuredClone(storedNotifications),
     auditEvents: structuredClone(storedAuditEvents),
   })
   const restore = (state: ReturnType<typeof snapshot>) => {
     storedRisks.splice(0, storedRisks.length, ...state.risks)
     storedTickets.splice(0, storedTickets.length, ...state.tickets)
+    storedAssignmentApprovals.splice(0, storedAssignmentApprovals.length, ...state.assignmentApprovals)
     storedNotifications.splice(0, storedNotifications.length, ...state.notifications)
     storedAuditEvents.splice(0, storedAuditEvents.length, ...state.auditEvents)
   }
@@ -362,6 +375,36 @@ function makeApprovalDb() {
         storedTickets.push(ticket)
         return ticketWithInclude(ticket)
       }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: { assignedToId?: string | null } }) => {
+        const ticket = ticketFor(where.id)
+        if (!ticket) throw new Error('Record to update not found.')
+        Object.assign(ticket, data, { updatedAt: stamp() })
+        return ticketWithInclude(ticket)
+      }),
+    },
+    ticketAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmticketaudit${String(nextAudit).padStart(10, '0')}`, ...data })),
+    },
+    ticketAssignmentApproval: {
+      findFirst: vi.fn(async ({ where }: { where?: any } = {}) => {
+        const found = storedAssignmentApprovals.find((approval) => (!where?.ticketId || approval.ticketId === where.ticketId) && (!where?.status || approval.status === where.status))
+        return found ? assignmentApprovalView(found) : null
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const found = storedAssignmentApprovals.find((approval) => approval.id === where.id)
+        return found ? assignmentApprovalView(found) : null
+      }),
+      create: vi.fn(async ({ data }: { data: Omit<StoredAssignmentApproval, 'id' | 'createdAt' | 'updatedAt' | 'decidedAt' | 'decidedById' | 'comment'> }) => {
+        const now = stamp()
+        const created: StoredAssignmentApproval = { ...data, id: `cmassignment${String(storedAssignmentApprovals.length + 1).padStart(10, '0')}`, decidedById: null, decidedAt: null, comment: null, createdAt: now, updatedAt: now }
+        storedAssignmentApprovals.push(created)
+        return created
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: { id?: string; status?: string; proposedAssigneeId?: string }; data: Partial<StoredAssignmentApproval> }) => {
+        const targets = storedAssignmentApprovals.filter((approval) => (!where.id || approval.id === where.id) && (!where.status || approval.status === where.status) && (!where.proposedAssigneeId || approval.proposedAssigneeId === where.proposedAssigneeId))
+        for (const approval of targets) Object.assign(approval, data, { updatedAt: stamp() })
+        return { count: targets.length }
+      }),
     },
     // La transacción clona el estado y lo restaura si la operación falla: misma semántica de
     // rollback que el motor real, necesaria para probar la reintenta de una decisión fallida.
@@ -378,7 +421,7 @@ function makeApprovalDb() {
 
   return {
     db: db as unknown as PrismaClient,
-    state: { storedRisks, storedNotifications, storedTickets, storedAuditEvents },
+    state: { storedRisks, storedNotifications, storedTickets, storedAssignmentApprovals, storedAuditEvents },
     setTicketFailure: (value: boolean) => { failTicketCreation = value },
   }
 }
@@ -431,7 +474,7 @@ describe('risk approval flow', () => {
     expect(state.storedRisks.flatMap((risk) => risk.approvals)).toHaveLength(1)
   })
 
-  it('aprueba el riesgo: lo acepta, genera ticket único asignado al dueño y notifica al solicitante', async () => {
+  it('aprueba el riesgo y deja la asignación pendiente hasta que el dueño la acepte', async () => {
     const { db, state } = makeApprovalDb()
     const adminAgent = await loggedIn(db, admin.email)
     const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
@@ -449,11 +492,18 @@ describe('risk approval flow', () => {
     expect(ticket.title).toBe('MIS-R1 · Entrega tardía de información')
     expect(ticket.status).toBe('OPEN')
     expect(ticket.priority).toBe('HIGH')
-    expect(ticket.assignedTo.id).toBe(owner.id)
+    expect(ticket.assignedTo).toBeNull()
     expect(ticket.createdBy.id).toBe(owner.id)
     expect(ticket.description).toContain(`Referencia: riesgo ${riskId} del proceso ${processId}`)
     expect(ticket.riskApprovals).toHaveLength(1)
     expect(ticket.riskApprovals[0].risk.id).toBe(riskId)
+
+    const assignment = state.storedAssignmentApprovals.find((item) => item.ticketId === ticket.id)
+    expect(assignment?.status).toBe('PENDING')
+    const assignmentDecision = await ownerAgent.post(`/api/ticket-assignment-approvals/${assignment!.id}/decision`).send({ decision: 'ACCEPT' })
+    expect(assignmentDecision.status).toBe(200)
+    expect(assignmentDecision.body.approval.status).toBe('ACCEPTED')
+    expect(state.storedTickets[0].assignedToId).toBe(owner.id)
 
     // "Aprobar y aceptar": el veredicto formal del riesgo pasa a ACCEPTED en la misma decisión.
     const risks = await adminAgent.get(`/api/processes/${processId}/risks`)
@@ -573,6 +623,86 @@ describe('risk approval flow', () => {
     expect(retried.body.ticket).toBeTruthy()
     expect(state.storedTickets).toHaveLength(1)
     expect(state.storedRisks[0].approvals[0].ticketId).toBe(state.storedTickets[0].id)
+  })
+
+  it('rechaza una decisión cuando el riesgo cambió después de solicitar la aprobación', async () => {
+    const { db, state } = makeApprovalDb()
+    const adminAgent = await loggedIn(db, admin.email)
+    const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    const approvalId = created.body.risk.approval.id
+    // Simula una escritura concurrente que llegó después del snapshot y antes de la decisión.
+    state.storedRisks[0].description = 'Descripción modificada fuera del ciclo aprobado.'
+
+    const ownerAgent = await loggedIn(db, owner.email)
+    const decision = await ownerAgent.post(`/api/approvals/${approvalId}/decision`).send({ decision: 'APPROVE' })
+    expect(decision.status).toBe(409)
+    expect(decision.body.reason).toBe('OUTDATED_APPROVAL')
+    expect(state.storedRisks[0].approvals[0].status).toBe('OUTDATED')
+    expect(state.storedRisks[0].acceptanceStatus).toBe('PENDING')
+    expect(state.storedTickets).toHaveLength(0)
+    expect(state.storedAuditEvents.some((event) => event.eventType === 'APPROVAL_OUTDATED')).toBe(true)
+  })
+
+  it('rechaza un ciclo histórico sin snapshot y no crea ticket', async () => {
+    const { db, state } = makeApprovalDb()
+    const adminAgent = await loggedIn(db, admin.email)
+    const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    const approvalId = created.body.risk.approval.id
+    const requested = state.storedAuditEvents.find((event) => event.eventType === 'APPROVAL_REQUESTED')
+    expect(requested).toBeTruthy()
+    requested!.metadata = null
+
+    const ownerAgent = await loggedIn(db, owner.email)
+    const decision = await ownerAgent.post(`/api/approvals/${approvalId}/decision`).send({ decision: 'REJECT', comment: 'Decisión histórica sin snapshot.' })
+    expect(decision.status).toBe(409)
+    expect(decision.body.reason).toBe('OUTDATED_APPROVAL')
+    expect(state.storedRisks[0].approvals[0].status).toBe('OUTDATED')
+    expect(state.storedTickets).toHaveLength(0)
+  })
+
+  it('invalida un ciclo pendiente cuando cambia el dueño antes de decidir', async () => {
+    const { db, state } = makeApprovalDb()
+    const adminAgent = await loggedIn(db, admin.email)
+    const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    const approvalId = created.body.risk.approval.id
+    const changed = await adminAgent.patch(`/api/processes/${processId}/risks/${created.body.risk.id}`).send({ riskOwnerId: member.id })
+    expect(changed.status).toBe(200)
+    expect(state.storedRisks[0].approvals[0].status).toBe('OUTDATED')
+
+    const adminDecision = await adminAgent.post(`/api/approvals/${approvalId}/decision`).send({ decision: 'APPROVE' })
+    expect(adminDecision.status).toBe(409)
+    expect(adminDecision.body.reason).toBe('OUTDATED_APPROVAL')
+    expect(state.storedTickets).toHaveLength(0)
+  })
+
+  it('hace efectiva una sola decisión entre dos solicitudes simultáneas', async () => {
+    const { db, state } = makeApprovalDb()
+    const adminAgent = await loggedIn(db, admin.email)
+    const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    const ownerAgent = await loggedIn(db, owner.email)
+    const [first, second] = await Promise.all([
+      ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'APPROVE' }),
+      ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'APPROVE' }),
+    ])
+    expect([first.status, second.status].sort()).toEqual([200, 409])
+    expect(state.storedRisks[0].approvals[0].status).toBe('APPROVED')
+    expect(state.storedTickets).toHaveLength(1)
+    expect(state.storedAuditEvents.filter((event) => event.eventType === 'TICKET_CREATED')).toHaveLength(1)
+  })
+
+  it('serializa aprobación y rechazo simultáneos sin dejar efectos parciales', async () => {
+    const { db, state } = makeApprovalDb()
+    const adminAgent = await loggedIn(db, admin.email)
+    const created = await adminAgent.post(`/api/processes/${processId}/risks`).send({ ...riskPayload, riskOwnerId: owner.id })
+    const ownerAgent = await loggedIn(db, owner.email)
+    const [approve, reject] = await Promise.all([
+      ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'APPROVE' }),
+      ownerAgent.post(`/api/approvals/${created.body.risk.approval.id}/decision`).send({ decision: 'REJECT', comment: 'Decisión concurrente.' }),
+    ])
+    expect([approve.status, reject.status].sort()).toEqual([200, 409])
+    expect(state.storedTickets.length).toBe(approve.status === 200 ? 1 : 0)
+    expect(state.storedRisks[0].approvals[0].status).toBe(approve.status === 200 ? 'APPROVED' : 'REJECTED')
+    expect(state.storedRisks[0].acceptanceStatus).toBe(approve.status === 200 ? 'ACCEPTED' : 'REJECTED')
   })
 
   it('aisla la visibilidad de la bandeja por empresa y por dueño', async () => {

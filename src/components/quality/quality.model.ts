@@ -250,7 +250,7 @@ export type ChecklistItemDraft = {
 export const emptyChecklistItemDraft: ChecklistItemDraft = { description: '', criteria: '', required: true }
 
 /** Personas de la empresa visibles para los selectores del módulo. */
-export type QualityUser = Pick<import('../../types').User, 'id' | 'name'> & { companyId: string | null }
+export type QualityUser = Pick<import('../../types').User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 
 export type QualityProcessOption = Pick<Process, 'id' | 'name' | 'code' | 'companyId'>
 export type QualityProcedureOption = Pick<Procedure, 'id' | 'name' | 'code' | 'processId'>

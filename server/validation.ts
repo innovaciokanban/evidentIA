@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { calendarDateToUtc, isCalendarDate } from './calendar-dates.js'
 
 export const roleSchema = z.enum(['SUPERUSER', 'COMPANY_ADMIN', 'COMPANY_USER'])
 export const statusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'])
@@ -12,6 +13,32 @@ export const prioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
  */
 export const idReference = z.union([z.string().cuid(), z.string().uuid()])
 
+/**
+ * User-entered deadlines are calendar dates. YYYY-MM-DD is stored at UTC midnight so the value
+ * survives JSON/Prisma round trips without shifting when the server runs outside the business zone.
+ * Full ISO timestamps remain accepted for existing clients, but new calendar strings are validated
+ * strictly so dates such as 2026-02-30 cannot be normalized into another day.
+ */
+const calendarDateInput = z.preprocess((value, context) => {
+  if (value instanceof Date) {
+    if (!Number.isNaN(value.getTime())) return value
+    context.addIssue({ code: 'custom', message: 'Invalid date' })
+    return z.NEVER
+  }
+  if (typeof value !== 'string') {
+    context.addIssue({ code: 'custom', message: 'Date must be YYYY-MM-DD' })
+    return z.NEVER
+  }
+  const trimmed = value.trim()
+  if (isCalendarDate(trimmed)) return calendarDateToUtc(trimmed)
+  if (/T/.test(trimmed)) {
+    const legacyDate = new Date(trimmed)
+    if (!Number.isNaN(legacyDate.getTime())) return legacyDate
+  }
+  context.addIssue({ code: 'custom', message: 'Date must be a valid YYYY-MM-DD calendar date' })
+  return z.NEVER
+}, z.date())
+
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(128),
@@ -22,6 +49,7 @@ export const ticketCreateSchema = z.object({
   description: z.string().trim().min(3).max(5000),
   status: statusSchema.optional(),
   priority: prioritySchema.optional(),
+  dueDate: calendarDateInput.nullable().optional(),
   assignedToId: idReference.nullable().optional(),
 })
 
@@ -30,11 +58,27 @@ export const ticketUpdateSchema = ticketCreateSchema.partial().refine(
   'At least one field is required',
 )
 
+export const ticketDriveReferenceCreateSchema = z.object({
+  driveFileId: z.string().trim().min(1).max(200),
+})
+
 export const ticketQuerySchema = z.object({
   status: statusSchema.optional(),
   priority: prioritySchema.optional(),
   search: z.string().trim().max(120).optional(),
 })
+
+export const ticketHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  status: statusSchema.optional(),
+  priority: prioritySchema.optional(),
+  search: z.string().trim().max(120).optional(),
+  assignedToId: idReference.optional(),
+  eventType: z.enum(['TICKET_CREATED', 'TICKET_UPDATED', 'TICKET_ASSIGNED', 'TICKET_ASSIGNMENT_REQUESTED', 'TICKET_ASSIGNMENT_ACCEPTED', 'TICKET_ASSIGNMENT_REJECTED', 'TICKET_ASSIGNMENT_CANCELLED', 'TICKET_ASSIGNMENT_SUPERSEDED', 'TICKET_UNASSIGNED', 'TICKET_STATUS_CHANGED', 'TICKET_PRIORITY_CHANGED', 'TICKET_DUE_DATE_CHANGED', 'EVIDENCE_ATTACHED', 'EVIDENCE_DELETED', 'TICKET_DELETED']).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+}).refine((value) => !value.from || !value.to || value.from <= value.to, 'Invalid history date range')
 
 export const userCreateSchema = z.object({
   name: z.string().trim().min(2).max(80),
@@ -50,10 +94,18 @@ export const userUpdateSchema = z.object({
   password: z.string().min(8).max(128).optional(),
   role: roleSchema.optional(),
   companyId: idReference.nullable().optional(),
-}).refine(
+}).strict().refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
 )
+
+export const userDeactivateSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+})
+
+export const userReactivateSchema = z.object({
+  reason: z.string().trim().min(3).max(500).optional(),
+}).default({})
 
 const companyDataSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -498,6 +550,23 @@ export const riskApprovalDecisionSchema = z.object({
 )
 export const riskApprovalQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'OUTDATED']).optional(),
+})
+
+export const ticketAssignmentApprovalStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'SUPERSEDED'])
+export const ticketAssignmentApprovalQuerySchema = z.object({
+  status: ticketAssignmentApprovalStatusSchema.optional(),
+})
+
+export const ticketAssignmentApprovalDecisionSchema = z.object({
+  decision: z.enum(['ACCEPT', 'REJECT']),
+  comment: z.string().trim().min(3).max(2000).optional(),
+}).refine(
+  (value) => value.decision === 'ACCEPT' || Boolean(value.comment),
+  { message: 'A rejection requires a mandatory reason', path: ['comment'] },
+)
+
+export const ticketAssignmentApprovalCancelSchema = z.object({
+  comment: z.string().trim().min(3).max(2000).optional(),
 })
 
 // Consulta paginada del historial de un riesgo. El listado de tipos es cerrado (el cliente no

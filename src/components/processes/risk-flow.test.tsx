@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { PlanActivitiesBlock, PlanEvidenceBlock, RiskFlowBar, RiskPlanSummary } from './ProcessRiskPanel'
+import { ActivityModal, PlanActivitiesBlock, PlanEvidenceBlock, RiskFlowBar, RiskPlanSummary } from './ProcessRiskPanel'
 import { activityDueStatus, activityProgressSummary, controlsWriteLocked, riskFlowSteps, riskStageMessage, riskStageMessages, riskStageReason } from './risk-flow'
 import type { MitigationActivity, ProcessRisk, ProcessRiskControl, TicketEvidence } from '../../types'
 
@@ -245,6 +245,12 @@ describe('PlanActivitiesBlock', () => {
     expect(failed).toContain('Reintentar')
   })
 
+  it('deshabilita el alta mientras se está guardando para evitar doble envío en curso', () => {
+    const markup = renderToStaticMarkup(<PlanActivitiesBlock hasRisk activities={{ items: [], error: '' }} canWrite saving onAdd={() => {}} onRetry={() => {}} />)
+    expect(markup).toContain('disabled=""')
+    expect(markup).toContain('Guardando...')
+  })
+
   it('en modo lectura oculta el botón de agregar y un riesgo nuevo pide guardarlo primero', () => {
     const loading = renderToStaticMarkup(<PlanActivitiesBlock hasRisk activities={null} canWrite={false} saving={false} onAdd={() => {}} onRetry={() => {}} />)
     expect(loading).toContain('Cargando actividades')
@@ -252,6 +258,26 @@ describe('PlanActivitiesBlock', () => {
     const unsaved = renderToStaticMarkup(<PlanActivitiesBlock hasRisk={false} activities={null} canWrite saving={false} onAdd={() => {}} onRetry={() => {}} />)
     expect(unsaved).toContain('Guarda el riesgo para agregar actividades')
     expect(unsaved).not.toContain('+ Agregar actividad')
+  })
+})
+
+describe('ActivityModal', () => {
+  it('explica que falta el diagnóstico y ofrece gestionar el de la empresa actual', () => {
+    const markup = renderToStaticMarkup(
+      <ActivityModal
+        draft={{ title: 'Actualizar procedimiento', description: '', responsibleId: 'user-1', dueDate: '2026-12-15' }}
+        users={[{ id: 'user-1', name: 'Ana López' }]}
+        saving={false}
+        error="Esta empresa no tiene un análisis estratégico."
+        diagnosticRequired
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        onOpenCompanyDiagnostics={() => {}}
+      />,
+    )
+    expect(markup).toContain('El plan de mitigación debe quedar vinculado a un análisis estratégico de esta misma empresa.')
+    expect(markup).toContain('Ir a la empresa y gestionar análisis')
   })
 })
 

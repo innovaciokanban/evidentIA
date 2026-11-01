@@ -37,7 +37,7 @@ export const getDashboardData = async (db: PrismaClient, request: Request) => {
     db.actionItem.count({ where: { AND: [scopes.actionItem, { status: openItemStatuses, dueDate: { lt: now } }] } }),
     db.qualityDiagnostic.findMany({ where: scopes.diagnostic, include: { company: { select: { id: true, name: true } } }, orderBy: { updatedAt: 'desc' }, take: 5 }),
     db.recommendation.findMany({ where: { AND: [scopes.recommendation, { status: 'PENDING' }] }, include: { diagnostic: { select: { id: true, title: true, company: { select: { id: true, name: true } } } } }, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 5 }),
-    db.actionItem.findMany({ where: { AND: [scopes.actionItem, { status: openItemStatuses, dueDate: { gte: now } }] }, include: { actionPlan: { select: { id: true, title: true, diagnostic: { select: { id: true, title: true, company: { select: { id: true, name: true } } } } } }, responsible: { select: { id: true, name: true } } }, orderBy: { dueDate: 'asc' }, take: 5 }),
+    db.actionItem.findMany({ where: { AND: [scopes.actionItem, { status: openItemStatuses, dueDate: { gte: now } }] }, include: { actionPlan: { select: { id: true, title: true, diagnostic: { select: { id: true, title: true, company: { select: { id: true, name: true } } } } } }, responsible: { select: { id: true, name: true, isActive: true } } }, orderBy: { dueDate: 'asc' }, take: 5 }),
     db.company.findMany({ where: scopes.company, include: { users: { where: { role: Role.COMPANY_ADMIN }, select: { id: true, name: true }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 5 }),
   ])
   return {

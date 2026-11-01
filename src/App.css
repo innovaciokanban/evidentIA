@@ -359,6 +359,7 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .detail-meta > div { display: flex; justify-content: space-between; align-items: center; }
 .detail-meta span { color: var(--muted); font-size: 13px; }
 .detail-meta strong { color: var(--ink); font-size: 13px; }
+.detail-meta .ticket-due-overdue { color: var(--danger, #b42318); }
 .ticket-history-page { padding-top: 0; }
 .ticket-history-native .risk-page-header { margin-bottom: 22px; }
 .ticket-history-native .risk-page-heading .muted { max-width: 64ch; margin: 8px 0 0; line-height: 1.55; }
@@ -916,6 +917,9 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
    ACTION PLANS
    ============================================ */
 .plans-panel { margin-top: 20px; }
+.action-plans-readonly .plans-panel > .ai-panel-heading > .button,
+.action-plans-readonly .plans-panel .plan-actions-buttons .text-button,
+.action-plans-readonly .plans-panel .plan-actions-buttons .row-action { display: none; }
 .plans-panel .factor-form { margin-bottom: 14px; }
 .plan-form { border-color: var(--blue-border); }
 .plans-panel :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -1177,6 +1181,21 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .role-chip.superuser { color: #1d4ed8; background: #eff6ff; }
 .role-chip.company_admin { color: #92400e; background: #fffbeb; }
 .role-chip.company_user { color: #475569; background: #f1f5f9; }
+.user-status-badge { display: inline-flex; align-items: center; gap: 7px; padding: 4px 9px; border: 1px solid transparent; border-radius: 999px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.user-status-badge > span { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.user-status-badge.active { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+.user-status-badge.inactive { color: #92400e; background: #fffbeb; border-color: #fde68a; }
+.user-status-modal { width: min(560px, 100%); }
+.company-modal-icon.status-warning { color: #b45309; background: #fffbeb; }
+.company-modal-icon.status-positive { color: #166534; background: #f0fdf4; }
+.status-user-summary { display: flex; align-items: center; gap: 12px; padding: 13px 14px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.status-user-summary .avatar { flex: none; width: 38px; height: 38px; font-size: 12px; }
+.status-user-summary div:last-child { display: grid; gap: 3px; min-width: 0; }
+.status-user-summary strong { color: var(--ink); font-size: 14px; }
+.status-user-summary span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.status-impact-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 13px 15px; border-left: 3px solid #f59e0b; background: #fffbeb; color: #78350f; font-size: 12.5px; line-height: 1.5; }
+.status-impact-list p { margin: 0; }
+.status-reactivate-copy { border-left-color: #22c55e; background: #f0fdf4; color: #166534; }
 .form-success { margin: 0 0 16px; padding: 12px 14px; color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius); font-size: 13px; }
 .field-readonly { margin-top: 6px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; color: var(--ink-secondary); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-size: 13px; }
 
@@ -2288,6 +2307,14 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .approval-status-chip.approved { color: #166534; background: var(--green-light); }
 .approval-status-chip.rejected { color: #991b1b; background: var(--red-light); }
 .approval-status-chip.outdated { color: #6d28d9; background: var(--purple-light); }
+.approval-status-chip.accepted { color: #166534; background: var(--green-light); }
+.approval-status-chip.cancelled, .approval-status-chip.superseded { color: var(--muted); background: var(--border-light); }
+.approval-section-tabs { display: flex; gap: 8px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); width: fit-content; }
+.approval-section-tabs button { padding: 8px 14px; border: 0; border-radius: var(--radius); color: var(--muted); background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
+.approval-section-tabs button.is-active { color: var(--blue); background: var(--surface); box-shadow: var(--shadow-xs); }
+.pending-assignment-notice { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--blue-border); border-radius: var(--radius-lg); color: var(--ink-secondary); background: var(--blue-light); font-size: 12px; }
+.pending-assignment-notice strong { color: var(--ink); }
+@media (max-width: 640px) { .approval-section-tabs { width: 100%; } .approval-section-tabs button { flex: 1; } .pending-assignment-notice { align-items: flex-start; flex-direction: column; gap: 3px; } }
 
 .approval-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 .approval-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); text-align: left; cursor: pointer; transition: all var(--transition); }

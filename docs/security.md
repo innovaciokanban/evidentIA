@@ -20,7 +20,7 @@ Controles de seguridad implementados en **Kanban Consultoria** (backend en `serv
 | Atributo | Valor |
 |---|---|
 | `HttpOnly` | sí |
-| `SameSite` | `Lax` |
+| `SameSite` | `Lax` en desarrollo/test; `None` en producción |
 | `Secure` | solo en `NODE_ENV=production` |
 | `Expires` | fecha de expiración de la sesión |
 | `Path` | `/` |
@@ -43,6 +43,12 @@ Todo recurso por ID se valida contra el alcance del usuario antes de leer/escrib
 - Los recursos inexistentes **y** los no accesibles devuelven `404` para no revelar existencia.
 - Tests dedicados manipulan IDs de recursos de otros consultores y verifican `404`/`403`.
 
+## Decisiones de aprobaciones de riesgos
+
+- La decisión bloquea y relee en una sola transacción el riesgo, el proceso, sus controles/evidencias, el ciclo de aprobación y los usuarios participantes; el orden determinista es `Risk -> Process -> filas de revisión -> RiskApproval -> Users -> Companies`.
+- Cada `APPROVAL_REQUESTED` persiste en `RiskAuditEvent.metadata` un snapshot de los campos que determinan la decisión y el ticket. Un snapshot ausente, incompleto o diferente marca el ciclo `OUTDATED` y responde `409` con `OUTDATED_APPROVAL`; no se crea ticket.
+- El cambio concurrente de campos relevantes o del dueño invalida el ciclo pendiente dentro de la transacción de edición. El ticket, auditoría y notificación de una decisión válida se confirman juntos; el índice único de `RiskApproval.ticketId` y el estado `PENDING` impiden duplicados por reintentos.
+
 ## Rate limiting (`express-rate-limit`)
 
 | Endpoint | Límite |
@@ -60,7 +66,17 @@ Todo recurso por ID se valida contra el alcance del usuario antes de leer/escrib
 
 ## CORS
 
-- Solo se permite el origen `FRONTEND_URL` con `credentials: true` (cookies). Ningún otro origen recibe la cookie.
+- Solo se permite el `origin` normalizado de `FRONTEND_URL` con `credentials: true` (cookies). Ningún otro origen recibe la cookie.
+- CORS no es la defensa CSRF: las mutaciones cookie-authenticated validan además el encabezado `Origin` contra esa lista explícita de un origen confiable.
+
+## CSRF
+
+- `POST`, `PUT`, `PATCH` y `DELETE` con cookie de sesión requieren un `Origin` exacto igual al origen de `FRONTEND_URL`; un origen externo, ausente o `null` responde `403`.
+- `POST /api/auth/login` y `POST /api/auth/logout` requieren el mismo `Origin` aunque todavía no exista cookie, para evitar login CSRF y logout CSRF.
+- `Sec-Fetch-Site: cross-site` se rechaza como defensa adicional; Fetch Metadata no sustituye la validación de `Origin`.
+- Una petición solo con `Authorization: Bearer` no lleva credenciales de navegador automáticas y puede operar sin `Origin`. Si incluye cookie y Bearer, la cookie tiene prioridad en autenticación y se aplica CSRF.
+- El callback `GET /api/google-drive/oauth/callback` no usa la compuerta de métodos mutantes: es una navegación OAuth legítima y exige sesión, `state` de un solo uso, `sessionId` e iniciador coincidentes, expiración válida y PKCE.
+- El frontend usa `credentials: include`; el navegador envía `Origin` automáticamente. No se añade ningún secreto CSRF al frontend.
 
 ## Cabeceras de seguridad
 

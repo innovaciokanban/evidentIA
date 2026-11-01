@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
@@ -12,6 +12,8 @@ type Treatment = 'AVOID' | 'MITIGATE' | 'TRANSFER' | 'ACCEPT' | null
 type StoredRisk = { id: string; processId: string; name: string; description: string; riskType: string; code: string | null; bpmnActivity: string; riskOwnerId: string | null; acceptanceStatus: AcceptanceStatus; treatment: Treatment; mitigationOwnerId: string | null; mitigationStartDate: Date | null; mitigationDueDate: Date | null; inherentImpact: number; inherentProbability: number; residualImpact: number; residualProbability: number; controls: StoredControl[]; evidences: StoredEvidence[]; approvals: StoredApproval[]; createdAt: Date; updatedAt: Date }
 type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'OUTDATED'
 type StoredApproval = { id: string; riskId: string; requestedById: string; status: ApprovalStatus; openKey: string | null; decidedById: string | null; decidedAt: Date | null; comment: string | null; ticketId: string | null; createdAt: Date; updatedAt: Date }
+type StoredTicket = { id: string; title: string; description: string; status: string; priority: string; createdById: string; assignedToId: string | null; actionItemId: string | null }
+type StoredAssignmentApproval = { id: string; ticketId: string | null; requestedById: string; proposedAssigneeId: string; previousAssigneeId: string | null; decidedById: string | null; riskApprovalId: string | null; status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'SUPERSEDED'; source: 'DIRECT' | 'RISK_APPROVAL' | 'ACTION_ITEM' | 'STRATEGY_TASK'; comment: string | null; createdAt: Date; decidedAt: Date | null; updatedAt: Date }
 type StoredNotification = { id: string; userId: string; title: string; body: string; link: string; readAt: Date | null; createdAt: Date }
 type TestProcessType = 'STRATEGIC' | 'MISSIONAL' | 'SUPPORT'
 type TestProcess = { id: string; companyId: string; name: string; code: string | null; type: TestProcessType; version: string | null; frequency: string | null; organizationalArea: string | null; supervision: string | null; executionType: string | null; objective: string; description: string | null; responsibleId: string | null; status: 'ACTIVE'; thirdPartyProvided: boolean; critical: boolean; affectsAccounting: boolean; personalData: boolean; createdAt: Date; updatedAt: Date }
@@ -47,6 +49,8 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const storedRisks: StoredRisk[] = []
   const storedProcessChanges: string[] = []
   const storedNotifications: StoredNotification[] = []
+  const storedTickets: StoredTicket[] = []
+  const storedAssignmentApprovals: StoredAssignmentApproval[] = []
   const storedAuditEvents: Array<Record<string, unknown>> = []
   let nextProcess = 3
   let nextRisk = 1
@@ -73,11 +77,27 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       risk: {
         ...risk,
         riskOwner: ownerView(risk.riskOwnerId),
-        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId },
+        process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId, type: process.type },
         controls: risk.controls,
       },
     }
   }
+  const ticketWithInclude = (ticket: StoredTicket) => ({
+    ...ticket,
+    createdBy: users.find((user) => user.id === ticket.createdById) ?? null,
+    assignedTo: users.find((user) => user.id === ticket.assignedToId) ?? null,
+    actionItem: null,
+    riskApprovals: [],
+  })
+  const assignmentApprovalView = (approval: StoredAssignmentApproval) => ({
+    ...approval,
+    requestedBy: users.find((user) => user.id === approval.requestedById) ?? null,
+    proposedAssignee: users.find((user) => user.id === approval.proposedAssigneeId) ?? null,
+    previousAssignee: approval.previousAssigneeId ? users.find((user) => user.id === approval.previousAssigneeId) ?? null : null,
+    decidedBy: approval.decidedById ? users.find((user) => user.id === approval.decidedById) ?? null : null,
+    ticket: approval.ticketId ? ticketWithInclude(storedTickets.find((ticket) => ticket.id === approval.ticketId)!) : null,
+    riskApproval: null,
+  })
   const codeSequences: Record<string, number> = {}
 
   const db = {
@@ -228,8 +248,30 @@ function makeRiskDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
     // registra la fila. findUnique devuelve null a propósito (la vista del arnés pinta ticket:
     // null y la ruta de decisión tolera la ausencia del objeto para responder).
     ticket: {
-      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmticket${String(nextTicket++).padStart(12, '0')}`, ...data })),
-      findUnique: vi.fn(async () => null),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const ticket: StoredTicket = { id: `cmticket${String(nextTicket++).padStart(12, '0')}`, title: String(data.title), description: String(data.description), status: String(data.status), priority: String(data.priority), createdById: String(data.createdById), assignedToId: (data.assignedToId as string | null) ?? null, actionItemId: (data.actionItemId as string | null) ?? null }
+        storedTickets.push(ticket)
+        return ticketWithInclude(ticket)
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const ticket = storedTickets.find((item) => item.id === where.id); return ticket ? ticketWithInclude(ticket) : null }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => { const ticket = storedTickets.find((item) => item.id === where.id)!; Object.assign(ticket, data); return ticketWithInclude(ticket) }),
+    },
+    ticketAuditEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: `cmticketaudit${String(nextAudit++).padStart(12, '0')}`, ...data })),
+    },
+    ticketAssignmentApproval: {
+      findFirst: vi.fn(async ({ where }: { where?: any } = {}) => {
+        const found = storedAssignmentApprovals.find((approval) => (!where?.ticketId || approval.ticketId === where.ticketId) && (!where?.status || approval.status === where.status))
+        return found ? assignmentApprovalView(found) : null
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => { const found = storedAssignmentApprovals.find((approval) => approval.id === where.id); return found ? assignmentApprovalView(found) : null }),
+      create: vi.fn(async ({ data }: { data: Omit<StoredAssignmentApproval, 'id' | 'createdAt' | 'updatedAt' | 'decidedAt' | 'decidedById' | 'comment'> }) => {
+        const now = new Date()
+        const created: StoredAssignmentApproval = { ...data, id: `cmassignment${String(storedAssignmentApprovals.length + 1).padStart(10, '0')}`, decidedById: null, decidedAt: null, comment: null, createdAt: now, updatedAt: now }
+        storedAssignmentApprovals.push(created)
+        return created
+      }),
+      updateMany: vi.fn(async () => ({ count: 0 })),
     },
     notification: {
       create: vi.fn(async ({ data }: { data: Omit<StoredNotification, 'id' | 'readAt' | 'createdAt'> }) => {

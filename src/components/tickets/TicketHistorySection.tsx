@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from 'react'
 import type { TicketHistoryEvent } from '../../types'
 import { Badge } from '../ui/Badge'
-import { ticketEventMeta, ticketHistoryValue } from './ticket-history-meta'
+import { ticketEventMeta, ticketHistoryValue, unknownTicketEventMeta } from './ticket-history-meta'
 
 const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -12,7 +12,7 @@ const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', ti
  * tal como los mostraba la tabla anterior de la vista global.
  */
 export function TicketTimelineEntry({ event, showTicket = false }: { event: TicketHistoryEvent; showTicket?: boolean }) {
-  const meta = ticketEventMeta[event.eventType]
+  const meta = ticketEventMeta[event.eventType] ?? unknownTicketEventMeta
   const ticket = event.ticket
   const ticketCode = event.ticketId ? `#${event.ticketId.slice(-6).toUpperCase()}` : '—'
   const ticketTitle = ticket?.title ?? event.ticketTitle ?? 'Ticket eliminado'

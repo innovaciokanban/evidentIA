@@ -3,8 +3,9 @@ import type { FormEvent } from 'react'
 import { api, ApiError } from '../../api'
 import type { Procedure, ProcedureStatus, ProcedureVersion, Process, ProcessChangeItem, ProcessChangeValue, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
+import { activeUserOptions, userOptionLabel } from '../../user-status'
 
-export type ProcedureUser = Pick<User, 'id' | 'name'> & { companyId: string | null }
+export type ProcedureUser = Pick<User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 
 const procedureStatusLabels: Record<ProcedureStatus, string> = {
   DRAFT: 'Borrador',
@@ -99,7 +100,7 @@ function ProcedureForm({ draft, setDraft, users, editing, saving, error, onSubmi
       <section className="procedure-form-section">
         <div className="procedure-form-grid">
           <label>Código<input value={draft.code} onChange={(event) => update('code', event.target.value)} placeholder="Ej. PRO-COM-01" minLength={2} maxLength={40} required /></label>
-          <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+          <label>Responsable<select value={draft.responsibleId} onChange={(event) => update('responsibleId', event.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{userOptionLabel(user)}</option>)}</select></label>
           <label className="procedure-field-wide">Nombre del procedimiento<input value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Atención de solicitudes del cliente" minLength={3} maxLength={160} required /></label>
           <label className="procedure-field-wide">Objetivo<textarea value={draft.objective} onChange={(event) => update('objective', event.target.value)} placeholder="Para qué existe este procedimiento" rows={3} maxLength={2000} required /></label>
           <label className="procedure-field-wide">Alcance<textarea value={draft.scope} onChange={(event) => update('scope', event.target.value)} placeholder="Qué cubre y qué queda por fuera" rows={3} maxLength={2000} required /></label>
@@ -132,7 +133,8 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
 
-  const availableUsers = users.filter((user) => user.companyId === process.companyId)
+  const historicalUsers: ProcedureUser[] = editing?.responsible ? [{ ...editing.responsible, companyId: process.companyId }] : []
+  const availableUsers = activeUserOptions<ProcedureUser>(users.filter((user) => user.companyId === process.companyId), historicalUsers)
 
   const loadProcedures = useCallback(async () => {
     setLoading(true)
@@ -324,7 +326,7 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
                       <div><span>Objetivo</span><p>{procedure.objective}</p></div>
                       <div><span>Alcance</span><p>{procedure.scope}</p></div>
                       <div><span>Descripción</span><p>{procedure.description ?? 'Sin descripción'}</p></div>
-                      <div><span>Responsable</span><p>{procedure.responsible?.name ?? 'Sin asignar'}</p></div>
+                      <div><span>Responsable</span><p>{procedure.responsible ? userOptionLabel(procedure.responsible) : 'Sin asignar'}</p></div>
                       <div><span>Estado</span><p><span className={`procedure-status ${procedure.status.toLowerCase()}`}>{procedureStatusLabels[procedure.status]}</span></p></div>
                       <div><span>Versión</span><p>v{procedure.version}</p></div>
                       <div><span>Creado</span><p>{dateFormatter.format(new Date(procedure.createdAt))}</p></div>

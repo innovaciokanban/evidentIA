@@ -8,6 +8,7 @@
 export type NotificationTarget =
   | { kind: 'approval'; approvalId: string }
   | { kind: 'risk'; processId: string; riskId: string; section: 'residual' | null }
+  | { kind: 'assignment-approval'; ticketId: string }
   | { kind: 'ticket'; ticketId: string }
 
 export const parseNotificationLink = (link: string): NotificationTarget | null => {
@@ -16,7 +17,9 @@ export const parseNotificationLink = (link: string): NotificationTarget | null =
   if (section === 'risks' && firstId && secondId) {
     return { kind: 'risk', processId: firstId, riskId: secondId, section: subsection === 'residual' ? 'residual' : null }
   }
-  // Asignación de una actividad de mitigación: "tickets/<id>" abre ese ticket en su vista.
+  if (section === 'tickets' && firstId && secondId === 'assignment-request') return { kind: 'assignment-approval', ticketId: firstId }
+  // Las demás notificaciones de tickets agregan el tipo y la clave del ciclo después del id; esos
+  // segmentos solo sirven para deduplicar en backend y no cambian el destino de navegación.
   if (section === 'tickets' && firstId) return { kind: 'ticket', ticketId: firstId }
   return null
 }

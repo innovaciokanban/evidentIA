@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TicketAuditEventType, TicketHistoryEvent } from '../../types'
 import { TicketHistorySection, TicketTimelineEntry } from './TicketHistorySection'
-import { ticketEventMeta, ticketHistoryValue } from './ticket-history-meta'
+import { ticketEventMeta, ticketHistoryValue, unknownTicketEventMeta } from './ticket-history-meta'
 
 const makeEvent = (overrides: Partial<TicketHistoryEvent> & { eventType: TicketAuditEventType }): TicketHistoryEvent => ({
   id: `audit-${overrides.eventType}`,
@@ -65,6 +65,28 @@ describe('TicketTimelineEntry', () => {
     expect(unassigned).toContain('←')
   })
 
+  it('renderiza los cinco eventos del ciclo de aprobación de asignaciones', () => {
+    const events: Array<[TicketAuditEventType, string, string]> = [
+      ['TICKET_ASSIGNMENT_REQUESTED', 'Solicitud de asignación', '↗'],
+      ['TICKET_ASSIGNMENT_ACCEPTED', 'Asignación aceptada', '✓'],
+      ['TICKET_ASSIGNMENT_REJECTED', 'Asignación rechazada', '×'],
+      ['TICKET_ASSIGNMENT_CANCELLED', 'Solicitud cancelada', '−'],
+      ['TICKET_ASSIGNMENT_SUPERSEDED', 'Solicitud reemplazada', '↻'],
+    ]
+    for (const [eventType, label, glyph] of events) {
+      const markup = renderEntry(makeEvent({ eventType, summary: label }))
+      expect(markup).toContain(label)
+      expect(markup).toContain(glyph)
+    }
+  })
+
+  it('usa metadatos de respaldo para un evento desconocido sin lanzar una excepción', () => {
+    const unknown = renderEntry(makeEvent({ eventType: 'TICKET_ASSIGNMENT_UNKNOWN' as TicketAuditEventType, summary: 'Evento futuro' }))
+    expect(unknown).toContain(unknownTicketEventMeta.label)
+    expect(unknown).toContain(unknownTicketEventMeta.glyph)
+    expect(unknown).toContain('Evento futuro')
+  })
+
   it('pinta código, título y estado/prioridad del ticket solo con showTicket', () => {
     const withTicket = renderEntry(makeEvent({ eventType: 'TICKET_CREATED', summary: 'Ticket creado' }), true)
     expect(withTicket).toContain('#123456 · Revisar contrato')
@@ -93,10 +115,13 @@ describe('TicketTimelineEntry', () => {
     expect(renderEntry(makeEvent({ eventType: 'TICKET_DELETED', summary: 'Eliminado' }))).toContain('risk-history-chip-ticket_deleted')
   })
 
-  it('cubre en los metadatos los 10 tipos de evento que emite el backend', () => {
+  it('cubre en los metadatos todos los tipos de evento que emite el backend', () => {
     expect(Object.keys(ticketEventMeta)).toEqual([
       'TICKET_CREATED', 'TICKET_UPDATED',
-      'TICKET_ASSIGNED', 'TICKET_UNASSIGNED',
+      'TICKET_ASSIGNED',
+      'TICKET_ASSIGNMENT_REQUESTED', 'TICKET_ASSIGNMENT_ACCEPTED', 'TICKET_ASSIGNMENT_REJECTED',
+      'TICKET_ASSIGNMENT_CANCELLED', 'TICKET_ASSIGNMENT_SUPERSEDED',
+      'TICKET_UNASSIGNED',
       'TICKET_STATUS_CHANGED', 'TICKET_PRIORITY_CHANGED', 'TICKET_DUE_DATE_CHANGED',
       'EVIDENCE_ATTACHED', 'EVIDENCE_DELETED',
       'TICKET_DELETED',

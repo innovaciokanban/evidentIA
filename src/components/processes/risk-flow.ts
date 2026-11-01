@@ -101,6 +101,8 @@ export function riskFlowSteps(risk: ProcessRisk | null): RiskFlowStep[] {
   ]
 }
 
+export type ActivityDueStatus = 'none' | 'overdue' | 'soon'
+
 /**
  * Colapsa una fecha ISO o YYYY-MM-DD al día local, para comparar vencimientos sin que la zona
  * horaria corra la fecha un día hacia atrás.
@@ -113,8 +115,6 @@ function dayStart(value: string): Date | null {
   }
   return new Date(year, month - 1, day)
 }
-
-export type ActivityDueStatus = 'none' | 'overdue' | 'soon'
 
 /**
  * Vencimiento de una actividad según el día local: «overdue» si ya pasó y la actividad sigue

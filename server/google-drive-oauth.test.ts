@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import request from 'supertest'
+import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.hoisted(() => {
@@ -58,7 +58,7 @@ describe('company Google Drive OAuth', () => {
     }
     const app = createApp(db, undefined, undefined, gateway as never)
     const agent = request.agent(app)
-    await agent.post('/api/auth/login').send({ email: user.email, password: 'Password123!' })
+    await agent.post('/api/auth/login').set('Origin', 'http://localhost:5173').send({ email: user.email, password: 'Password123!' })
 
     const started = await agent.post(`/api/companies/${company.id}/google-drive/oauth/start`)
     expect(started.status).toBe(200)
@@ -97,7 +97,7 @@ describe('company Google Drive OAuth', () => {
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       const agent = request.agent(createApp(db, undefined, undefined, gateway as never))
-      await agent.post('/api/auth/login').send({ email: user.email, password: 'Password123!' })
+      await agent.post('/api/auth/login').set('Origin', 'http://localhost:5173').send({ email: user.email, password: 'Password123!' })
       await agent.post(`/api/companies/${company.id}/google-drive/oauth/start`)
 
       const response = await agent.get('/api/google-drive/oauth/callback').query({ state: rawState, code: 'authorization-code' })
@@ -121,9 +121,6 @@ describe('company Google Drive OAuth', () => {
     const harness = makeOAuthDb()
     const db = harness.db
     let rawState = ''
-    db.$transaction = vi.fn(async () => {
-      throw new Prisma.PrismaClientKnownRequestError('database detail should never be logged', { code: 'P2002', clientVersion: 'test' })
-    })
     const gateway = {
       authorizationUrl: vi.fn((state: string) => { rawState = state; return 'https://accounts.google.test/oauth?state=test' }),
       exchangeCode: vi.fn(async () => ({ refresh_token: 'refresh-token' })),
@@ -134,8 +131,11 @@ describe('company Google Drive OAuth', () => {
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       const agent = request.agent(createApp(db, undefined, undefined, gateway as never))
-      await agent.post('/api/auth/login').send({ email: user.email, password: 'Password123!' })
+      await agent.post('/api/auth/login').set('Origin', 'http://localhost:5173').send({ email: user.email, password: 'Password123!' })
       await agent.post(`/api/companies/${company.id}/google-drive/oauth/start`)
+      db.$transaction = vi.fn(async () => {
+        throw new Prisma.PrismaClientKnownRequestError('database detail should never be logged', { code: 'P2002', clientVersion: 'test' })
+      })
 
       const response = await agent.get('/api/google-drive/oauth/callback').query({ state: rawState, code: 'authorization-code' })
 

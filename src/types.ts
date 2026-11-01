@@ -1,8 +1,9 @@
 export type Role = 'SUPERUSER' | 'COMPANY_ADMIN' | 'COMPANY_USER'
 export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'
+export type TicketAuditEventType = 'TICKET_CREATED' | 'TICKET_UPDATED' | 'TICKET_ASSIGNED' | 'TICKET_ASSIGNMENT_REQUESTED' | 'TICKET_ASSIGNMENT_ACCEPTED' | 'TICKET_ASSIGNMENT_REJECTED' | 'TICKET_ASSIGNMENT_CANCELLED' | 'TICKET_ASSIGNMENT_SUPERSEDED' | 'TICKET_UNASSIGNED' | 'TICKET_STATUS_CHANGED' | 'TICKET_PRIORITY_CHANGED' | 'TICKET_DUE_DATE_CHANGED' | 'EVIDENCE_ATTACHED' | 'EVIDENCE_DELETED' | 'TICKET_DELETED'
 
-export type User = { id: string; name: string; email: string; role: Role; companyId?: string | null }
+export type User = { id: string; name: string; email: string; role: Role; companyId?: string | null; isActive?: boolean }
 export type CompanyAdmin = Pick<User, 'id' | 'name' | 'email' | 'role' | 'companyId'>
 
 export type Company = {
@@ -14,6 +15,20 @@ export type Company = {
   admin: CompanyAdmin | null
   createdAt: string
   updatedAt: string
+}
+
+export type GoogleDriveConnection = {
+  id: string
+  status: 'CONNECTED'
+  googleAccountEmail: string | null
+  scopes: string[]
+  connectedAt: string
+  lastErrorCode: string | null
+}
+
+export type GoogleDriveStatus = {
+  connected: boolean
+  connection: GoogleDriveConnection | null
 }
 
 export type DiagnosticStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED'
@@ -150,7 +165,7 @@ export type StrategyTaskPlan = {
     title: string
     status: ActionItemStatus
     responsibleId: string | null
-    responsible: Pick<User, 'id' | 'name'> | null
+    responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
     dueDate: string | null
     ticket: { id: string; status: TicketStatus } | null
   }>
@@ -259,10 +274,35 @@ export type Ticket = {
   assignedTo: User | null
   actionItem?: {
     id: string
+    responsibleId?: string | null
     actionPlan: Pick<ActionPlan, 'id' | 'title' | 'strategySource' | 'strategySourceRef' | 'strategyTitle' | 'strategyDescription'>
   } | null
   /** Ciclo de aprobación que originó este ticket (0 o 1, porque RiskApproval.ticketId es único). */
   riskApprovals?: Array<{ id: string; riskId: string; risk: { id: string; code: string | null; name: string; processId: string } }>
+  /** Solicitud recién creada durante un guardado; no representa todavía al responsable confirmado. */
+  assignmentApproval?: TicketAssignmentApproval | null
+  saveMessage?: string
+}
+
+export type TicketAssignmentApprovalStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'SUPERSEDED'
+export type TicketAssignmentApprovalSource = 'DIRECT' | 'ACTION_ITEM' | 'STRATEGY_TASK' | 'RISK_APPROVAL'
+export type TicketAssignmentApproval = {
+  id: string
+  ticketId: string | null
+  status: TicketAssignmentApprovalStatus
+  source: TicketAssignmentApprovalSource
+  riskApprovalId: string | null
+  comment: string | null
+  createdAt: string
+  decidedAt: string | null
+  updatedAt: string
+  requestedBy: User
+  proposedAssignee: User
+  previousAssignee: User | null
+  decidedBy: User | null
+  ticket: Pick<Ticket, 'id' | 'title' | 'status' | 'priority' | 'assignedTo'> & {
+    actionItemId: string | null
+  } | null
 }
 
 /**
@@ -277,8 +317,38 @@ export type TicketEvidence = {
   mimeType: string
   size: number
   createdAt: string
-  uploadedBy: Pick<User, 'id' | 'name'>
+  uploadedBy: Pick<User, 'id' | 'name' | 'isActive'>
   ticket: Pick<Ticket, 'id' | 'title'> | null
+}
+
+export type TicketDriveReference = {
+  id: string
+  ticketId: string
+  driveFileId: string
+  filename: string
+  mimeType: string
+  size: number | null
+  driveUrl: string | null
+  createdAt: string
+  updatedAt: string
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'>
+}
+
+export type TicketHistoryChange = { field: string; label: string; previousValue: string | boolean | number | null; newValue: string | boolean | number | null }
+export type TicketHistoryEvent = {
+  id: string
+  ticketId: string | null
+  eventType: TicketAuditEventType
+  summary: string
+  actorId: string | null
+  actor: Pick<User, 'id' | 'name' | 'isActive'> | null
+  actorName: string | null
+  actorEmail: string | null
+  ticketTitle?: string | null
+  occurredAt: string
+  changes: TicketHistoryChange[]
+  metadata: Record<string, unknown> | null
+  ticket?: Pick<Ticket, 'id' | 'title' | 'status' | 'priority'>
 }
 
 /**
@@ -291,7 +361,7 @@ export type MitigationActivity = {
   description: string
   status: ActionItemStatus
   dueDate: string | null
-  responsible: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   ticket: { id: string; status: TicketStatus } | null
   createdAt: string
 }
@@ -318,7 +388,7 @@ export type Process = {
   critical: boolean
   affectsAccounting: boolean
   personalData: boolean
-  responsible: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   createdAt: string
   updatedAt: string
 }
@@ -336,7 +406,7 @@ export type ProcessChange = {
   processName: string
   version: string
   action: 'CREATED' | 'UPDATED'
-  changedBy: Pick<User, 'id' | 'name'> | null
+  changedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   changedByName: string | null
   changedByEmail: string | null
   changedAt: string
@@ -377,7 +447,7 @@ export type RiskAuditEvent = {
   eventType: RiskAuditEventType
   summary: string
   actorId: string | null
-  actor: Pick<User, 'id' | 'name'> | null
+  actor: Pick<User, 'id' | 'name' | 'isActive'> | null
   actorName: string | null
   actorEmail: string | null
   occurredAt: string
@@ -396,8 +466,8 @@ export type ProcessKpi = {
   formula: string
   dataSource: string
   unit: string
-  reportResponsible: Pick<User, 'id' | 'name'> | null
-  monitorResponsible: Pick<User, 'id' | 'name'> | null
+  reportResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  monitorResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   greenThreshold: string | null
   yellowThreshold: string | null
   redThreshold: string | null
@@ -420,7 +490,7 @@ export type Procedure = {
   objective: string
   scope: string
   description: string | null
-  responsible: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   status: ProcedureStatus
   version: string
   createdAt: string
@@ -437,7 +507,7 @@ export type ProcedureVersion = {
   changes: ProcessChangeItem[]
   snapshot: Record<string, unknown> | null
   changedById: string | null
-  changedBy: Pick<User, 'id' | 'name'> | null
+  changedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   changedByName: string | null
   changedByEmail: string | null
   changedAt: string
@@ -488,9 +558,9 @@ export type AuditFinding = {
   severity: AuditFindingSeverity
   status: AuditFindingStatus
   dueDate: string | null
-  responsible: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   resolution: string | null
-  verifiedBy: Pick<User, 'id' | 'name'> | null
+  verifiedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   verifiedAt: string | null
   itemId: string | null
   item: { id: string; description: string; checklistId: string } | null
@@ -499,7 +569,7 @@ export type AuditFinding = {
   procedureId: string | null
   procedure: Pick<Procedure, 'id' | 'code' | 'name'> | null
   efficacyVerification: string | null
-  efficacyVerifiedBy: Pick<User, 'id' | 'name'> | null
+  efficacyVerifiedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   efficacyVerifiedAt: string | null
   actions?: AuditCorrectiveAction[]
   createdAt: string
@@ -511,7 +581,7 @@ export type AuditActionProgressEntry = {
   actionId: string
   note: string
   percent: number | null
-  createdBy: Pick<User, 'id' | 'name'> | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   createdAt: string
 }
 
@@ -520,7 +590,7 @@ export type AuditCorrectiveAction = {
   findingId: string
   title: string
   description: string
-  responsible: Pick<User, 'id' | 'name'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   priority: AuditCorrectiveActionPriority
   status: AuditCorrectiveActionStatus
   required: boolean
@@ -563,7 +633,9 @@ export type AuditEvidenceFile = {
   filename: string
   mimeType: string
   size: number
-  uploadedBy: Pick<User, 'id' | 'name'> | null
+  storageProvider: 'LOCAL' | 'GOOGLE_DRIVE'
+  storageState: 'READY' | 'DELETE_PENDING' | 'FAILED'
+  uploadedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   createdAt: string
 }
 
@@ -594,8 +666,8 @@ export type Audit = {
   startDate: string | null
   endDate: string | null
   summary: string | null
-  leadAuditor: Pick<User, 'id' | 'name'> | null
-  responsible: Pick<User, 'id' | 'name'> | null
+  leadAuditor: Pick<User, 'id' | 'name' | 'isActive'> | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   findings: AuditFinding[]
   evidences: AuditEvidence[]
   relatedProcesses?: Pick<Process, 'id' | 'name' | 'code' | 'companyId'>[]
@@ -621,7 +693,7 @@ export type AuditEvent = {
   eventType: AuditEventType
   summary: string
   actorId: string | null
-  actor: Pick<User, 'id' | 'name'> | null
+  actor: Pick<User, 'id' | 'name' | 'isActive'> | null
   actorName: string | null
   actorEmail: string | null
   occurredAt: string
@@ -675,7 +747,7 @@ export type RiskApprovalSummary = {
   id: string
   status: RiskApprovalStatus
   requestedAt: string
-  decidedBy: Pick<User, 'id' | 'name'> | null
+  decidedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   decidedAt: string | null
   comment: string | null
   ticketId: string | null
@@ -684,9 +756,9 @@ export type RiskApproval = {
   id: string
   riskId: string
   status: RiskApprovalStatus
-  requestedBy: Pick<User, 'id' | 'name'>
+  requestedBy: Pick<User, 'id' | 'name' | 'isActive'>
   requestedAt: string
-  decidedBy: Pick<User, 'id' | 'name'> | null
+  decidedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   decidedAt: string | null
   comment: string | null
   ticket: { id: string; title: string; status: TicketStatus } | null
@@ -697,7 +769,7 @@ export type RiskApproval = {
     description: string
     acceptanceStatus: RiskAcceptanceStatus
     treatment: RiskTreatment | null
-    riskOwner: Pick<User, 'id' | 'name'> | null
+    riskOwner: Pick<User, 'id' | 'name' | 'isActive'> | null
     inherentImpact: number
     inherentProbability: number
     inherentScore: number
@@ -731,10 +803,10 @@ export type ProcessRisk = {
    */
   riskType: string
   code: string | null
-  riskOwner: Pick<User, 'id' | 'name'> | null
+  riskOwner: Pick<User, 'id' | 'name' | 'isActive'> | null
   acceptanceStatus: RiskAcceptanceStatus
   treatment: RiskTreatment | null
-  mitigationOwner: Pick<User, 'id' | 'name'> | null
+  mitigationOwner: Pick<User, 'id' | 'name' | 'isActive'> | null
   mitigationDueDate: string | null
   inherentImpact: number
   inherentProbability: number
@@ -767,8 +839,8 @@ export type DashboardSummary = {
 
 export type DashboardRecentDiagnostic = Pick<Diagnostic, 'id' | 'title' | 'status' | 'updatedAt'> & { company: Pick<Company, 'id' | 'name'> }
 export type DashboardPriorityRecommendation = Pick<Recommendation, 'id' | 'title' | 'priority' | 'status'> & { diagnostic: { id: string; title: string; company: { id: string; name: string } } }
-export type DashboardUpcomingAction = Pick<ActionItem, 'id' | 'title' | 'status' | 'dueDate'> & { actionPlan: { id: string; title: string; diagnostic: { id: string; title: string; company: { id: string; name: string } } }; responsible: Pick<User, 'id' | 'name'> | null }
-export type DashboardRecentCompany = Pick<Company, 'id' | 'name' | 'industry' | 'updatedAt'> & { admin: Pick<User, 'id' | 'name'> | null }
+export type DashboardUpcomingAction = Pick<ActionItem, 'id' | 'title' | 'status' | 'dueDate'> & { actionPlan: { id: string; title: string; diagnostic: { id: string; title: string; company: { id: string; name: string } } }; responsible: Pick<User, 'id' | 'name' | 'isActive'> | null }
+export type DashboardRecentCompany = Pick<Company, 'id' | 'name' | 'industry' | 'updatedAt'> & { admin: Pick<User, 'id' | 'name' | 'isActive'> | null }
 
 export type DashboardData = {
   summary: DashboardSummary

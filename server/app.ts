@@ -5,10 +5,10 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
-import { authenticate, clearSessionCookie, createSession, publicUser, requireRole } from './auth.js'
+import { authenticate, clearSessionCookie, createSessionForActiveUser, lockUserForUpdate, publicUser, requireRole, revokeUserSessions, setSessionCookie } from './auth.js'
 import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
@@ -25,9 +25,104 @@ import { assertEvidenceStorageOperationShape, EvidenceOperationService } from '.
 import { GoogleDriveError, GoogleDriveGateway } from './google-drive.js'
 import { createOAuthState, createPkcePair, decryptOAuthSecret, encryptOAuthSecret, hashOAuthState } from './oauth-crypto.js'
 import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userUpdateSchema } from './validation.js'
+import { TicketAssignmentApprovalError, cancelPendingTicketAssignmentApprovals, cancelPendingTicketAssignmentApprovalsForTickets, cancelPendingTicketAssignmentApprovalsForUser, cancelTicketAssignmentApproval, createTicketAssignmentApproval, decideTicketAssignmentApproval, getTicketAssignmentApproval, listTicketAssignmentApprovals, supersedeTicketAssignmentApproval } from './ticket-assignment-approvals.js'
+import { createNotificationIfAbsent, lockNotificationRecipients } from './notifications.js'
+import { csrfProtection } from './csrf.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
+
+const runInTransaction = async <T>(client: PrismaClient, operation: (transaction: Prisma.TransactionClient) => Promise<T>): Promise<T> => {
+  if (typeof client.$transaction === 'function') return client.$transaction(operation)
+  return operation(client as unknown as Prisma.TransactionClient)
+}
+
+class UserManagementError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+    this.name = 'UserManagementError'
+  }
+}
+
+class UserAssignmentError extends Error {
+  readonly status: 400 | 403 | 404 | 409
+
+  constructor(status: 400 | 403 | 404 | 409, message: string) {
+    super(message)
+    this.status = status
+    this.name = 'UserAssignmentError'
+  }
+}
+
+const assertActiveAssignmentUser = async (client: PrismaClient | Prisma.TransactionClient, userId: string, companyId: string, label: string) => {
+  if (typeof client.$queryRaw === 'function') await client.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`
+  const user = await client.user.findUnique({ where: { id: userId }, select: { id: true, companyId: true, isActive: true } })
+  if (!user) throw new UserAssignmentError(400, `${label} user not found`)
+  if (user.companyId !== companyId) throw new UserAssignmentError(403, `You can only assign a ${label.toLowerCase()} from your own company`)
+  if (user.isActive === false) throw new UserAssignmentError(409, `${label} user is inactive`)
+  return user
+}
+
+type ManagedUser = { id: string; role: Role; companyId: string | null; isActive: boolean }
+
+const lockUserAndCompanies = async (tx: Prisma.TransactionClient, userId: string, ...companyIds: Array<string | null>) => {
+  if (typeof tx.$queryRaw !== 'function') return
+  await lockUserForUpdate(tx, userId)
+  for (const companyId of [...new Set(companyIds.filter((id): id is string => Boolean(id)))].sort()) {
+    await tx.$queryRaw`SELECT "id" FROM "Company" WHERE "id" = ${companyId} FOR UPDATE`
+  }
+}
+
+const lockUsersAndCompanies = async (tx: Prisma.TransactionClient, userIds: string[], companyIds: Array<string | null>) => {
+  if (typeof tx.$queryRaw !== 'function') return
+  for (const userId of [...new Set(userIds)].sort()) await lockUserForUpdate(tx, userId)
+  for (const companyId of [...new Set(companyIds.filter((id): id is string => Boolean(id)))].sort()) {
+    await tx.$queryRaw`SELECT "id" FROM "Company" WHERE "id" = ${companyId} FOR UPDATE`
+  }
+}
+
+const lockRiskForUpdate = async (tx: Prisma.TransactionClient, riskId: string): Promise<void> => {
+  if (typeof tx.$queryRaw !== 'function') return
+  await tx.$queryRaw`SELECT "id" FROM "Risk" WHERE "id" = ${riskId} FOR UPDATE`
+}
+
+const lockRiskApprovalForUpdate = async (tx: Prisma.TransactionClient, approvalId: string): Promise<void> => {
+  if (typeof tx.$queryRaw !== 'function') return
+  await tx.$queryRaw`SELECT "id" FROM "RiskApproval" WHERE "id" = ${approvalId} FOR UPDATE`
+}
+
+const lockProcessForUpdate = async (tx: Prisma.TransactionClient, processId: string): Promise<void> => {
+  if (typeof tx.$queryRaw !== 'function') return
+  await tx.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${processId} FOR UPDATE`
+}
+
+const lockRiskReviewRowsForUpdate = async (tx: Prisma.TransactionClient, riskId: string): Promise<void> => {
+  if (typeof tx.$queryRaw !== 'function') return
+  await tx.$queryRaw`SELECT "id" FROM "RiskControl" WHERE "riskId" = ${riskId} ORDER BY "id" FOR UPDATE`
+  await tx.$queryRaw`SELECT "id" FROM "RiskEvidence" WHERE "riskId" = ${riskId} ORDER BY "id" FOR UPDATE`
+}
+
+const ensureActiveCompanyAdminRemains = async (tx: Prisma.TransactionClient, target: ManagedUser, nextRole: Role, nextCompanyId: string | null, nextIsActive: boolean) => {
+  if (target.role !== Role.COMPANY_ADMIN || !target.isActive || (nextRole === Role.COMPANY_ADMIN && nextCompanyId === target.companyId && nextIsActive)) return
+  if (!target.companyId) return
+  const remaining = await tx.user.count({ where: { companyId: target.companyId, role: Role.COMPANY_ADMIN, isActive: true, NOT: { id: target.id } } })
+  if (remaining === 0) throw new UserManagementError(409, 'The company must retain at least one active company admin')
+}
+
+const assertUserStatusScope = (request: Request, target: ManagedUser) => {
+  if (request.user?.role === Role.COMPANY_ADMIN && (target.companyId !== request.user.companyId || target.role !== Role.COMPANY_USER)) {
+    throw new UserManagementError(404, 'User not found')
+  }
+}
+
+const ticketAssignmentApprovalErrorResponse = (response: Response, error: unknown): boolean => {
+  if (!(error instanceof TicketAssignmentApprovalError)) return false
+  response.status(error.status).json({ error: error.message })
+  return true
+}
 
 const DUMMY_PASSWORD_HASH = '$2b$12$UjBgyzK627Qyclju5Vdtne3rVrXxGDHxvGqnZahRh5D9geupYld9y'
 
@@ -105,7 +200,7 @@ const logGoogleDriveFlowSuccess = (details: { correlationId: string; stage: Goog
   })
 }
 
-const userInclude = { createdBy: { select: { id: true, name: true, email: true, companyId: true } }, assignedTo: { select: { id: true, name: true, email: true, companyId: true } } } as const
+const userInclude = { createdBy: { select: { id: true, name: true, email: true, companyId: true, isActive: true } }, assignedTo: { select: { id: true, name: true, email: true, companyId: true, isActive: true } } } as const
 const companyInclude = { users: { where: { role: Role.COMPANY_ADMIN }, select: { id: true, name: true, email: true, role: true, companyId: true }, take: 1 } } as const
 const companyView = (company: Prisma.CompanyGetPayload<{ include: typeof companyInclude }>) => ({ id: company.id, name: company.name, identification: company.identification, industry: company.industry, description: company.description, admin: company.users[0] ?? null, createdAt: company.createdAt, updatedAt: company.updatedAt })
 const diagnosticInclude = { company: { select: { id: true, name: true } }, createdBy: { select: { id: true, name: true, email: true } }, swotAnalysis: { include: { items: { orderBy: { createdAt: 'asc' } } } } } as const
@@ -170,7 +265,7 @@ const sanitizedRecommendationView = (recommendation: Parameters<typeof recommend
   expectedImpact: sanitizeTextWithSwotItems(recommendation.expectedImpact, items),
   suggestedAction: sanitizeTextWithSwotItems(recommendation.suggestedAction, items),
 })
-const actionItemInclude = { recommendation: { select: { id: true, title: true, priority: true, status: true } }, responsible: { select: { id: true, name: true, email: true } }, ticket: { select: { id: true } } } as const
+const actionItemInclude = { recommendation: { select: { id: true, title: true, priority: true, status: true } }, responsible: { select: { id: true, name: true, email: true, isActive: true } }, ticket: { select: { id: true } } } as const
 const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof actionItemInclude }>) => item
 const actionPlanInclude = { createdBy: { select: { id: true, name: true, email: true } }, items: { include: actionItemInclude, orderBy: { createdAt: 'asc' as const } } } as const
 const actionPlanView = (plan: Prisma.ActionPlanGetPayload<{ include: typeof actionPlanInclude }>) => plan
@@ -179,6 +274,7 @@ const ticketInclude = {
   actionItem: {
     select: {
       id: true,
+      responsibleId: true,
       actionPlan: { select: { id: true, title: true, strategySource: true, strategySourceRef: true, strategyTitle: true, strategyDescription: true } },
     },
   },
@@ -435,10 +531,11 @@ const visibleCheckyMessages = <T extends { id: string; role: string; category: s
 }
 
 const canAccessTicket = (request: Request, ticket: { createdBy: { companyId: string | null } | null; assignedTo: { companyId: string | null } | null }) => request.user?.role === Role.SUPERUSER || ticket.createdBy?.companyId === request.user?.companyId || ticket.assignedTo?.companyId === request.user?.companyId
+const canOperateAssignedActionItemTicket = (request: Request, ticket: { actionItemId?: string | null; actionItem?: { responsibleId: string | null } | null }) => request.user?.role !== Role.COMPANY_USER || !ticket.actionItemId || ticket.actionItem?.responsibleId === request.user.id
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
 const canAccessCompany = (request: Request, company: { id: string }) => request.user?.role === Role.SUPERUSER || company.id === request.user?.companyId
 
-const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true } } } as const
+const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true, isActive: true } } } as const
 const processView = (process: Prisma.ProcessGetPayload<{ include: typeof processInclude }>) => ({
   id: process.id,
   companyId: process.companyId,
@@ -575,6 +672,7 @@ const updatedProcessChanges = (current: ProcessWithInclude, data: Prisma.Process
 async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>) {
   return withProcessCodeLock(companyId, async () => {
     const create = async (transaction: Prisma.TransactionClient | PrismaClient) => {
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(transaction, data.responsibleId, companyId, 'Responsible')
       if (typeof transaction.$queryRaw === 'function') {
         await transaction.$queryRaw`
           WITH advisory_lock AS MATERIALIZED (
@@ -614,6 +712,7 @@ export async function updateProcessWithVersion<T = undefined>(db: PrismaClient, 
     }
     const current = await transaction.process.findUnique({ where: { id: processId }, include: processInclude })
     if (!current) return null
+    if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(transaction, data.responsibleId, current.companyId, 'Responsible')
     const operationResult = operation ? await operation(transaction) : { result: undefined as T, changes: [] }
     const changes = [...updatedProcessChanges(current, data), ...operationResult.changes]
     if (changes.length === 0) return { process: current, result: operationResult.result }
@@ -641,8 +740,8 @@ const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.
 
 const kpiInclude = {
   process: { select: { id: true, companyId: true, name: true, code: true } },
-  reportResponsible: { select: { id: true, name: true } },
-  monitorResponsible: { select: { id: true, name: true } },
+  reportResponsible: { select: { id: true, name: true, isActive: true } },
+  monitorResponsible: { select: { id: true, name: true, isActive: true } },
 } as const
 const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => ({
   id: kpi.id,
@@ -666,7 +765,7 @@ const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => (
 
 const procedureInclude = {
   process: { select: { id: true, companyId: true, name: true, code: true } },
-  responsible: { select: { id: true, name: true } },
+  responsible: { select: { id: true, name: true, isActive: true } },
 } as const
 type ProcedureWithInclude = Prisma.ProcedureGetPayload<{ include: typeof procedureInclude }>
 const procedureView = (procedure: ProcedureWithInclude) => ({
@@ -801,8 +900,8 @@ const sipocChange = (kind: SipocKind, previousValue: string | null, newValue: st
 const riskInclude = {
   controls: { orderBy: { createdAt: 'asc' as const } },
   evidences: { orderBy: { createdAt: 'asc' as const } },
-  riskOwner: { select: { id: true, name: true } },
-  mitigationOwner: { select: { id: true, name: true } },
+  riskOwner: { select: { id: true, name: true, isActive: true } },
+  mitigationOwner: { select: { id: true, name: true, isActive: true } },
   // Último ciclo de aprobación del riesgo (el más reciente) para pintar su estado en el panel.
   approvals: { orderBy: { createdAt: 'desc' as const }, take: 1, include: { decidedBy: { select: { id: true, name: true } } } },
 } as const
@@ -935,21 +1034,98 @@ const riskLevelNames: Record<'LOW' | 'MEDIUM' | 'HIGH', string> = { LOW: 'Bajo',
 // El link de una notificación apunta a la bandeja "Mis aprobaciones"; la campana lo interpreta.
 const approvalNotificationLink = (approvalId: string) => `approvals/${approvalId}`
 
-// Enlace de una notificación de asignación de ticket: la campana lo abre en el detalle del
-// ticket, con el mismo patrón de segmentos que los links de aprobaciones y de riesgos.
-const ticketAssignmentNotificationLink = (ticketId: string) => `tickets/${ticketId}`
-
 const riskApprovalInclude = {
   requestedBy: { select: { id: true, name: true } },
   decidedBy: { select: { id: true, name: true } },
   ticket: { select: { id: true, title: true, status: true } },
   risk: {
     include: {
-      process: { select: { id: true, name: true, code: true, companyId: true } },
+      process: { select: { id: true, name: true, code: true, companyId: true, type: true } },
       riskOwner: { select: { id: true, name: true } },
       controls: { orderBy: { createdAt: 'asc' as const } },
+      evidences: { orderBy: { createdAt: 'asc' as const } },
     },
   },
+} as const
+
+type RiskApprovalSnapshotRisk = {
+  id: string
+  processId: string
+  riskType: string
+  code: string | null
+  name: string
+  description: string
+  bpmnActivity: string
+  riskOwnerId: string | null
+  acceptanceStatus: string
+  treatment: string | null
+  mitigationOwnerId: string | null
+  mitigationDueDate: Date | null
+  inherentImpact: number
+  inherentProbability: number
+  residualImpact: number
+  residualProbability: number
+  controls: Array<{ id: string; description: string; evaluation: string }>
+  evidences: Array<{ id: string; name: string; description: string; url: string }>
+}
+
+type RiskApprovalSnapshotProcess = { id: string; companyId: string; name: string; code: string | null; type: ProcessType }
+
+type RiskApprovalSnapshot = {
+  schemaVersion: 1
+  risk: Omit<RiskApprovalSnapshotRisk, 'mitigationDueDate' | 'controls' | 'evidences'> & {
+    mitigationDueDate: string | null
+    controls: Array<{ id: string; description: string; evaluation: string }>
+    evidences: Array<{ id: string; name: string; description: string; url: string }>
+  }
+  process: RiskApprovalSnapshotProcess
+}
+
+const riskApprovalSnapshot = (risk: RiskApprovalSnapshotRisk, process: RiskApprovalSnapshotProcess): RiskApprovalSnapshot => ({
+  schemaVersion: 1,
+  risk: {
+    id: risk.id,
+    processId: risk.processId,
+    riskType: risk.riskType,
+    code: risk.code,
+    name: risk.name,
+    description: risk.description,
+    bpmnActivity: risk.bpmnActivity,
+    riskOwnerId: risk.riskOwnerId,
+    acceptanceStatus: risk.acceptanceStatus,
+    treatment: risk.treatment,
+    mitigationOwnerId: risk.mitigationOwnerId,
+    mitigationDueDate: risk.mitigationDueDate?.toISOString() ?? null,
+    inherentImpact: risk.inherentImpact,
+    inherentProbability: risk.inherentProbability,
+    residualImpact: risk.residualImpact,
+    residualProbability: risk.residualProbability,
+    controls: [...risk.controls].sort((left, right) => left.id.localeCompare(right.id)),
+    evidences: [...risk.evidences].sort((left, right) => left.id.localeCompare(right.id)),
+  },
+  process: { id: process.id, companyId: process.companyId, name: process.name, code: process.code, type: process.type },
+})
+
+// Canonical comparison prevents a malformed/partial legacy metadata object from being treated as
+// an equivalent snapshot. Missing snapshots are therefore safely obsolete, never silently trusted.
+const stableJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'undefined'
+}
+
+const riskApprovalSnapshotMatches = (metadata: Prisma.JsonValue | null, current: RiskApprovalSnapshot): boolean => {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false
+  const stored = (metadata as Record<string, unknown>).riskSnapshot
+  return stableJson(stored) === stableJson(current)
+}
+
+const riskApprovalSnapshotRiskInclude = {
+  controls: { orderBy: { createdAt: 'asc' as const } },
+  evidences: { orderBy: { createdAt: 'asc' as const } },
+  process: { select: { id: true, name: true, code: true, companyId: true, type: true } },
 } as const
 
 const riskApprovalView = (approval: Prisma.RiskApprovalGetPayload<{ include: typeof riskApprovalInclude }>) => ({
@@ -995,7 +1171,7 @@ const ticketDataFromRiskApproval = (approval: { id: string; risk: { id: string; 
     description: `Riesgo aprobado y aceptado por su dueño.\n\n${approval.risk.description}\n\nProceso: ${approval.risk.process.name}${approval.risk.process.code ? ` (${approval.risk.process.code})` : ''}\nNivel inherente: ${riskLevelNames[level]} (${riskScoreFor(approval.risk.inherentImpact, approval.risk.inherentProbability)})\nReferencia: riesgo ${approval.risk.id} del proceso ${approval.risk.process.id}`,
     status: TicketStatus.OPEN,
     priority: TicketPriority[level === 'LOW' ? 'LOW' : level === 'MEDIUM' ? 'MEDIUM' : 'HIGH'],
-    assignedToId: approval.risk.riskOwnerId,
+    assignedToId: null,
     createdById,
   }
 }
@@ -1006,24 +1182,39 @@ const ticketDataFromRiskApproval = (approval: { id: string; risk: { id: string; 
  * transacción). La notificación identifica código, nombre y nivel inherente, y su link abre la
  * revisión en "Mis aprobaciones". El actor es quien envía (requestedById), no un valor del cliente.
  */
-const createRiskApprovalCycle = async (client: Prisma.TransactionClient | PrismaClient, data: { riskId: string; requestedById: string; riskOwnerId: string; actor: RiskAuditActor; risk: { code: string | null; name: string; description: string; inherentImpact: number; inherentProbability: number } }) => {
+const createRiskApprovalCycle = async (client: Prisma.TransactionClient | PrismaClient, data: { riskId: string; requestedById: string; riskOwnerId: string; companyId: string; actor: RiskAuditActor & { role: Role; companyId: string | null }; process: RiskApprovalSnapshotProcess; risk: RiskApprovalSnapshotRisk }) => {
+  await lockRiskForUpdate(client as Prisma.TransactionClient, data.riskId)
+  const initialRisk = await client.risk.findUnique({ where: { id: data.riskId }, include: riskApprovalSnapshotRiskInclude })
+  if (!initialRisk) throw new Error('Risk not found')
+  const initialProcess = 'process' in initialRisk && initialRisk.process ? initialRisk.process : data.process
+  await lockProcessForUpdate(client as Prisma.TransactionClient, initialProcess.id)
+  await lockRiskReviewRowsForUpdate(client as Prisma.TransactionClient, data.riskId)
+  const currentRisk = await client.risk.findUnique({ where: { id: data.riskId }, include: riskApprovalSnapshotRiskInclude })
+  if (!currentRisk) throw new Error('Risk not found')
+  const currentProcess = 'process' in currentRisk && currentRisk.process ? currentRisk.process : data.process
+  const currentRiskOwnerId = currentRisk.riskOwnerId
+  const ownerCanRequest = currentRiskOwnerId === data.actor.id
+    || data.actor.role === Role.SUPERUSER
+    || (data.actor.role === Role.COMPANY_ADMIN && currentProcess.companyId === data.actor.companyId)
+  if (!ownerCanRequest) throw new UserAssignmentError(403, 'Only the risk owner or a company admin can request approval')
+  if (!currentRiskOwnerId) throw new UserAssignmentError(400, 'Assign a risk owner before requesting approval')
+  if (currentProcess.companyId !== data.companyId) throw new UserAssignmentError(404, 'Risk not found')
+  await assertActiveAssignmentUser(client, currentRiskOwnerId, currentProcess.companyId, 'Risk owner')
   const approval = await client.riskApproval.create({ data: { riskId: data.riskId, requestedById: data.requestedById, openKey: data.riskId } })
   await riskAuditWrite(client, {
     riskId: data.riskId,
     eventType: 'APPROVAL_REQUESTED',
     summary: 'Enviado a aprobación',
     actor: data.actor,
-    metadata: { approvalId: approval.id },
+    metadata: { approvalId: approval.id, riskSnapshot: riskApprovalSnapshot(currentRisk, currentProcess) },
   })
-  const level = riskLevelFor(data.risk.inherentImpact, data.risk.inherentProbability)
-  await client.notification.create({
-    data: {
-      userId: data.riskOwnerId,
-      title: `${data.risk.code ? `Riesgo ${data.risk.code}` : 'Nuevo riesgo'} pendiente de tu revisión`,
-      body: `«${data.risk.name}» está esperando tu aprobación. Nivel inherente: ${riskLevelNames[level]} (${riskScoreFor(data.risk.inherentImpact, data.risk.inherentProbability)}).`,
-      link: approvalNotificationLink(approval.id),
-    },
-  })
+  const level = riskLevelFor(currentRisk.inherentImpact, currentRisk.inherentProbability)
+  await createNotificationIfAbsent(client, {
+    userId: currentRiskOwnerId,
+    title: `${currentRisk.code ? `Riesgo ${currentRisk.code}` : 'Nuevo riesgo'} pendiente de tu revisión`,
+    body: `«${currentRisk.name}» está esperando tu aprobación. Nivel inherente: ${riskLevelNames[level]} (${riskScoreFor(currentRisk.inherentImpact, currentRisk.inherentProbability)}).`,
+    link: approvalNotificationLink(approval.id),
+  }, { companyId: currentProcess.companyId })
   return approval
 }
 
@@ -1038,6 +1229,10 @@ const approvalVisibilityWhere = (request: Request): Prisma.RiskApprovalWhereInpu
 const canDecideApproval = (request: Request, approval: { risk: { riskOwnerId: string | null; process: { companyId: string | null } } }): boolean => {
   const user = request.user
   if (!user) return false
+  return canDecideApprovalForActor(user, approval)
+}
+
+const canDecideApprovalForActor = (user: { id: string; role: Role; companyId: string | null }, approval: { risk: { riskOwnerId: string | null; process: { companyId: string | null } } }): boolean => {
   if (approval.risk.riskOwnerId === user.id) return true
   if (user.role === Role.SUPERUSER) return true
   return user.role === Role.COMPANY_ADMIN && approval.risk.process.companyId === user.companyId
@@ -1295,7 +1490,7 @@ const ticketAuditWrite = (client: TicketAuditClient, data: {
   // Algunos arneses antiguos construyen un PrismaClient parcial; en producción el delegado siempre
   // existe después de ejecutar la migración. Mantener el guard evita que esos tests fallen antes de
   // poder ejercitar la operación de negocio que están verificando.
-  if (!client.ticketAuditEvent) return Promise.resolve()
+  if (!client.ticketAuditEvent) return Promise.resolve(undefined)
   return client.ticketAuditEvent.create({
   data: {
     ticketId: data.ticketId,
@@ -1307,7 +1502,7 @@ const ticketAuditWrite = (client: TicketAuditClient, data: {
     ...(data.metadata ? { metadata: data.metadata as unknown as Prisma.InputJsonValue } : {}),
     ...ticketAuditActorFields(data.actor),
   },
-  })
+  }).then((event) => ({ id: event.id }))
 }
 
 const ticketAuditCreatedChanges = (ticket: TicketAuditSnapshot): TicketAuditChange[] => [
@@ -1343,9 +1538,17 @@ const ticketAuditDiff = (previous: TicketAuditSnapshot, next: TicketAuditSnapsho
 }
 
 const ticketAuditWriteDiff = async (client: TicketAuditClient, ticketId: string, actor: TicketAuditActor | null | undefined, previous: TicketAuditSnapshot, next: TicketAuditSnapshot, metadata?: Record<string, unknown>) => {
+  const events: Array<{ id: string; eventType: TicketAuditEventType }> = []
   for (const event of ticketAuditDiff(previous, next)) {
-    await ticketAuditWrite(client, { ticketId, eventType: event.eventType, summary: event.summary, actor, changes: event.changes, metadata })
+    const created = await ticketAuditWrite(client, { ticketId, eventType: event.eventType, summary: event.summary, actor, changes: event.changes, metadata })
+    if (created) events.push({ ...created, eventType: event.eventType })
   }
+  return events
+}
+
+const lockTicketForUpdate = async (client: TicketAuditClient, ticketId: string): Promise<void> => {
+  if (typeof client.$queryRaw !== 'function') return
+  await client.$queryRaw`SELECT "id" FROM "Ticket" WHERE "id" = ${ticketId} FOR UPDATE`
 }
 
 /**
@@ -1354,12 +1557,14 @@ const ticketAuditWriteDiff = async (client: TicketAuditClient, ticketId: string,
  * reinicia la transacción completa ante un conflicto de índice único, de modo que un reintento
  * jamás deja un riesgo sin su evento ni un evento sin su riesgo. El actor sale de la sesión.
  */
-const createRiskWithAudit = async (db: PrismaClient, actor: RiskAuditActor, data: Prisma.RiskUncheckedCreateInput): Promise<RiskWithInclude> => {
+const createRiskWithAudit = async (db: PrismaClient, actor: RiskAuditActor, companyId: string, data: Prisma.RiskUncheckedCreateInput): Promise<RiskWithInclude> => {
   if (!isRiskCodeCategory(data.riskType)) throw new Error(`No code prefix for risk type ${String(data.riskType)}`)
   // Se captura fuera del closure: TypeScript no mantiene el estrechamiento de data.riskType dentro
   // de las funciones anidadas y nextRiskCodeFor exige la categoría ya validada.
   const riskType = data.riskType
   return withCodeRetry(() => db.$transaction(async (tx) => {
+    if (typeof data.riskOwnerId === 'string') await assertActiveAssignmentUser(tx, data.riskOwnerId, companyId, 'Risk owner')
+    if (typeof data.mitigationOwnerId === 'string') await assertActiveAssignmentUser(tx, data.mitigationOwnerId, companyId, 'Mitigation responsible')
     const code = await nextRiskCodeFor(tx, riskType)
     const risk = await tx.risk.create({ data: { ...data, riskType, code }, include: riskInclude })
     await riskAuditWrite(tx, {
@@ -1382,14 +1587,14 @@ const createRiskWithAudit = async (db: PrismaClient, actor: RiskAuditActor, data
 
 const auditInclude = {
   process: { select: { id: true, companyId: true, name: true, code: true } },
-  leadAuditor: { select: { id: true, name: true } },
-  responsible: { select: { id: true, name: true } },
+  leadAuditor: { select: { id: true, name: true, isActive: true } },
+  responsible: { select: { id: true, name: true, isActive: true } },
   findings: {
     orderBy: { createdAt: 'asc' as const },
     include: {
-      responsible: { select: { id: true, name: true } },
-      verifiedBy: { select: { id: true, name: true } },
-      efficacyVerifiedBy: { select: { id: true, name: true } },
+      responsible: { select: { id: true, name: true, isActive: true } },
+      verifiedBy: { select: { id: true, name: true, isActive: true } },
+      efficacyVerifiedBy: { select: { id: true, name: true, isActive: true } },
       item: { select: { id: true, description: true, checklistId: true } },
       process: { select: { id: true, name: true, code: true } },
       procedure: { select: { id: true, code: true, name: true } },
@@ -1400,9 +1605,9 @@ const auditInclude = {
 type AuditWithInclude = Prisma.AuditGetPayload<{ include: typeof auditInclude }>
 
 const auditFindingInclude = {
-  responsible: { select: { id: true, name: true } },
-  verifiedBy: { select: { id: true, name: true } },
-  efficacyVerifiedBy: { select: { id: true, name: true } },
+  responsible: { select: { id: true, name: true, isActive: true } },
+  verifiedBy: { select: { id: true, name: true, isActive: true } },
+  efficacyVerifiedBy: { select: { id: true, name: true, isActive: true } },
   item: { select: { id: true, description: true, checklistId: true } },
   process: { select: { id: true, name: true, code: true } },
   procedure: { select: { id: true, code: true, name: true } },
@@ -1520,8 +1725,8 @@ const checklistProgress = (checklist: { items: Array<{ result: AuditChecklistRes
 })
 
 const auditActionInclude = {
-  responsible: { select: { id: true, name: true } },
-  progress: { orderBy: { createdAt: 'desc' as const }, include: { createdBy: { select: { id: true, name: true } } } },
+  responsible: { select: { id: true, name: true, isActive: true } },
+  progress: { orderBy: { createdAt: 'desc' as const }, include: { createdBy: { select: { id: true, name: true, isActive: true } } } },
 } as const
 type AuditActionWithInclude = Prisma.AuditCorrectiveActionGetPayload<{ include: typeof auditActionInclude }>
 
@@ -1800,6 +2005,8 @@ export const nextAuditCode = (codes: readonly (string | null | undefined)[]): st
  */
 const createAuditWithCode = async (db: PrismaClient, actor: RiskAuditActor, processId: string, companyId: string, data: Omit<Prisma.AuditUncheckedCreateInput, 'code' | 'processId'>, relations?: { processIds?: string[]; procedureIds?: string[] }): Promise<AuditWithInclude> => {
   return withCodeRetry(() => db.$transaction(async (tx) => {
+    if (typeof data.leadAuditorId === 'string') await assertActiveAssignmentUser(tx, data.leadAuditorId, companyId, 'Lead auditor')
+    if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, companyId, 'Audit responsible')
     if (typeof tx.$queryRaw === 'function') {
       await tx.$queryRaw`
         WITH advisory_lock AS MATERIALIZED (
@@ -1900,9 +2107,10 @@ const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlan
     select: {
       id: true,
       code: true,
-      name: true,
-      processId: true,
-      riskOwnerId: true,
+       name: true,
+       processId: true,
+       process: { select: { companyId: true } },
+       riskOwnerId: true,
       // Quien se comprometió con ejecutar la mitigación: si el riesgo lo tiene, el aviso es solo
       // para él (los destinatarios resuelven el resto: sin responsable, creador + dueño).
       mitigationOwnerId: true,
@@ -1927,48 +2135,20 @@ const notifyMitigationPlanCompleted = async (client: RiskAuditClient, actionPlan
   if (!mitigationPlansCompleted(plansSnapshot)) return
   const candidateIds = mitigationNotificationRecipients(risk.mitigationOwnerId, risk.riskOwnerId, risk.auditEvents[0]?.actorId)
   if (candidateIds.length === 0) return
-  const recipients = await client.user.findMany({ where: { id: { in: candidateIds } }, select: { id: true } })
   const link = riskResidualSectionLink(risk.processId, risk.id)
   const { title, body } = mitigationCompletedNotification(risk)
-  for (const recipient of recipients) {
-    const existing = await client.notification.findFirst({ where: { userId: recipient.id, link }, select: { id: true } })
-    if (existing) continue
-    await client.notification.create({ data: { userId: recipient.id, title, body, link } })
+  await lockNotificationRecipients(client, candidateIds)
+  for (const recipientId of candidateIds) {
+    await createNotificationIfAbsent(client, { userId: recipientId, title, body, link }, { companyId: risk.process.companyId })
   }
 }
 
-/**
- * Aviso "tu asignaste un ticket": cuando una actividad (o un ticket manual) queda con
- * responsable, esa persona recibe el aviso in-app con enlace directo al ticket. Idempotente por
- * diseño, igual que el resto de avisos: el link es "tickets/<id>", así que si el ticket se
- * reasigna (o vuelve a alguien ya avisado) no se acumulan copias del mismo aviso, y el que se
- * asigna a sí mismo no se avisa.
- *
- * Se invoca dentro de la transacción que escribe la asignación: si la petición acaba fallando,
- * el aviso tampoco queda suelto apuntando a un cambio que no llegó a ocurrir. El creador del
- * ticket no recibe aviso propio (ya está viendo lo que hizo).
- */
-const notifyTicketAssigned = async (client: RiskAuditClient, ticket: { id: string; title: string }, assigneeId: string | null, actorId: string): Promise<void> => {
-  if (!assigneeId || assigneeId === actorId) return
-  const link = ticketAssignmentNotificationLink(ticket.id)
-  const existing = await client.notification.findFirst({ where: { userId: assigneeId, link }, select: { id: true } })
-  if (existing) return
-  await client.notification.create({
-    data: {
-      userId: assigneeId,
-      title: `Ticket asignado: ${ticket.title}`,
-      body: `Se te asignó el ticket «${ticket.title}». Ábrelo para revisar el detalle y trabajar en él.`,
-      link,
-    },
-  })
-}
-
-const ticketDataFromActionItem = (item: { title: string; description: string; status: ActionItemStatus; priority: Priority; responsibleId: string | null; dueDate: Date | null; actionItemId: string; createdById: string }) => ({
+const ticketDataFromActionItem = (item: { title: string; description: string; status: ActionItemStatus; priority: Priority; responsibleId: string | null; dueDate: Date | null; actionItemId: string; createdById: string }, assignedToId = item.responsibleId) => ({
   title: item.title,
   description: item.description,
   status: actionItemToTicketStatus[item.status],
   priority: actionItemToTicketPriority[item.priority],
-  assignedToId: item.responsibleId,
+  assignedToId,
   dueDate: item.dueDate,
   actionItemId: item.actionItemId,
   createdById: item.createdById,
@@ -2013,7 +2193,7 @@ const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, 
             title: true,
             status: true,
             responsibleId: true,
-            responsible: { select: { id: true, name: true } },
+            responsible: { select: { id: true, name: true, isActive: true } },
             dueDate: true,
             ticket: { select: { id: true, status: true } },
           },
@@ -2142,9 +2322,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', env.TRUST_PROXY_HOPS)
-  app.use(cors({ origin: env.FRONTEND_URL, credentials: true }))
+  const frontendOrigin = new URL(env.FRONTEND_URL).origin
+  app.use(cors({ origin: frontendOrigin, credentials: true }))
   app.use(express.json({ limit: '1mb' }))
   app.use(cookieParser())
+  // FRONTEND_URL is the single explicit browser origin trusted for cookie-authenticated writes.
+  // OAuth callback is a GET and is protected separately by its session-bound state parameter.
+  app.use(csrfProtection({ trustedOrigins: new Set([frontendOrigin]), sessionCookieName: env.SESSION_COOKIE }))
   app.use((_request, response, next) => {
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('X-Frame-Options', 'DENY')
@@ -2252,8 +2436,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(401).json({ error: 'Invalid email or password' })
       return
     }
-    await createSession(db, user.id, response)
-    response.json({ user: publicUser(user) })
+    // bcrypt stays outside the transaction. The short transaction serializes the final active
+    // check and session insert against deactivation on the same User row.
+    const authenticated = await createSessionForActiveUser(db, user.id)
+    if (!authenticated) {
+      response.status(401).json({ error: 'Invalid email or password' })
+      return
+    }
+    // The transaction has committed successfully before the cookie is added to the response.
+    setSessionCookie(response, authenticated.session.token, authenticated.session.expiresAt)
+    response.json({ user: publicUser(authenticated.user) })
   }))
 
   app.post('/api/auth/logout', asyncHandler(async (request, response) => {
@@ -2385,8 +2577,15 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   app.get('/api/users', authMiddleware, asyncHandler(async (request, response) => {
-    const where: Prisma.UserWhereInput = request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
-    const users = await db.user.findMany({ where, select: { id: true, name: true, role: true, companyId: true }, orderBy: { name: 'asc' } })
+    const includeInactive = request.query.includeInactive === 'true'
+    if (includeInactive && request.user?.role !== Role.SUPERUSER && request.user?.role !== Role.COMPANY_ADMIN) {
+      response.status(403).json({ error: 'Only administrators can include inactive users' })
+      return
+    }
+    const where: Prisma.UserWhereInput = request.user?.role === Role.SUPERUSER
+      ? (includeInactive ? {} : { isActive: true })
+      : { companyId: request.user?.companyId ?? 'none', ...(includeInactive ? {} : { isActive: true }) }
+    const users = await db.user.findMany({ where, select: { id: true, name: true, role: true, companyId: true, isActive: true }, orderBy: { name: 'asc' } })
     response.json({ users })
   }))
 
@@ -2427,7 +2626,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         return
       }
     }
-    const user = await db.user.create({ data: { name: parsed.data.name, email: parsed.data.email, passwordHash: await bcrypt.hash(password, 12), role, companyId }, select: { id: true, name: true, email: true, role: true, companyId: true } })
+    const user = await db.user.create({ data: { name: parsed.data.name, email: parsed.data.email, passwordHash: await bcrypt.hash(password, 12), role, companyId }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
     response.status(201).json({ user })
   }))
 
@@ -2437,7 +2636,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: 'Invalid user data', details: parsed.error.issues })
       return
     }
-    const existing = await db.user.findUnique({ where: { id: String(request.params.id) }, select: { id: true, role: true, companyId: true } })
+    const existing = await db.user.findUnique({ where: { id: String(request.params.id) }, select: { id: true, role: true, companyId: true, isActive: true } })
     if (!existing) {
       response.status(404).json({ error: 'User not found' })
       return
@@ -2481,32 +2680,128 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.password) data.passwordHash = await bcrypt.hash(parsed.data.password, 12)
     if (parsed.data.role && parsed.data.role !== existing.role) data.role = parsed.data.role
     if (parsed.data.companyId !== undefined && parsed.data.companyId !== existing.companyId) data.companyId = parsed.data.companyId
-    const user = await db.user.update({ where: { id: existing.id }, data, select: { id: true, name: true, email: true, role: true, companyId: true } })
+    const changesSensitiveToAdminAvailability = data.role !== undefined || data.companyId !== undefined
+    const user = changesSensitiveToAdminAvailability
+      ? await db.$transaction(async (tx) => {
+        await lockUserAndCompanies(tx, existing.id, existing.companyId, data.companyId ?? existing.companyId)
+        const lockedExisting = await tx.user.findUnique({ where: { id: existing.id }, select: { id: true, role: true, companyId: true, isActive: true } })
+        if (!lockedExisting) throw new UserManagementError(404, 'User not found')
+        const lockedFinalRole = data.role ?? lockedExisting.role
+        const lockedFinalCompanyId = data.companyId !== undefined ? data.companyId : lockedExisting.companyId
+        await ensureActiveCompanyAdminRemains(tx, lockedExisting, lockedFinalRole, lockedFinalCompanyId, lockedExisting.isActive)
+        const updated = await tx.user.update({ where: { id: existing.id }, data, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+        if (data.companyId !== undefined && data.companyId !== lockedExisting.companyId) {
+          await tx.ticketAssignmentApproval.updateMany({
+            where: {
+              status: TicketAssignmentApprovalStatus.PENDING,
+              OR: [
+                { requestedById: existing.id },
+                { proposedAssigneeId: existing.id },
+                { previousAssigneeId: existing.id },
+                { ticket: { createdById: existing.id } },
+              ],
+            },
+            data: {
+              status: TicketAssignmentApprovalStatus.CANCELLED,
+              decidedById: request.user!.id,
+              decidedAt: new Date(),
+              comment: 'Solicitud cancelada porque cambió la empresa de un participante.',
+            },
+          })
+        }
+        return updated
+      })
+      : await db.user.update({ where: { id: existing.id }, data, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
     response.json({ user })
   }))
 
-  app.delete('/api/users/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
-    const existing = await db.user.findUnique({ where: { id: String(request.params.id) }, select: { id: true, role: true, companyId: true } })
-    if (!existing) {
-      response.status(404).json({ error: 'User not found' })
+  app.post('/api/users/:id/deactivate', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = userDeactivateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'A deactivation reason is required', details: parsed.error.issues })
       return
     }
-    if (request.user?.role === Role.COMPANY_ADMIN) {
-      if (existing.companyId !== request.user.companyId || existing.role !== Role.COMPANY_USER) {
-        response.status(404).json({ error: 'User not found' })
-        return
-      }
-    }
-    if (existing.role === Role.SUPERUSER) {
-      response.status(403).json({ error: 'Superuser accounts cannot be deleted' })
+    const user = await db.$transaction(async (tx) => {
+      const targetId = String(request.params.id)
+      const current = await tx.user.findUnique({ where: { id: targetId }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      if (!current) throw new UserManagementError(404, 'User not found')
+      assertUserStatusScope(request, current)
+      if (current.id === request.user?.id) throw new UserManagementError(403, 'You cannot deactivate your own account')
+      if (current.role === Role.SUPERUSER) throw new UserManagementError(403, 'Superuser accounts cannot be deactivated')
+
+      const cancellationComment = 'Solicitud cancelada porque el candidato fue desactivado.'
+      // Assignment cleanup may lock ticket rows first. The User row is then locked with the same
+      // FOR UPDATE primitive as login, before isActive and sessions are changed.
+      await cancelPendingTicketAssignmentApprovalsForUser(tx, {
+        proposedAssigneeId: current.id,
+        actor: request.user!,
+        comment: cancellationComment,
+      })
+      await lockUserAndCompanies(tx, current.id, current.companyId)
+      const locked = await tx.user.findUnique({ where: { id: current.id }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      if (!locked) throw new UserManagementError(404, 'User not found')
+      assertUserStatusScope(request, locked)
+      await cancelPendingTicketAssignmentApprovalsForUser(tx, {
+        proposedAssigneeId: locked.id,
+        actor: request.user!,
+        comment: cancellationComment,
+        lockTickets: false,
+      })
+      if (!locked.isActive) return locked
+
+      await ensureActiveCompanyAdminRemains(tx, locked, locked.role, locked.companyId, false)
+      const updated = await tx.user.update({ where: { id: locked.id }, data: { isActive: false }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      await revokeUserSessions(tx, locked.id)
+      await tx.userStatusEvent.create({
+        data: {
+          userId: locked.id,
+          actorId: request.user!.id,
+          eventType: UserStatusEventType.DEACTIVATED,
+          reason: parsed.data.reason,
+          actorName: request.user!.name,
+          actorEmail: request.user!.email,
+        },
+      })
+      return updated
+    })
+    response.json({ user })
+  }))
+
+  app.post('/api/users/:id/reactivate', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = userReactivateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid reactivation data', details: parsed.error.issues })
       return
     }
-    if (existing.id === request.user?.id) {
-      response.status(403).json({ error: 'You cannot delete your own account' })
-      return
-    }
-    await db.user.delete({ where: { id: existing.id } })
-    response.status(204).send()
+    const user = await db.$transaction(async (tx) => {
+      const targetId = String(request.params.id)
+      const current = await tx.user.findUnique({ where: { id: targetId }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      if (!current) throw new UserManagementError(404, 'User not found')
+      assertUserStatusScope(request, current)
+      await lockUserAndCompanies(tx, current.id, current.companyId)
+      const locked = await tx.user.findUnique({ where: { id: current.id }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      if (!locked) throw new UserManagementError(404, 'User not found')
+      assertUserStatusScope(request, locked)
+      if (locked.isActive) return locked
+
+      const updated = await tx.user.update({ where: { id: locked.id }, data: { isActive: true }, select: { id: true, name: true, email: true, role: true, companyId: true, isActive: true } })
+      await tx.userStatusEvent.create({
+        data: {
+          userId: locked.id,
+          actorId: request.user!.id,
+          eventType: UserStatusEventType.REACTIVATED,
+          reason: parsed.data.reason,
+          actorName: request.user!.name,
+          actorEmail: request.user!.email,
+        },
+      })
+      return updated
+    })
+    response.json({ user })
+  }))
+
+  app.delete('/api/users/:id', authMiddleware, userWriteGuard, asyncHandler(async (_request, response) => {
+    response.status(405).json({ error: 'Physical user deletion is disabled; use the deactivation endpoint' })
   }))
 
   app.get('/api/companies', authMiddleware, asyncHandler(async (request, response) => {
@@ -2649,7 +2944,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
    */
   const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible' | 'lead auditor' | 'audit responsible' | 'finding responsible' | 'action responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
     if (!userId) return { ok: true, userId: null }
-    const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, companyId: true } })
     const label = roleLabel === 'risk owner' ? 'Risk owner'
       : roleLabel === 'mitigation responsible' ? 'Mitigation responsible'
       : roleLabel === 'lead auditor' ? 'Lead auditor'
@@ -2657,9 +2951,13 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       : roleLabel === 'finding responsible' ? 'Finding responsible'
       : roleLabel === 'action responsible' ? 'Action responsible'
       : 'Responsible'
-    if (!user) return { ok: false, status: 400, error: `${label} user not found` }
-    if (user.companyId !== companyId) return { ok: false, status: 403, error: `You can only assign a ${roleLabel} from your own company` }
-    return { ok: true, userId }
+    try {
+      await assertActiveAssignmentUser(db, userId, companyId, label)
+      return { ok: true, userId }
+    } catch (error) {
+      if (error instanceof UserAssignmentError) return { ok: false, status: error.status, error: error.message }
+      throw error
+    }
   }
 
   const resolveResponsible = async (responsibleId: string | null | undefined, companyId: string) => {
@@ -3099,7 +3397,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     // El actor de auditoría sale SIEMPRE de la sesión autenticada, nunca del cuerpo de la petición.
     const actor = request.user!
-    const risk = await createRiskWithAudit(db, actor, {
+    const risk = await createRiskWithAudit(db, actor, process.companyId, {
       processId: process.id,
       ...parsed.data,
       // Se escribe después del spread para que la categoría derivada del proceso pase siempre por
@@ -3121,7 +3419,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       try {
         // Ciclo + notificación + evento APPROVAL_REQUESTED comparten transacción: nunca queda un
         // ciclo confirmado sin su evento de auditoría.
-        await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: actor.id, riskOwnerId, actor, risk }))
+        await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: actor.id, riskOwnerId, companyId: process.companyId, actor, process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId, type: process.type }, risk }))
       } catch (cycleError) {
         console.error('[risk-approvals] failed to open approval cycle on risk creation', cycleError)
       }
@@ -3213,10 +3511,6 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // conservan, y el dueño puede volver a enviar el riesgo corregido con una acción explícita.
     // El ticket generado por el ciclo aprobado queda como está (el trabajo ya se creó). El marcado
     // y su evento ocuren dentro de la transacción definida más abajo, junto con la edición.
-    const relevantChanged = (data.name !== undefined && data.name !== existing.name)
-      || (data.description !== undefined && data.description !== existing.description)
-      || (data.inherentImpact !== undefined && data.inherentImpact !== existing.inherentImpact)
-      || (data.inherentProbability !== undefined && data.inherentProbability !== existing.inherentProbability)
     // El código es inmutable: cambiar el proceso o el tipo nunca renumera el identificador histórico.
     // Solo se asigna cuando el riesgo aún no tiene código (dato legado sin clasificar) y, en ese
     // mismo momento, su riskType se completa con la categoría del proceso. Los riesgos que ya
@@ -3232,30 +3526,55 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       ownerNames.mitigationOwner = (await db.user.findUnique({ where: { id: data.mitigationOwnerId }, select: { name: true } }))?.name ?? null
     }
     const risk = await withCodeRetry(() => db.$transaction(async (tx) => {
-      if (relevantChanged) {
-        const latestApproval = await tx.riskApproval.findFirst({ where: { riskId: existing.id }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } })
-        if (latestApproval?.status === 'APPROVED') {
-          await tx.riskApproval.update({ where: { id: latestApproval.id }, data: { status: 'OUTDATED' } })
+      // Risk edits and approval decisions serialize on the risk row. Re-read after the lock so the
+      // invalidation decision cannot be based on the pre-transaction object loaded above.
+      await lockRiskForUpdate(tx, existing.id)
+      const current = await tx.risk.findUnique({ where: { id: existing.id }, include: riskInclude })
+      if (!current || current.processId !== process.id) throw new UserAssignmentError(404, 'Risk not found')
+      const currentPlanOwnerChanged = data.mitigationOwnerId !== undefined && data.mitigationOwnerId !== current.mitigationOwnerId
+      const currentPlanDueDateChanged = data.mitigationDueDate !== undefined
+        && (data.mitigationDueDate === null
+          ? current.mitigationDueDate !== null
+          : current.mitigationDueDate === null || current.mitigationDueDate.toISOString().slice(0, 10) !== data.mitigationDueDate.toISOString().slice(0, 10))
+      const currentResidualChanged = (data.residualImpact !== undefined && data.residualImpact !== current.residualImpact)
+        || (data.residualProbability !== undefined && data.residualProbability !== current.residualProbability)
+      if (currentPlanOwnerChanged || currentPlanDueDateChanged || currentResidualChanged) {
+        const stageLock = riskStageLockError(current)
+        if (stageLock) throw new UserAssignmentError(409, stageLock)
+      }
+      if (currentResidualChanged && current.controls.length === 0) throw new UserAssignmentError(400, residualRequiresControlsError)
+      if (typeof data.riskOwnerId === 'string') await assertActiveAssignmentUser(tx, data.riskOwnerId, process.companyId, 'Risk owner')
+      if (typeof data.mitigationOwnerId === 'string') await assertActiveAssignmentUser(tx, data.mitigationOwnerId, process.companyId, 'Mitigation responsible')
+      const approvalRelevantChanged = (current.code === null)
+        || (data.name !== undefined && data.name !== current.name)
+        || (data.description !== undefined && data.description !== current.description)
+        || (data.inherentImpact !== undefined && data.inherentImpact !== current.inherentImpact)
+        || (data.inherentProbability !== undefined && data.inherentProbability !== current.inherentProbability)
+        || (data.riskOwnerId !== undefined && data.riskOwnerId !== current.riskOwnerId)
+      if (approvalRelevantChanged) {
+        const latestApproval = await tx.riskApproval.findFirst({ where: { riskId: current.id }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } })
+        if (latestApproval?.status === 'APPROVED' || latestApproval?.status === 'PENDING') {
+          await tx.riskApproval.update({ where: { id: latestApproval.id }, data: { status: 'OUTDATED', openKey: null } })
           await riskAuditWrite(tx, {
-            riskId: existing.id,
+            riskId: current.id,
             eventType: 'APPROVAL_OUTDATED',
             summary: 'Aprobación marcada para nueva revisión',
             actor,
-            metadata: { approvalId: latestApproval.id, previousStatus: 'APPROVED' },
+            metadata: { approvalId: latestApproval.id, previousStatus: latestApproval.status },
           })
         }
       }
-      const updated = existing.code === null
-        ? await tx.risk.update({ where: { id: existing.id }, data: { ...data, riskType: riskCategory, code: await nextRiskCodeFor(tx, riskCategory) }, include: riskInclude })
-        : await tx.risk.update({ where: { id: existing.id }, data, include: riskInclude })
+      const updated = current.code === null
+        ? await tx.risk.update({ where: { id: current.id }, data: { ...data, riskType: riskCategory, code: await nextRiskCodeFor(tx, riskCategory) }, include: riskInclude })
+        : await tx.risk.update({ where: { id: current.id }, data, include: riskInclude })
       // Solo se registra cuando hay variación real: un PATCH que no cambia nada no genera ruido,
       // y la asignación de código legado entra como cambio con su valor anterior (sin código).
       const changes: RiskAuditChange[] = [
-        ...(existing.code === null && updated.code !== null ? [{ field: 'code', label: 'Código', previousValue: null, newValue: updated.code } as RiskAuditChange] : []),
-        ...updatedRiskChanges(existing, data, ownerNames),
+        ...(current.code === null && updated.code !== null ? [{ field: 'code', label: 'Código', previousValue: null, newValue: updated.code } as RiskAuditChange] : []),
+        ...updatedRiskChanges(current, data, ownerNames),
       ]
       if (changes.length > 0) {
-        await riskAuditWrite(tx, { riskId: existing.id, eventType: 'RISK_UPDATED', summary: 'Riesgo actualizado', actor, changes })
+        await riskAuditWrite(tx, { riskId: current.id, eventType: 'RISK_UPDATED', summary: 'Riesgo actualizado', actor, changes })
       }
       return updated
     }))
@@ -3309,55 +3628,98 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(400).json({ error: 'Invalid approval decision', details: parsed.error.issues })
       return
     }
-    const approval = await db.riskApproval.findUnique({ where: { id: String(request.params.id) }, include: riskApprovalInclude })
-    if (!approval || !canDecideApproval(request, approval)) {
-      response.status(404).json({ error: 'Approval not found' })
-      return
-    }
-    if (approval.status !== 'PENDING') {
-      response.status(409).json({ error: 'This approval was already decided' })
-      return
-    }
+    const approvalId = String(request.params.id)
     const approving = parsed.data.decision === 'APPROVE'
     try {
       const settled = await db.$transaction(async (tx) => {
-        // El guard `status: 'PENDING'` hace que una decisión repetida no pase de largo: si otro
-        // usuario ya resolvió el ciclo, count === 0 y no se toca nada (evita doble ticket).
+        // The approval id is only a lookup anchor. Lock order is Risk -> Process -> review rows ->
+        // RiskApproval; all decision/invalidation paths use the risk row as their first lock. Every
+        // decision field is read again after the locks, never from a pre-transaction object.
+        const anchor = await tx.riskApproval.findUnique({ where: { id: approvalId }, select: { riskId: true } })
+        if (!anchor) return { kind: 'NOT_FOUND' as const }
+        await lockRiskForUpdate(tx, anchor.riskId)
+        const riskAnchor = await tx.risk.findUnique({ where: { id: anchor.riskId }, select: { processId: true } })
+        if (!riskAnchor) return { kind: 'NOT_FOUND' as const }
+        await lockProcessForUpdate(tx, riskAnchor.processId)
+        await lockRiskReviewRowsForUpdate(tx, anchor.riskId)
+        await lockRiskApprovalForUpdate(tx, approvalId)
+        const approval = await tx.riskApproval.findUnique({ where: { id: approvalId }, include: riskApprovalInclude })
+        if (!approval || !request.user) return { kind: 'NOT_FOUND' as const }
+        await lockUsersAndCompanies(tx, [request.user.id, ...(approval.risk.riskOwnerId ? [approval.risk.riskOwnerId] : [])], [request.user.companyId, approval.risk.process.companyId])
+        const actor = await tx.user.findUnique({ where: { id: request.user.id }, select: { id: true, email: true, name: true, role: true, companyId: true, isActive: true } })
+        if (!actor || actor.isActive === false || !canDecideApprovalForActor(actor, approval)) return { kind: 'NOT_FOUND' as const }
+        if (approval.status === 'OUTDATED') return { kind: 'OUTDATED' as const }
+        if (approval.status !== 'PENDING') return { kind: 'ALREADY_DECIDED' as const }
+        if (!approval.risk.riskOwnerId) return { kind: 'INACTIVE' as const }
+
+        const owner = await tx.user.findUnique({ where: { id: approval.risk.riskOwnerId }, select: { id: true, companyId: true, isActive: true } })
+        if (!owner || owner.companyId !== approval.risk.process.companyId || owner.isActive === false) return { kind: 'INACTIVE' as const }
+
+        const requestEvents = await tx.riskAuditEvent.findMany({
+          where: { riskId: approval.riskId, eventType: RiskAuditEventType.APPROVAL_REQUESTED },
+          orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+          select: { metadata: true },
+        })
+        const requestedEvent = requestEvents.find((event) => {
+          const metadata = event.metadata
+          return metadata && typeof metadata === 'object' && !Array.isArray(metadata) && (metadata as Record<string, unknown>).approvalId === approval.id
+        })
+        const currentSnapshot = riskApprovalSnapshot(approval.risk, approval.risk.process)
+        if (!requestedEvent || !riskApprovalSnapshotMatches(requestedEvent.metadata, currentSnapshot)) {
+          await tx.riskApproval.update({ where: { id: approval.id }, data: { status: 'OUTDATED', openKey: null } })
+          await riskAuditWrite(tx, {
+            riskId: approval.riskId,
+            eventType: 'APPROVAL_OUTDATED',
+            summary: 'Decisión rechazada: aprobación obsoleta',
+            actor,
+            metadata: { approvalId: approval.id, reason: requestedEvent ? 'RISK_CHANGED_AFTER_REQUEST' : 'SNAPSHOT_MISSING' },
+          })
+          await createNotificationIfAbsent(tx, {
+            userId: approval.requestedById,
+            title: `${approval.risk.code ? `Riesgo ${approval.risk.code}` : 'Riesgo'} requiere nueva revisión`,
+            body: `«${approval.risk.name}» cambió después de solicitar la aprobación. Debe enviarse a revisión nuevamente.`,
+            link: approvalNotificationLink(approval.id),
+          }, { companyId: approval.risk.process.companyId })
+          return { kind: 'OUTDATED' as const }
+        }
+
+        // The status predicate is retained as an idempotency guard for retries and concurrent
+        // decisions, even though the approval row is already locked in PostgreSQL.
         const guarded = await tx.riskApproval.updateMany({
           where: { id: approval.id, status: 'PENDING' },
-          data: { status: approving ? 'APPROVED' : 'REJECTED', openKey: null, decidedById: request.user!.id, decidedAt: new Date(), comment: parsed.data.comment ?? null },
+          data: { status: approving ? 'APPROVED' : 'REJECTED', openKey: null, decidedById: actor.id, decidedAt: new Date(), comment: parsed.data.comment ?? null },
         })
-        if (guarded.count === 0) return false
+        if (guarded.count === 0) return { kind: 'ALREADY_DECIDED' as const }
         let createdTicketId: string | null = null
         if (approving) {
-          // "Aprobar y aceptar": además del ciclo, el veredicto formal del riesgo queda ACCEPTED.
           await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'ACCEPTED' } })
-          // Ticket único por ciclo (RiskApproval.ticketId es único): un reintento jamás duplica.
-           const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, request.user!.id), include: ticketInclude })
-           await ticketAuditWrite(tx, {
-             ticketId: ticket.id,
-             eventType: TicketAuditEventType.TICKET_CREATED,
-             summary: 'Ticket de seguimiento creado',
-             actor: request.user!,
-             changes: ticketAuditCreatedChanges(ticketAuditSnapshot(ticket)),
-             metadata: { approvalId: approval.id, origin: 'RISK_APPROVAL' },
-           })
+          const ticket = await tx.ticket.create({ data: ticketDataFromRiskApproval(approval, actor.id), include: ticketInclude })
+          await ticketAuditWrite(tx, {
+            ticketId: ticket.id,
+            eventType: TicketAuditEventType.TICKET_CREATED,
+            summary: 'Ticket de seguimiento creado',
+            actor,
+            changes: ticketAuditCreatedChanges(ticketAuditSnapshot(ticket)),
+            metadata: { approvalId: approval.id, origin: 'RISK_APPROVAL' },
+          })
           await tx.riskApproval.update({ where: { id: approval.id }, data: { ticketId: ticket.id } })
+          await createTicketAssignmentApproval(tx, {
+            ticketId: ticket.id,
+            requestedById: approval.requestedById,
+            proposedAssigneeId: approval.risk.riskOwnerId,
+            source: TicketAssignmentApprovalSource.RISK_APPROVAL,
+            riskApprovalId: approval.id,
+            actor,
+          })
           createdTicketId = ticket.id
         } else {
-          // "Rechazar": el veredicto formal queda REJECTED en la MISMA transacción que el ciclo.
-          // Es la única vía (junto con APPROVE) para escribir acceptanceStatus: ningún alta ni
-          // PATCH del riesgo puede tocarlo, de modo que el formulario siempre pinta lo persistido.
           await tx.risk.update({ where: { id: approval.riskId }, data: { acceptanceStatus: 'REJECTED' } })
         }
-        // Decisión y ticket quedan en el historial dentro de la MISMA transacción que los cambió:
-        // si la transacción revierte, tampoco se registran (nunca hay evento sin operación ni
-        // operación sin evento). El actor es la sesión que decidió; el comentario, en metadata.
         await riskAuditWrite(tx, {
           riskId: approval.riskId,
           eventType: 'APPROVAL_DECIDED',
           summary: approving ? 'Riesgo aprobado' : 'Riesgo rechazado',
-          actor: request.user!,
+          actor,
           metadata: {
             approvalId: approval.id,
             decision: approving ? 'APPROVED' : 'REJECTED',
@@ -3369,24 +3731,34 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
             riskId: approval.riskId,
             eventType: 'TICKET_CREATED',
             summary: 'Ticket de seguimiento creado',
-            actor: request.user!,
+            actor,
             metadata: { ticketId: createdTicketId, approvalId: approval.id },
           })
         }
         const level = riskLevelFor(approval.risk.inherentImpact, approval.risk.inherentProbability)
-        await tx.notification.create({
-          data: {
-            userId: approval.requestedById,
-            title: `${approval.risk.code ? `Riesgo ${approval.risk.code}` : 'Riesgo'} ${approving ? 'aprobado' : 'rechazado'}`,
-            body: approving
-              ? `«${approval.risk.name}» fue aprobado y aceptado; se generó un ticket de seguimiento.`
-              : `«${approval.risk.name}» fue rechazado por ${request.user!.name} (nivel inherente ${riskLevelNames[level]}).${parsed.data.comment ? ` Motivo: ${parsed.data.comment}` : ''}`,
-            link: approvalNotificationLink(approval.id),
-          },
-        })
-        return true
+        await createNotificationIfAbsent(tx, {
+          userId: approval.requestedById,
+          title: `${approval.risk.code ? `Riesgo ${approval.risk.code}` : 'Riesgo'} ${approving ? 'aprobado' : 'rechazado'}`,
+          body: approving
+            ? `«${approval.risk.name}» fue aprobado y aceptado; se generó un ticket de seguimiento.`
+            : `«${approval.risk.name}» fue rechazado por ${actor.name} (nivel inherente ${riskLevelNames[level]}).${parsed.data.comment ? ` Motivo: ${parsed.data.comment}` : ''}`,
+          link: approvalNotificationLink(approval.id),
+        }, { companyId: approval.risk.process.companyId })
+        return { kind: 'DECIDED' as const }
       })
-      if (!settled) {
+      if (settled.kind === 'NOT_FOUND') {
+        response.status(404).json({ error: 'Approval not found' })
+        return
+      }
+      if (settled.kind === 'INACTIVE') {
+        response.status(409).json({ error: 'The risk owner is inactive or no longer belongs to the company' })
+        return
+      }
+      if (settled.kind === 'OUTDATED') {
+        response.status(409).json({ error: 'This approval is outdated; request a new approval before deciding', reason: 'OUTDATED_APPROVAL' })
+        return
+      }
+      if (settled.kind === 'ALREADY_DECIDED') {
         response.status(409).json({ error: 'This approval was already decided' })
         return
       }
@@ -3398,13 +3770,71 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(500).json({ error: 'The approval decision could not be saved; it can be retried' })
       return
     }
-    const updated = await db.riskApproval.findUnique({ where: { id: approval.id }, include: riskApprovalInclude })
+    const updated = await db.riskApproval.findUnique({ where: { id: approvalId }, include: riskApprovalInclude })
     // El ticket enlazado se relee con su include para devolver la referencia al riesgo de origen
     // ya resuelta (riskApprovals), que se calcula después de unirlo al ciclo.
     const finalTicket = updated?.ticketId
       ? (await db.ticket.findUnique({ where: { id: updated.ticketId }, include: ticketInclude })) ?? null
       : null
     response.json({ approval: updated ? riskApprovalView(updated) : null, ticket: finalTicket ? ticketView(finalTicket) : null })
+  }))
+
+  // ---- Solicitudes de asignacion de tickets ----
+  // Fase 2 expone lectura y decisiones; las rutas de alta de tickets y actividades se conectan en
+  // Fase 3. El servicio centralizado ya queda disponible para esas transacciones futuras.
+  app.get('/api/ticket-assignment-approvals', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = ticketAssignmentApprovalQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid assignment approval filters', details: parsed.error.issues })
+      return
+    }
+    try {
+      const approvals = await listTicketAssignmentApprovals(db, request.user!, parsed.data.status as TicketAssignmentApprovalStatus | undefined)
+      response.json({ approvals })
+    } catch (error) {
+      if (ticketAssignmentApprovalErrorResponse(response, error)) return
+      throw error
+    }
+  }))
+
+  app.get('/api/ticket-assignment-approvals/:id', authMiddleware, asyncHandler(async (request, response) => {
+    try {
+      const approval = await getTicketAssignmentApproval(db, String(request.params.id), request.user!)
+      response.json({ approval })
+    } catch (error) {
+      if (ticketAssignmentApprovalErrorResponse(response, error)) return
+      throw error
+    }
+  }))
+
+  app.post('/api/ticket-assignment-approvals/:id/decision', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = ticketAssignmentApprovalDecisionSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid assignment approval decision', details: parsed.error.issues })
+      return
+    }
+    try {
+      const approval = await decideTicketAssignmentApproval(db, { id: String(request.params.id), decision: parsed.data.decision, comment: parsed.data.comment, actor: request.user! })
+      response.json({ approval })
+    } catch (error) {
+      if (ticketAssignmentApprovalErrorResponse(response, error)) return
+      throw error
+    }
+  }))
+
+  app.post('/api/ticket-assignment-approvals/:id/cancel', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = ticketAssignmentApprovalCancelSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid assignment approval cancellation', details: parsed.error.issues })
+      return
+    }
+    try {
+      const approval = await cancelTicketAssignmentApproval(db, { id: String(request.params.id), comment: parsed.data.comment, actor: request.user! })
+      response.json({ approval })
+    } catch (error) {
+      if (ticketAssignmentApprovalErrorResponse(response, error)) return
+      throw error
+    }
   }))
 
   app.post('/api/processes/:processId/risks/:riskId/approvals', authMiddleware, asyncHandler(async (request, response) => {
@@ -3440,7 +3870,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     try {
       // Ciclo + notificación + evento APPROVAL_REQUESTED comparten transacción: el índice único
       // de openKey sigue coordinando los reenvíos simultáneos (uno gana, el otro recibe 409).
-      const approval = await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: user.id, riskOwnerId: approvalOwnerId, actor: user, risk }))
+       const approval = await db.$transaction((tx) => createRiskApprovalCycle(tx, { riskId: risk.id, requestedById: user.id, riskOwnerId: approvalOwnerId, companyId: process.companyId, actor: user, process: { id: process.id, name: process.name, code: process.code, companyId: process.companyId, type: process.type }, risk }))
       const created = await db.riskApproval.findUnique({ where: { id: approval.id }, include: riskApprovalInclude })
       response.status(201).json({ approval: created ? riskApprovalView(created) : null })
     } catch (cycleError) {
@@ -3733,7 +4163,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
    * y riesgo que pertenezca exactamente a ese proceso.
    */
   const mitigationActivityInclude = {
-    responsible: { select: { id: true, name: true } },
+    responsible: { select: { id: true, name: true, isActive: true } },
     ticket: { select: { id: true, status: true } },
   } as const
 
@@ -3826,7 +4256,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       }
       diagnosticId = diagnostic.id
     }
-    const { item } = await db.$transaction(async (tx) => {
+     const { item, assignmentApproval } = await db.$transaction(async (tx) => {
       const actionPlanId = existingPlan?.id ?? (await tx.actionPlan.create({
         data: {
           diagnosticId: diagnosticId!,
@@ -3845,12 +4275,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           description: parsed.data.description ?? parsed.data.title,
           priority: Priority.MEDIUM,
           status: ActionItemStatus.PENDING,
-          responsibleId: responsible.userId,
+           responsibleId: null,
           dueDate: parsed.data.dueDate,
         },
         include: mitigationActivityInclude,
       })
-      const ticket = await tx.ticket.create({
+       const ticket = await tx.ticket.create({
         data: ticketDataFromActionItem({
           title: created.title,
           description: created.description,
@@ -3860,26 +4290,30 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           dueDate: created.dueDate,
           actionItemId: created.id,
           createdById: request.user!.id,
-        }),
+         }, null),
         include: ticketInclude,
       })
-      await ticketAuditWrite(tx, {
-        ticketId: ticket.id,
-        eventType: TicketAuditEventType.TICKET_CREATED,
+       await ticketAuditWrite(tx, {
+         ticketId: ticket.id,
+         eventType: TicketAuditEventType.TICKET_CREATED,
         summary: 'Ticket de mitigacion creado',
         actor: request.user!,
         changes: ticketAuditCreatedChanges(ticketAuditSnapshot(ticket)),
-        metadata: { actionItemId: ticket.actionItemId, origin: 'MITIGATION_ACTIVITY' },
-      })
-      // Aviso de asignación: la actividad nace con responsable, así que ese responsable se entera
-      // aquí mismo (mismo link idempotente tickets/<id> que el resto del sistema).
-      await notifyTicketAssigned(tx, ticket, ticket.assignedToId, request.user!.id)
+         metadata: { actionItemId: ticket.actionItemId, origin: 'MITIGATION_ACTIVITY' },
+       })
+       const createdAssignmentApproval = await createTicketAssignmentApproval(tx, {
+         ticketId: ticket.id,
+         requestedById: request.user!.id,
+         proposedAssigneeId: responsible.userId!,
+         source: TicketAssignmentApprovalSource.ACTION_ITEM,
+         actor: request.user!,
+       })
       // Relectura tras crear el ticket: la actividad recién escrita se leyó antes de que el
       // ticket existiera, y la respuesta debe mostrarlo ya asociado.
       const refreshed = await tx.actionItem.findUnique({ where: { id: created.id }, include: mitigationActivityInclude })
-      return { item: refreshed ?? created }
-    })
-    response.status(201).json({ activity: mitigationActivityView(item) })
+       return { item: refreshed ?? created, assignmentApproval: createdAssignmentApproval }
+     })
+     response.status(201).json({ activity: mitigationActivityView(item), assignmentApproval })
   }))
 
   app.get('/api/processes/:processId/kpis', authMiddleware, asyncHandler(async (request, response) => {
@@ -3927,23 +4361,27 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(monitorResponsible.status).json({ error: monitorResponsible.error })
       return
     }
-    const kpi = await db.kpi.create({
-      data: {
-        processId: process.id,
-        name: parsed.data.name,
-        description: parsed.data.description,
-        frequency: parsed.data.frequency,
-        target: parsed.data.target,
-        formula: parsed.data.formula,
-        dataSource: parsed.data.dataSource,
-        unit: parsed.data.unit,
-        reportResponsibleId: reportResponsible.responsibleId,
-        monitorResponsibleId: monitorResponsible.responsibleId,
-        greenThreshold: parsed.data.greenThreshold ?? null,
-        yellowThreshold: parsed.data.yellowThreshold ?? null,
-        redThreshold: parsed.data.redThreshold ?? null,
-      },
-      include: kpiInclude,
+    const kpi = await runInTransaction(db, async (tx) => {
+      if (reportResponsible.responsibleId) await assertActiveAssignmentUser(tx, reportResponsible.responsibleId, process.companyId, 'Responsible')
+      if (monitorResponsible.responsibleId) await assertActiveAssignmentUser(tx, monitorResponsible.responsibleId, process.companyId, 'Responsible')
+      return tx.kpi.create({
+        data: {
+          processId: process.id,
+          name: parsed.data.name,
+          description: parsed.data.description,
+          frequency: parsed.data.frequency,
+          target: parsed.data.target,
+          formula: parsed.data.formula,
+          dataSource: parsed.data.dataSource,
+          unit: parsed.data.unit,
+          reportResponsibleId: reportResponsible.responsibleId,
+          monitorResponsibleId: monitorResponsible.responsibleId,
+          greenThreshold: parsed.data.greenThreshold ?? null,
+          yellowThreshold: parsed.data.yellowThreshold ?? null,
+          redThreshold: parsed.data.redThreshold ?? null,
+        },
+        include: kpiInclude,
+      })
     })
     response.status(201).json({ kpi: kpiView(kpi) })
   }))
@@ -3991,7 +4429,11 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.greenThreshold !== undefined) data.greenThreshold = parsed.data.greenThreshold
     if (parsed.data.yellowThreshold !== undefined) data.yellowThreshold = parsed.data.yellowThreshold
     if (parsed.data.redThreshold !== undefined) data.redThreshold = parsed.data.redThreshold
-    const kpi = await db.kpi.update({ where: { id: existing.id }, data, include: kpiInclude })
+    const kpi = await runInTransaction(db, async (tx) => {
+      if (typeof data.reportResponsibleId === 'string') await assertActiveAssignmentUser(tx, data.reportResponsibleId, process.companyId, 'Responsible')
+      if (typeof data.monitorResponsibleId === 'string') await assertActiveAssignmentUser(tx, data.monitorResponsibleId, process.companyId, 'Responsible')
+      return tx.kpi.update({ where: { id: existing.id }, data, include: kpiInclude })
+    })
     response.json({ kpi: kpiView(kpi) })
   }))
 
@@ -4063,6 +4505,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
     const procedure = await db.$transaction(async (tx) => {
+      if (responsible.responsibleId) await assertActiveAssignmentUser(tx, responsible.responsibleId, process.companyId, 'Responsible')
       const created = await tx.procedure.create({
         data: {
           processId: process.id,
@@ -4135,6 +4578,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
     const procedure = await db.$transaction(async (tx) => {
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Responsible')
       const updated = await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude })
       await procedureHistoryWrite(tx, { procedure: updated, action: 'UPDATED', actor, changes, snapshot: procedureSnapshot(updated) })
       return updated
@@ -4612,6 +5056,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const audit = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
+      if (typeof data.leadAuditorId === 'string') await assertActiveAssignmentUser(tx, data.leadAuditorId, process.companyId, 'Lead auditor')
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Audit responsible')
       const updated = await tx.audit.update({ where: { id: existing.id }, data, include: auditInclude })
       await auditEventWrite(tx, {
         auditId: updated.id,
@@ -4945,6 +5391,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const finding = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
+      if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, process.companyId, 'Finding responsible')
       const created = await tx.auditFinding.create({
         data: {
           auditId: existing.id,
@@ -5101,6 +5548,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const finding = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Finding responsible')
       const updated = await tx.auditFinding.update({ where: { id: existing.id }, data, include: auditFindingInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -6482,6 +6930,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const action = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, audit.process.companyId, 'Action responsible')
       const created = await tx.auditCorrectiveAction.create({
         data: {
           findingId: finding.id,
@@ -6597,6 +7046,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     const action = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, audit.process.companyId, 'Action responsible')
       const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -7600,7 +8050,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     return { ok: true, riskId: risk.id }
   }
 
-  app.post('/api/diagnostics/:id/action-plans', authMiddleware, asyncHandler(async (request, response) => {
+  app.post('/api/diagnostics/:id/action-plans', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = actionPlanCreateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid action plan data', details: parsed.error.issues })
@@ -7633,7 +8083,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     response.json({ actionPlan: actionPlanView(actionPlan) })
   }))
 
-  app.patch('/api/action-plans/:id', authMiddleware, asyncHandler(async (request, response) => {
+  app.patch('/api/action-plans/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = actionPlanUpdateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid action plan data', details: parsed.error.issues })
@@ -7657,17 +8107,25 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     response.json({ actionPlan: actionPlanView(actionPlan) })
   }))
 
-  app.delete('/api/action-plans/:id', authMiddleware, asyncHandler(async (request, response) => {
+  app.delete('/api/action-plans/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const existing = await db.actionPlan.findUnique({ where: { id: String(request.params.id) }, include: { diagnostic: { include: { company: { select: { id: true } } } } } })
     if (!existing || !canAccessCompany(request, existing.diagnostic.company)) {
       response.status(404).json({ error: 'Action plan not found' })
       return
     }
-    await db.actionPlan.delete({ where: { id: existing.id } })
+    await db.$transaction(async (tx) => {
+      const linkedTickets = await tx.ticket.findMany({ where: { actionItem: { actionPlanId: existing.id } }, select: { id: true } })
+      await cancelPendingTicketAssignmentApprovalsForTickets(tx, {
+        ticketIds: linkedTickets.map((linkedTicket) => linkedTicket.id),
+        actor: request.user!,
+        comment: 'Solicitud cancelada porque se elimino el plan de accion.',
+      })
+      await tx.actionPlan.delete({ where: { id: existing.id } })
+    })
     response.status(204).send()
   }))
 
-  app.post('/api/diagnostics/:id/strategy-tasks', authMiddleware, asyncHandler(async (request, response) => {
+  app.post('/api/diagnostics/:id/strategy-tasks', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = strategyTasksCreateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid strategy task data', details: parsed.error.issues })
@@ -7690,10 +8148,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     const strategyPriority = strategyBandToActionPriority[strategy.weightingBand]
     const responsibleIds = [...new Set(parsed.data.tasks.map((task) => task.responsibleId))]
-    const responsibleUsers = await Promise.all(responsibleIds.map((id) => db.user.findUnique({ where: { id }, select: { id: true, companyId: true } })))
+    const responsibleUsers = await Promise.all(responsibleIds.map((id) => db.user.findUnique({ where: { id }, select: { id: true, companyId: true, isActive: true } })))
     for (const responsible of responsibleUsers) {
       if (!responsible) {
         response.status(400).json({ error: 'Responsible user not found' })
+        return
+      }
+      if (responsible.isActive === false) {
+        response.status(409).json({ error: 'Responsible user is inactive' })
         return
       }
       if (request.user?.role !== Role.SUPERUSER && responsible.companyId !== request.user?.companyId) {
@@ -7733,39 +8195,46 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
             skippedTasks.push(task.title)
             continue
           }
-          const created = await tx.actionItem.create({
-            data: {
-              actionPlanId: plan.id,
-              title: task.title,
-              description: task.title,
-              priority: strategyPriority,
-              status: 'PENDING',
-              responsibleId: task.responsibleId,
-              dueDate: task.dueDate,
-            },
-            include: actionItemInclude,
-          })
+           const created = await tx.actionItem.create({
+             data: {
+               actionPlanId: plan.id,
+               title: task.title,
+               description: task.title,
+               priority: strategyPriority,
+               status: 'PENDING',
+               responsibleId: null,
+               dueDate: task.dueDate,
+             },
+             include: actionItemInclude,
+           })
            const createdTicket = await tx.ticket.create({
             data: ticketDataFromActionItem({
               title: created.title,
               description: created.description,
               status: created.status,
               priority: created.priority,
-              responsibleId: created.responsibleId,
-              dueDate: created.dueDate,
-              actionItemId: created.id,
-              createdById: request.user!.id,
-            }),
+               responsibleId: created.responsibleId,
+               dueDate: created.dueDate,
+               actionItemId: created.id,
+               createdById: request.user!.id,
+             }),
              include: ticketInclude,
            })
-           await ticketAuditWrite(tx, {
-             ticketId: createdTicket.id,
-             eventType: TicketAuditEventType.TICKET_CREATED,
+             await ticketAuditWrite(tx, {
+              ticketId: createdTicket.id,
+              eventType: TicketAuditEventType.TICKET_CREATED,
              summary: 'Ticket de plan de accion creado',
              actor: request.user!,
              changes: ticketAuditCreatedChanges(ticketAuditSnapshot(createdTicket)),
-             metadata: { actionItemId: created.id, origin: 'STRATEGY_TASKS' },
-           })
+              metadata: { actionItemId: created.id, origin: 'STRATEGY_TASKS' },
+            })
+            await createTicketAssignmentApproval(tx, {
+              ticketId: createdTicket.id,
+              requestedById: request.user!.id,
+              proposedAssigneeId: task.responsibleId,
+              source: TicketAssignmentApprovalSource.STRATEGY_TASK,
+              actor: request.user!,
+            })
           existingTaskTitles.add(taskKey)
         }
         const refreshedPlan = await tx.actionPlan.findUnique({ where: { id: plan.id }, include: actionPlanInclude })
@@ -7781,13 +8250,13 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
   }))
 
-  app.post('/api/action-plans/:id/items', authMiddleware, asyncHandler(async (request, response) => {
+  app.post('/api/action-plans/:id/items', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = actionItemCreateSchema.safeParse(request.body)
     if (!parsed.success) {
       response.status(400).json({ error: 'Invalid action item data', details: parsed.error.issues })
       return
     }
-    const actionPlan = await db.actionPlan.findUnique({ where: { id: String(request.params.id) }, select: { id: true, diagnosticId: true, riskId: true, diagnostic: { select: { company: { select: { id: true } } } } } })
+    const actionPlan = await db.actionPlan.findUnique({ where: { id: String(request.params.id) }, select: { id: true, diagnosticId: true, riskId: true, strategySource: true, diagnostic: { select: { company: { select: { id: true } } } } } })
     if (!actionPlan || !canAccessCompany(request, actionPlan.diagnostic.company)) {
       response.status(404).json({ error: 'Action plan not found' })
       return
@@ -7816,9 +8285,13 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       }
     }
     if (parsed.data.responsibleId) {
-      const responsible = await db.user.findUnique({ where: { id: parsed.data.responsibleId }, select: { id: true, companyId: true } })
+      const responsible = await db.user.findUnique({ where: { id: parsed.data.responsibleId }, select: { id: true, companyId: true, isActive: true } })
       if (!responsible) {
         response.status(400).json({ error: 'Responsible user not found' })
+        return
+      }
+      if (responsible.isActive === false) {
+        response.status(409).json({ error: 'Responsible user is inactive' })
         return
       }
       if (request.user?.role !== Role.SUPERUSER && responsible.companyId !== request.user?.companyId) {
@@ -7826,31 +8299,44 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const { item, ticket } = await db.$transaction(async (tx) => {
-      const created = await tx.actionItem.create({ data: { actionPlanId: actionPlan.id, ...parsed.data }, include: actionItemInclude })
+       const { item, ticket, assignmentApproval } = await db.$transaction(async (tx) => {
+         const { responsibleId, ...actionItemData } = parsed.data
+         const created = await tx.actionItem.create({ data: { actionPlanId: actionPlan.id, ...actionItemData, responsibleId: null }, include: actionItemInclude })
       // Alta de una actividad ya completada: también puede cerrar la mitigación del riesgo, así
       // que se corre la misma comprobación (si el plan no estaba completo, no hace nada).
       if (created.status === ActionItemStatus.COMPLETED) {
         await notifyMitigationPlanCompleted(tx, created.actionPlanId)
       }
-      const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
-       const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }), include: ticketInclude })
-       if (!existingTicket) {
-         await ticketAuditWrite(tx, {
-           ticketId: linkedTicket.id,
+       const existingTicket = await tx.ticket.findUnique({ where: { actionItemId: created.id }, include: ticketInclude })
+          const linkedTicket = existingTicket ?? await tx.ticket.create({ data: ticketDataFromActionItem({ title: created.title, description: created.description, status: created.status, priority: created.priority, responsibleId: created.responsibleId, dueDate: created.dueDate, actionItemId: created.id, createdById: request.user!.id }, null), include: ticketInclude })
+          await assertMitigationEvidence(tx, {
+            ticketId: linkedTicket.id,
+            actionItemId: created.id,
+            willCompleteActivity: created.status === ActionItemStatus.COMPLETED,
+            wasActivityCompleted: false,
+          })
+          if (!existingTicket) {
+           await ticketAuditWrite(tx, {
+            ticketId: linkedTicket.id,
            eventType: TicketAuditEventType.TICKET_CREATED,
            summary: 'Ticket de actividad creado',
            actor: request.user!,
            changes: ticketAuditCreatedChanges(ticketAuditSnapshot(linkedTicket)),
-           metadata: { actionItemId: created.id, origin: 'ACTION_ITEM' },
+            metadata: { actionItemId: created.id, origin: 'ACTION_ITEM' },
+          })
+         }
+       const assignmentApproval = responsibleId
+         ? await createTicketAssignmentApproval(tx, {
+           ticketId: linkedTicket.id,
+           requestedById: request.user!.id,
+           proposedAssigneeId: responsibleId,
+           source: actionPlan.strategySource ? TicketAssignmentApprovalSource.STRATEGY_TASK : TicketAssignmentApprovalSource.ACTION_ITEM,
+           actor: request.user!,
          })
-       }
-      // Aviso de asignación: si la actividad nace con responsable, ese responsable se entera aquí
-      // mismo (mismo link idempotente que el resto de reasignaciones: tickets/<id>).
-      await notifyTicketAssigned(tx, linkedTicket, linkedTicket.assignedToId, request.user!.id)
-      return { item: created, ticket: linkedTicket }
-    })
-    response.status(201).json({ item: actionItemView(item), ticket: ticketView(ticket) })
+         : null
+       return { item: created, ticket: linkedTicket, assignmentApproval }
+     })
+     response.status(201).json({ item: actionItemView(item), ticket: ticketView(ticket), ...(assignmentApproval ? { assignmentApproval } : {}) })
   }))
 
   app.patch('/api/action-items/:id', authMiddleware, asyncHandler(async (request, response) => {
@@ -7864,6 +8350,17 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Action item not found' })
       return
     }
+    if (request.user?.role === Role.COMPANY_USER) {
+      if (existing.responsibleId !== request.user.id) {
+        response.status(403).json({ error: 'You can only update activities assigned to you' })
+        return
+      }
+      const requestedFields = Object.keys(parsed.data)
+      if (requestedFields.some((field) => field !== 'status')) {
+        response.status(403).json({ error: 'Company users can only update activity status' })
+        return
+      }
+    }
     if (parsed.data.recommendationId) {
       const recommendation = await db.recommendation.findUnique({ where: { id: parsed.data.recommendationId }, select: { diagnosticId: true } })
       if (!recommendation || recommendation.diagnosticId !== existing.actionPlan.diagnosticId) {
@@ -7872,13 +8369,17 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       }
     }
     if (parsed.data.responsibleId) {
-      const responsible = await db.user.findUnique({ where: { id: parsed.data.responsibleId }, select: { id: true, companyId: true } })
+      const responsible = await db.user.findUnique({ where: { id: parsed.data.responsibleId }, select: { id: true, companyId: true, isActive: true } })
       if (!responsible) {
         response.status(400).json({ error: 'Responsible user not found' })
         return
       }
       if (request.user?.role !== Role.SUPERUSER && responsible.companyId !== request.user?.companyId) {
         response.status(403).json({ error: 'You can only assign responsibilities to users of your own company' })
+        return
+      }
+      if (responsible.isActive === false && parsed.data.responsibleId !== existing.responsibleId) {
+        response.status(409).json({ error: 'Responsible user is inactive' })
         return
       }
     }
@@ -7901,63 +8402,86 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // desde otro estado se reevalúa el plan de mitigación del riesgo. Editar un ítem ya
     // completado sin tocar su estado, o marcarlo CANCELLED, no dispara el aviso.
     const justCompleted = parsed.data.status === ActionItemStatus.COMPLETED && existing.status !== ActionItemStatus.COMPLETED
-    const item = await db.$transaction(async (tx) => {
+    const requestedResponsibleId = parsed.data.responsibleId
+      const result = await db.$transaction(async (tx) => {
+       const linkedBefore = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, include: ticketInclude })
+       if (linkedBefore) await lockTicketForUpdate(tx, linkedBefore.id)
+       if (linkedBefore && requestedResponsibleId === null) {
+         await cancelPendingTicketAssignmentApprovals(tx, {
+           ticketId: linkedBefore.id,
+           actor: request.user!,
+           comment: 'Solicitud cancelada porque la actividad fue desasignada.',
+         })
+       }
       // Gate de evidencia: cerrar una actividad de un plan de mitigación de un riesgo exige tener
       // al menos un PDF en el ticket que la representa. Se comprueba ANTES de escribir y dentro de
       // la misma transacción (si falla, no cambia ni el estado ni el ticket). Solo corre sobre
       // transiciones nuevas a COMPLETED: CANCELLED no afirma que la mitigación se ejecutara, y una
       // actividad ya completada se puede reescribir sin volver a exigir evidencia.
       if (parsed.data.status !== undefined) {
-        const gateTicket = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, select: { id: true } })
         await assertMitigationEvidence(tx, {
-          ticketId: gateTicket?.id ?? null,
+          ticketId: linkedBefore?.id ?? null,
           actionItemId: existing.id,
           willCompleteActivity: parsed.data.status === ActionItemStatus.COMPLETED,
           wasActivityCompleted: existing.status === ActionItemStatus.COMPLETED,
         })
       }
-      const updated = await tx.actionItem.update({ where: { id: existing.id }, data: parsed.data, include: actionItemInclude })
-       const linked = await tx.ticket.findUnique({ where: { actionItemId: updated.id }, include: ticketInclude })
-      const ticketData: Prisma.TicketUncheckedUpdateInput = {}
+       const pendingResponsibleId = requestedResponsibleId && requestedResponsibleId !== existing.responsibleId ? requestedResponsibleId : null
+       const { responsibleId: _responsibleId, ...actionItemData } = parsed.data
+       const updated = await tx.actionItem.update({
+         where: { id: existing.id },
+         data: { ...actionItemData, ...(requestedResponsibleId !== undefined && !pendingResponsibleId ? { responsibleId: requestedResponsibleId } : {}) },
+         include: actionItemInclude,
+       })
+       const linked = linkedBefore
+       const ticketData: Prisma.TicketUncheckedUpdateInput = {}
       if (parsed.data.title !== undefined) ticketData.title = parsed.data.title
       if (parsed.data.description !== undefined) ticketData.description = parsed.data.description
       if (parsed.data.priority !== undefined) ticketData.priority = actionItemToTicketPriority[parsed.data.priority]
-      if (parsed.data.responsibleId !== undefined) ticketData.assignedToId = parsed.data.responsibleId
+       if (requestedResponsibleId !== undefined && !pendingResponsibleId) ticketData.assignedToId = requestedResponsibleId
       if (parsed.data.dueDate !== undefined) ticketData.dueDate = parsed.data.dueDate
       if (parsed.data.status !== undefined) ticketData.status = actionItemToTicketStatus[parsed.data.status]
-      let linkedTicketId: string
-       if (linked) {
-         linkedTicketId = linked.id
-         if (Object.keys(ticketData).length > 0) {
-           const updatedTicket = await tx.ticket.update({ where: { id: linked.id }, data: ticketData, include: ticketInclude })
-           await ticketAuditWriteDiff(tx, linked.id, request.user!, ticketAuditSnapshot(linked), ticketAuditSnapshot(updatedTicket), { actionItemId: updated.id, origin: 'ACTION_ITEM' })
-         }
-       } else {
-         const linkedTicket = await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }) })
-         linkedTicketId = linkedTicket.id
-         await ticketAuditWrite(tx, {
-           ticketId: linkedTicket.id,
+       let linkedTicketId: string
+       let linkedTicket: Prisma.TicketGetPayload<{ include: typeof ticketInclude }>
+         if (linked) {
+           linkedTicketId = linked.id
+           linkedTicket = linked
+           if (Object.keys(ticketData).length > 0) {
+             const updatedTicket = await tx.ticket.update({ where: { id: linked.id }, data: ticketData, include: ticketInclude })
+             await ticketAuditWriteDiff(tx, linked.id, request.user!, ticketAuditSnapshot(linked), ticketAuditSnapshot(updatedTicket), { actionItemId: updated.id, origin: 'ACTION_ITEM' })
+             linkedTicket = updatedTicket
+           }
+         } else {
+           linkedTicket = await tx.ticket.create({ data: ticketDataFromActionItem({ title: updated.title, description: updated.description, status: updated.status, priority: updated.priority, responsibleId: updated.responsibleId, dueDate: updated.dueDate, actionItemId: updated.id, createdById: request.user!.id }, pendingResponsibleId ? null : updated.responsibleId), include: ticketInclude })
+           linkedTicketId = linkedTicket.id
+           await ticketAuditWrite(tx, {
+            ticketId: linkedTicket.id,
            eventType: TicketAuditEventType.TICKET_CREATED,
            summary: 'Ticket de actividad creado',
            actor: request.user!,
            changes: ticketAuditCreatedChanges(ticketAuditSnapshot(linkedTicket)),
-           metadata: { actionItemId: updated.id, origin: 'ACTION_ITEM' },
+            metadata: { actionItemId: updated.id, origin: 'ACTION_ITEM' },
+          })
+          }
+       const assignmentApproval = pendingResponsibleId
+         ? await createTicketAssignmentApproval(tx, {
+           ticketId: linkedTicketId,
+           requestedById: request.user!.id,
+           proposedAssigneeId: pendingResponsibleId,
+           source: existing.actionPlan.strategySource ? TicketAssignmentApprovalSource.STRATEGY_TASK : TicketAssignmentApprovalSource.ACTION_ITEM,
+           replacePending: true,
+           actor: request.user!,
          })
-      }
-      // Aviso de asignación: solo cuando el responsable cambia de verdad (y no a "sin responsable");
-      // el link idempotente evita repetir el aviso si se reasigna a alguien ya avisado.
-      if (parsed.data.responsibleId !== undefined && parsed.data.responsibleId !== existing.responsibleId && parsed.data.responsibleId) {
-        await notifyTicketAssigned(tx, { id: linkedTicketId, title: updated.title }, parsed.data.responsibleId, request.user!.id)
-      }
-      if (justCompleted) {
-        await notifyMitigationPlanCompleted(tx, updated.actionPlanId)
-      }
-      return updated
-    })
-    response.json({ item: actionItemView(item) })
+         : null
+       if (justCompleted) {
+         await notifyMitigationPlanCompleted(tx, updated.actionPlanId)
+       }
+       return { item: updated, assignmentApproval }
+     })
+     response.json({ item: actionItemView(result.item), ...(result.assignmentApproval ? { assignmentApproval: result.assignmentApproval } : {}) })
   }))
 
-  app.delete('/api/action-items/:id', authMiddleware, asyncHandler(async (request, response) => {
+  app.delete('/api/action-items/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const existing = await db.actionItem.findUnique({ where: { id: String(request.params.id) }, include: { actionPlan: { include: { diagnostic: { include: { company: { select: { id: true } } } } } } } })
     if (!existing || !canAccessCompany(request, existing.actionPlan.diagnostic.company)) {
       response.status(404).json({ error: 'Action item not found' })
@@ -7972,6 +8496,11 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       const evidenceFiles = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { storedName: true } }) : []
       const storedNames = evidenceFiles.map((evidenceFile) => evidenceFile.storedName)
       if (linked) {
+        await cancelPendingTicketAssignmentApprovals(tx, {
+          ticketId: linked.id,
+          actor: request.user!,
+          comment: 'Solicitud cancelada porque se elimino la actividad.',
+        })
         await tx.ticket.delete({ where: { id: linked.id } })
       }
       await tx.actionItem.delete({ where: { id: existing.id } })
@@ -8022,8 +8551,9 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return
       }
     }
-    const ticket = await db.$transaction(async (tx) => {
-      const created = await tx.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, createdById: request.user!.id, assignedToId: parsed.data.assignedToId }, include: ticketInclude })
+    const result = await db.$transaction(async (tx) => {
+      const proposedAssigneeId = parsed.data.assignedToId ?? null
+       const created = await tx.ticket.create({ data: { title: parsed.data.title, description: parsed.data.description, status: parsed.data.status, priority: parsed.data.priority, dueDate: parsed.data.dueDate ?? null, createdById: request.user!.id, assignedToId: null }, include: ticketInclude })
       await ticketAuditWrite(tx, {
         ticketId: created.id,
         eventType: TicketAuditEventType.TICKET_CREATED,
@@ -8032,13 +8562,18 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         changes: ticketAuditCreatedChanges(ticketAuditSnapshot(created)),
         metadata: { origin: 'DIRECT' },
       })
-      // Aviso de asignación: un ticket manual con responsable avisa a ese responsable con el mismo
-      // link idempotente (tickets/<id>) que usan las reasignaciones. El aviso vive en la misma
-      // transacción que la creación, para que nunca quede un aviso de un ticket que no se creó.
-      await notifyTicketAssigned(tx, created, created.assignedToId, request.user!.id)
-      return created
+      const assignmentApproval = proposedAssigneeId
+        ? await createTicketAssignmentApproval(tx, {
+          ticketId: created.id,
+          requestedById: request.user!.id,
+          proposedAssigneeId,
+          source: TicketAssignmentApprovalSource.DIRECT,
+          actor: request.user!,
+        })
+        : null
+      return { ticket: created, assignmentApproval }
     })
-    response.status(201).json({ ticket: ticketView(ticket) })
+    response.status(201).json({ ticket: ticketView(result.ticket), ...(result.assignmentApproval ? { assignmentApproval: result.assignmentApproval } : {}) })
   }))
 
   app.get('/api/tickets/history', authMiddleware, asyncHandler(async (request, response) => {
@@ -8134,6 +8669,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
+    if (!canOperateAssignedActionItemTicket(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
+      return
+    }
     const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
     const connection = companyId ? await activeDriveConnection(companyId) : null
     if (!connection) {
@@ -8187,6 +8726,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     const ticket = await findAccessibleTicket(request, String(request.params.id))
     if (!ticket) {
       response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    if (!canOperateAssignedActionItemTicket(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
       return
     }
     const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
@@ -8279,6 +8822,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
+    if (!canOperateAssignedActionItemTicket(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
+      return
+    }
     const reference = await db.ticketDriveReference.findFirst({ where: { id: String(request.params.referenceId), ticketId: ticket.id }, select: { id: true, filename: true, driveFileId: true } })
     if (!reference) {
       response.status(404).json({ error: 'Google Drive reference not found' })
@@ -8308,6 +8855,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     const ticket = await findAccessibleTicket(request, String(request.params.id))
     if (!ticket) {
       response.status(404).json({ error: 'Ticket not found' })
+      return
+    }
+    if (!canOperateAssignedActionItemTicket(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
       return
     }
     // El cuerpo se lee a mano: express.json solo procesa application/json y aquí llega binario.
@@ -8411,6 +8962,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
+    if (!canOperateAssignedActionItemTicket(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
+      return
+    }
     const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, filename: true, storedName: true } })
     if (!record) {
       response.status(404).json({ error: 'Evidence not found' })
@@ -8447,6 +9002,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
+    if (!canOperateAssignedActionItemTicket(request, existing)) {
+      response.status(403).json({ error: 'You can only update tickets for activities assigned to you' })
+      return
+    }
+    if (request.user?.role === Role.COMPANY_USER && existing.actionItemId && Object.keys(parsed.data).some((field) => field !== 'status')) {
+      response.status(403).json({ error: 'Company users can only update activity status' })
+      return
+    }
     if (parsed.data.assignedToId !== undefined && !canAssignTickets(request)) {
       response.status(403).json({ error: 'Only company admins and superusers can assign tickets' })
       return
@@ -8463,7 +9026,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       }
     }
     const newStatus = parsed.data.status
-    const ticket = await db.$transaction(async (tx) => {
+    const result = await db.$transaction(async (tx) => {
+      await lockTicketForUpdate(tx, existing.id)
+      const current = await tx.ticket.findUnique({ where: { id: existing.id }, include: ticketInclude })
+      if (!current) return existing
+      const requestedAssigneeId = parsed.data.assignedToId
+      const assignmentChanged = requestedAssigneeId !== undefined && requestedAssigneeId !== current.assignedToId
+      const ticketData: Prisma.TicketUncheckedUpdateInput = { ...parsed.data }
+      delete ticketData.assignedToId
       // Gate de evidencia: cerrar (RESOLVED/CLOSED) la actividad de un plan de mitigación de un
       // riesgo exige al menos un PDF en el ticket. Los estados se traducen con el mismo mapa que
       // sincroniza la actividad: si la transición deja la actividad COMPLETED y no lo estaba, el
@@ -8471,19 +9041,25 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       // dentro de la transacción, el 409 invierte también cualquier escritura previa de aquí.
       if (newStatus !== undefined) {
         await assertMitigationEvidence(tx, {
-          ticketId: existing.id,
-          actionItemId: existing.actionItemId,
+          ticketId: current.id,
+          actionItemId: current.actionItemId,
           willCompleteActivity: ticketStatusToActionItemStatus[newStatus] === ActionItemStatus.COMPLETED,
-          wasActivityCompleted: ticketStatusToActionItemStatus[existing.status] === ActionItemStatus.COMPLETED,
+          wasActivityCompleted: ticketStatusToActionItemStatus[current.status] === ActionItemStatus.COMPLETED,
         })
       }
-      const updated = await tx.ticket.update({ where: { id: existing.id }, data: parsed.data, include: ticketInclude })
-      await ticketAuditWriteDiff(tx, existing.id, request.user!, ticketAuditSnapshot(existing), ticketAuditSnapshot(updated), { origin: existing.actionItemId ? 'ACTION_ITEM_SYNC' : 'DIRECT' })
-      if (newStatus !== undefined && newStatus !== existing.status && existing.actionItemId) {
+      if (assignmentChanged && requestedAssigneeId === null) {
+        const pending = await tx.ticketAssignmentApproval.findFirst({ where: { ticketId: current.id, status: TicketAssignmentApprovalStatus.PENDING }, select: { id: true } })
+        if (pending) await supersedeTicketAssignmentApproval(tx, { id: pending.id, actor: request.user!, comment: 'Solicitud reemplazada por una desasignacion.' })
+      }
+      if (requestedAssigneeId !== undefined && !assignmentChanged) delete ticketData.assignedToId
+      if (requestedAssigneeId === null) ticketData.assignedToId = null
+      const updated = await tx.ticket.update({ where: { id: current.id }, data: ticketData, include: ticketInclude })
+      await ticketAuditWriteDiff(tx, current.id, request.user!, ticketAuditSnapshot(current), ticketAuditSnapshot(updated), { origin: current.actionItemId ? 'ACTION_ITEM_SYNC' : 'DIRECT' })
+      if (newStatus !== undefined && newStatus !== current.status && current.actionItemId) {
         // La tarea es la fuente de verdad del progreso del plan; el estado antes de escribirlo
         // decide si esto cierra la mitigación (p. ej. ticket RESOLVED -> actividad COMPLETED).
-        const itemBefore = await tx.actionItem.findUnique({ where: { id: existing.actionItemId }, select: { status: true, actionPlanId: true } })
-        await tx.actionItem.update({ where: { id: existing.actionItemId }, data: { status: ticketStatusToActionItemStatus[newStatus] } })
+        const itemBefore = await tx.actionItem.findUnique({ where: { id: current.actionItemId }, select: { status: true, actionPlanId: true } })
+        await tx.actionItem.update({ where: { id: current.actionItemId }, data: { status: ticketStatusToActionItemStatus[newStatus] } })
         if (itemBefore && itemBefore.status !== ActionItemStatus.COMPLETED && ticketStatusToActionItemStatus[newStatus] === ActionItemStatus.COMPLETED) {
           await notifyMitigationPlanCompleted(tx, itemBefore.actionPlanId)
         }
@@ -8492,29 +9068,42 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       // aprobación llevan riskApprovals (0 o 1), y solo los cambios de estado relevantes quedan
       // registrados. Se escribe en la MISMA transacción que la modificación del ticket, con el
       // actor de la sesión (quien hizo el cambio) y los estados antes/después en metadata.
-      const originApproval = existing.riskApprovals?.[0]
-      if (newStatus !== undefined && newStatus !== existing.status && originApproval?.riskId) {
+      const originApproval = current.riskApprovals?.[0]
+      if (newStatus !== undefined && newStatus !== current.status && originApproval?.riskId) {
         await riskAuditWrite(tx, {
           riskId: originApproval.riskId,
           eventType: 'TICKET_STATUS_CHANGED',
           summary: `Estado del ticket: ${ticketStatusNames[newStatus]}`,
           actor: request.user!,
           metadata: {
-            ticketId: existing.id,
+            ticketId: current.id,
             approvalId: originApproval.id,
-            previousStatus: existing.status,
+            previousStatus: current.status,
             status: newStatus,
           },
         })
       }
-      // Aviso de asignación: solo cuando el responsable cambia de verdad (asignar al que ya
-      // estaba, o dejarlo sin responsable, no genera aviso).
-      if (parsed.data.assignedToId !== undefined && parsed.data.assignedToId !== existing.assignedToId && parsed.data.assignedToId) {
-        await notifyTicketAssigned(tx, updated, parsed.data.assignedToId, request.user!.id)
-      }
-      return updated
+      const assignmentApproval = assignmentChanged && requestedAssigneeId
+        ? await createTicketAssignmentApproval(tx, {
+          ticketId: current.id,
+          requestedById: request.user!.id,
+          proposedAssigneeId: requestedAssigneeId,
+          source: current.actionItem?.actionPlan.strategySource
+            ? TicketAssignmentApprovalSource.STRATEGY_TASK
+            : current.actionItemId
+              ? TicketAssignmentApprovalSource.ACTION_ITEM
+              : TicketAssignmentApprovalSource.DIRECT,
+          replacePending: true,
+          actor: request.user!,
+        })
+        : null
+      return { ticket: updated, assignmentApproval }
     })
-    response.json({ ticket: ticketView(ticket) })
+    if ('ticket' in result) {
+      response.json({ ticket: ticketView(result.ticket), ...(result.assignmentApproval ? { assignmentApproval: result.assignmentApproval } : {}) })
+    } else {
+      response.json({ ticket: ticketView(result) })
+    }
   }))
 
   app.delete('/api/tickets/:id', authMiddleware, asyncHandler(async (request, response) => {
@@ -8536,6 +9125,11 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // de evidencia apuntando a un archivo ya borrado.
     const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true } })
     await db.$transaction(async (tx) => {
+      await cancelPendingTicketAssignmentApprovals(tx, {
+        ticketId: existing.id,
+        actor: request.user!,
+        comment: 'Solicitud cancelada porque se elimino el ticket.',
+      })
       await ticketAuditWrite(tx, {
         ticketId: existing.id,
         ticketTitle: existing.title,
@@ -8564,6 +9158,18 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
   app.use((_request, response) => response.status(404).json({ error: 'Not found' }))
   app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
     void next
+    if (error instanceof UserManagementError) {
+      response.status(error.status).json({ error: error.message })
+      return
+    }
+    if (error instanceof UserAssignmentError) {
+      response.status(error.status).json({ error: error.message })
+      return
+    }
+    if (error instanceof TicketAssignmentApprovalError) {
+      response.status(error.status).json({ error: error.message })
+      return
+    }
     // Subida de evidencia: formato/tamaño/tipo del archivo, ya con su estado (400/413/415).
     if (error instanceof MultipartError || error instanceof EvidenceValidationError) {
       response.status(error.status).json({ error: error.message })

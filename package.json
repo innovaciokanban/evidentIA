@@ -29,6 +29,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
+    "googleapis": "^188.0.0",
     "openai": "^7.4.0",
     "pg": "^8.23.0",
     "react": "^19.2.8",

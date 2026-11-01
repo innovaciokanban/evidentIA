@@ -9,6 +9,7 @@ declare global {
         name: string
         role: Role
         companyId: string | null
+        isActive: boolean
       }
       sessionId?: string
     }

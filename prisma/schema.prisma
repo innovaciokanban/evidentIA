@@ -12,6 +12,11 @@ enum Role {
   COMPANY_USER
 }
 
+enum UserStatusEventType {
+  DEACTIVATED
+  REACTIVATED
+}
+
 enum TicketStatus {
   OPEN
   IN_PROGRESS
@@ -24,6 +29,24 @@ enum TicketPriority {
   MEDIUM
   HIGH
   URGENT
+}
+
+enum TicketAuditEventType {
+  TICKET_CREATED
+  TICKET_UPDATED
+  TICKET_ASSIGNED
+  TICKET_ASSIGNMENT_REQUESTED
+  TICKET_ASSIGNMENT_ACCEPTED
+  TICKET_ASSIGNMENT_REJECTED
+  TICKET_ASSIGNMENT_CANCELLED
+  TICKET_ASSIGNMENT_SUPERSEDED
+  TICKET_UNASSIGNED
+  TICKET_STATUS_CHANGED
+  TICKET_PRIORITY_CHANGED
+  TICKET_DUE_DATE_CHANGED
+  EVIDENCE_ATTACHED
+  EVIDENCE_DELETED
+  TICKET_DELETED
 }
 
 enum DiagnosticStatus {
@@ -221,85 +244,194 @@ enum RiskAuditEventType {
 }
 
 model User {
-  id             String    @id @default(cuid())
-  email          String    @unique
-  name           String
-  passwordHash   String
-  role           Role
-  companyId      String?
-  company        Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  sessions       Session[]
-  createdTickets Ticket[]  @relation("CreatedTickets")
-  assignedTickets Ticket[] @relation("AssignedTickets")
-  createdDiagnostics QualityDiagnostic[] @relation("CreatedDiagnostics")
-  createdActionPlans  ActionPlan[]       @relation("CreatedActionPlans")
-  responsibleItems    ActionItem[]       @relation("ResponsibleActionItems")
-  createdCrosses      StrategicCross[]   @relation("CreatedStrategicCrosses")
-  createdCheckySessions CheckySession[]  @relation("CreatedCheckySessions")
-  createdCrossWeightings StrategicCrossWeighting[] @relation("CreatedCrossWeightings")
-  createdStrategyWeightings StrategyWeighting[] @relation("CreatedStrategyWeightings")
-  responsibleProcesses Process[] @relation("ResponsibleProcesses")
-  riskOwnerRisks Risk[] @relation("RiskOwners")
-  mitigationOwnerRisks Risk[] @relation("RiskMitigationOwners")
-  riskApprovalRequests RiskApproval[] @relation("RiskApprovalRequesters")
-  riskApprovalDecisions RiskApproval[] @relation("RiskApprovalDeciders")
-  notifications Notification[]
-  evidenceUploads TicketEvidenceFile[] @relation("TicketEvidenceUploaders")
-  processChanges  ProcessChange[] @relation("ProcessChangeActors")
-  riskAuditEvents RiskAuditEvent[] @relation("RiskAuditActors")
-  reportResponsibleKpis Kpi[] @relation("ReportResponsibleKpis")
-  monitorResponsibleKpis Kpi[] @relation("MonitorResponsibleKpis")
-  responsibleProcedures Procedure[] @relation("ProcedureResponsibles")
-  procedureVersions ProcedureVersion[] @relation("ProcedureVersionActors")
-  auditLeadAuditors Audit[] @relation("AuditLeadAuditors")
-  auditResponsibles Audit[] @relation("AuditResponsibles")
-  auditFindingResponsibles AuditFinding[] @relation("AuditFindingResponsibles")
-  auditFindingVerifiers AuditFinding[] @relation("AuditFindingVerifiers")
-  auditFindingEfficacyVerifiers AuditFinding[] @relation("AuditFindingEfficacyVerifiers")
-  auditEvents AuditEvent[] @relation("AuditEventActors")
-  auditActionResponsibles AuditCorrectiveAction[] @relation("AuditActionResponsibles")
-  auditActionProgressCreators AuditActionProgress[] @relation("AuditActionProgressCreators")
-  auditEvidenceUploaders AuditEvidenceFile[] @relation("AuditEvidenceUploaders")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                            String                     @id @default(cuid())
+  email                         String                     @unique
+  name                          String
+  passwordHash                  String
+  role                          Role
+  isActive                      Boolean                    @default(true)
+  companyId                     String?
+  company                       Company?                   @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  sessions                      Session[]
+  createdTickets                Ticket[]                   @relation("CreatedTickets")
+  assignedTickets               Ticket[]                   @relation("AssignedTickets")
+  ticketAuditEvents             TicketAuditEvent[]         @relation("TicketAuditActors")
+  ticketDriveReferences         TicketDriveReference[]     @relation("TicketDriveReferenceCreators")
+  createdDiagnostics            QualityDiagnostic[]        @relation("CreatedDiagnostics")
+  createdActionPlans            ActionPlan[]               @relation("CreatedActionPlans")
+  responsibleItems              ActionItem[]               @relation("ResponsibleActionItems")
+  createdCrosses                StrategicCross[]           @relation("CreatedStrategicCrosses")
+  createdCheckySessions         CheckySession[]            @relation("CreatedCheckySessions")
+  createdCrossWeightings        StrategicCrossWeighting[]  @relation("CreatedCrossWeightings")
+  createdStrategyWeightings     StrategyWeighting[]        @relation("CreatedStrategyWeightings")
+  responsibleProcesses          Process[]                  @relation("ResponsibleProcesses")
+  riskOwnerRisks                Risk[]                     @relation("RiskOwners")
+  mitigationOwnerRisks          Risk[]                     @relation("RiskMitigationOwners")
+  riskApprovalRequests          RiskApproval[]             @relation("RiskApprovalRequesters")
+  riskApprovalDecisions         RiskApproval[]             @relation("RiskApprovalDeciders")
+  ticketAssignmentRequests      TicketAssignmentApproval[] @relation("TicketAssignmentRequests")
+  ticketAssignmentCandidates    TicketAssignmentApproval[] @relation("TicketAssignmentCandidates")
+  previousTicketAssignees       TicketAssignmentApproval[] @relation("PreviousTicketAssignees")
+  ticketAssignmentDecisions     TicketAssignmentApproval[] @relation("TicketAssignmentDecisions")
+  notifications                 Notification[]
+  evidenceUploads               TicketEvidenceFile[]       @relation("TicketEvidenceUploaders")
+  processChanges                ProcessChange[]            @relation("ProcessChangeActors")
+  riskAuditEvents               RiskAuditEvent[]           @relation("RiskAuditActors")
+  reportResponsibleKpis         Kpi[]                      @relation("ReportResponsibleKpis")
+  monitorResponsibleKpis        Kpi[]                      @relation("MonitorResponsibleKpis")
+  responsibleProcedures         Procedure[]                @relation("ProcedureResponsibles")
+  procedureVersions             ProcedureVersion[]         @relation("ProcedureVersionActors")
+  auditLeadAuditors             Audit[]                    @relation("AuditLeadAuditors")
+  auditResponsibles             Audit[]                    @relation("AuditResponsibles")
+  auditFindingResponsibles      AuditFinding[]             @relation("AuditFindingResponsibles")
+  auditFindingVerifiers         AuditFinding[]             @relation("AuditFindingVerifiers")
+  auditFindingEfficacyVerifiers AuditFinding[]             @relation("AuditFindingEfficacyVerifiers")
+  auditEvents                   AuditEvent[]               @relation("AuditEventActors")
+  auditActionResponsibles       AuditCorrectiveAction[]    @relation("AuditActionResponsibles")
+  auditActionProgressCreators   AuditActionProgress[]      @relation("AuditActionProgressCreators")
+  auditEvidenceUploaders        AuditEvidenceFile[]        @relation("AuditEvidenceUploaders")
+  googleDriveOAuthStates        GoogleDriveOAuthState[]
+  statusEvents                  UserStatusEvent[]          @relation("UserStatusChanges")
+  performedStatusEvents         UserStatusEvent[]          @relation("UserStatusActors")
+  createdAt                     DateTime                   @default(now())
+  updatedAt                     DateTime                   @updatedAt
 
   @@index([companyId])
+  @@index([companyId, isActive])
+}
+
+model UserStatusEvent {
+  id         String              @id @default(cuid())
+  userId     String
+  actorId    String?
+  eventType  UserStatusEventType
+  reason     String?
+  actorName  String?
+  actorEmail String?
+  occurredAt DateTime            @default(now())
+
+  user  User  @relation("UserStatusChanges", fields: [userId], references: [id], onDelete: Restrict)
+  actor User? @relation("UserStatusActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, occurredAt])
+  @@index([actorId])
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  tokenHash String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id                     String                  @id @default(cuid())
+  tokenHash              String                  @unique
+  userId                 String
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  googleDriveOAuthStates GoogleDriveOAuthState[]
+  expiresAt              DateTime
+  createdAt              DateTime                @default(now())
 
   @@index([userId])
   @@index([expiresAt])
 }
 
 model Ticket {
-  id          String         @id @default(cuid())
-  title       String
-  description String
-  status      TicketStatus   @default(OPEN)
-  priority    TicketPriority @default(MEDIUM)
-  createdById String
-  assignedToId String?
-  actionItemId String?       @unique
-  dueDate     DateTime?
-  createdBy   User           @relation("CreatedTickets", fields: [createdById], references: [id], onDelete: Restrict)
-  assignedTo  User?          @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
-  actionItem  ActionItem?    @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
-  riskApprovals RiskApproval[]
-  evidenceFiles TicketEvidenceFile[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id                  String                     @id @default(cuid())
+  title               String
+  description         String
+  status              TicketStatus               @default(OPEN)
+  priority            TicketPriority             @default(MEDIUM)
+  createdById         String
+  assignedToId        String?
+  actionItemId        String?                    @unique
+  dueDate             DateTime?
+  createdBy           User                       @relation("CreatedTickets", fields: [createdById], references: [id], onDelete: Restrict)
+  assignedTo          User?                      @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
+  actionItem          ActionItem?                @relation(fields: [actionItemId], references: [id], onDelete: SetNull)
+  riskApprovals       RiskApproval[]
+  assignmentApprovals TicketAssignmentApproval[]
+  evidenceFiles       TicketEvidenceFile[]
+  driveReferences     TicketDriveReference[]
+  auditEvents         TicketAuditEvent[]
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
 
   @@index([createdById])
   @@index([assignedToId])
   @@index([status])
   @@index([priority])
+}
+
+enum TicketAssignmentApprovalStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  SUPERSEDED
+}
+
+enum TicketAssignmentApprovalSource {
+  DIRECT
+  RISK_APPROVAL
+  ACTION_ITEM
+  STRATEGY_TASK
+}
+
+/**
+ * Solicitud de asignacion separada de la asignacion confirmada en Ticket.assignedToId.
+ * Una fila conserva el ciclo completo de solicitud y decision; la auditoria de tickets registra
+ * los cambios append-only para que las solicitudes no resueltas tambien sean visibles en historial.
+ */
+model TicketAssignmentApproval {
+  id                 String                         @id @default(cuid())
+  ticketId           String?
+  requestedById      String
+  proposedAssigneeId String
+  previousAssigneeId String?
+  decidedById        String?
+  riskApprovalId     String?                        @unique
+  status             TicketAssignmentApprovalStatus @default(PENDING)
+  source             TicketAssignmentApprovalSource
+  comment            String?
+  createdAt          DateTime                       @default(now())
+  decidedAt          DateTime?
+  updatedAt          DateTime                       @updatedAt
+
+  ticket           Ticket?       @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  requestedBy      User          @relation("TicketAssignmentRequests", fields: [requestedById], references: [id], onDelete: Restrict)
+  proposedAssignee User          @relation("TicketAssignmentCandidates", fields: [proposedAssigneeId], references: [id], onDelete: Restrict)
+  previousAssignee User?         @relation("PreviousTicketAssignees", fields: [previousAssigneeId], references: [id], onDelete: SetNull)
+  decidedBy        User?         @relation("TicketAssignmentDecisions", fields: [decidedById], references: [id], onDelete: SetNull)
+  riskApproval     RiskApproval? @relation(fields: [riskApprovalId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([ticketId, status])
+  @@index([proposedAssigneeId, status])
+  @@index([requestedById, status])
+  @@index([status])
+}
+
+/**
+ * Historial cronologico y auditable del ciclo de vida de un ticket. Solo lectura desde la
+ * aplicacion: los eventos se escriben unicamente desde las transacciones de negocio y no existe
+ * un endpoint que acepte eventos del cliente. Los datos del actor se desnormalizan para que el
+ * registro sobreviva a la baja del usuario; changes conserva valores before/after y metadata
+ * solo contiene ids o metadatos no sensibles.
+ */
+model TicketAuditEvent {
+  id          String               @id @default(cuid())
+  ticketId    String?
+  ticketTitle String?
+  companyId   String?
+  actorId     String?
+  actorName   String?
+  actorEmail  String?
+  eventType   TicketAuditEventType
+  summary     String
+  changes     Json?
+  metadata    Json?
+  occurredAt  DateTime             @default(now())
+  ticket      Ticket?              @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  actor       User?                @relation("TicketAuditActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, occurredAt])
+  @@index([companyId, occurredAt])
+  @@index([eventType])
 }
 
 /**
@@ -309,7 +441,6 @@ model Ticket {
  * original saneado (solo el basename, sin controles ni rutas), `storedName` es el nombre con el
  * que quedó escrito el bytes en disco y `mimeType`/`size` son los valores validados en la subida
  * (extensión .pdf, MIME declarado, firma %PDF real y tope de 10 MB).
- *
  * La baja del ticket borra sus evidencias en cascada (la limpieza física se hace después de
  * confirmar la escritura en base de datos). El uploader queda referenciado con Restrict, igual que
  * Ticket.createdBy: la evidencia nunca pierde a quien la registró.
@@ -330,39 +461,74 @@ model TicketEvidenceFile {
   @@index([uploadedById])
 }
 
+/**
+ * Referencia a un archivo privado de Google Drive seleccionado con Google Picker. No se copia el
+ * archivo ni se modifican sus permisos; la conexión de la empresa se conserva para validar el
+ * acceso cuando se registra la referencia. La eliminación solo retira esta fila.
+ */
+model TicketDriveReference {
+  id           String                       @id @default(cuid())
+  ticketId     String
+  companyId    String
+  connectionId String
+  driveFileId  String
+  filename     String
+  mimeType     String
+  size         Int?
+  driveUrl     String?
+  createdById  String
+  createdAt    DateTime                     @default(now())
+  updatedAt    DateTime                     @updatedAt
+  ticket       Ticket                       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  company      Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  connection   CompanyGoogleDriveConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  createdBy    User                         @relation("TicketDriveReferenceCreators", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([ticketId, driveFileId])
+  @@index([ticketId, createdAt])
+  @@index([companyId])
+  @@index([connectionId])
+  @@index([createdById])
+}
+
 model Company {
-  id             String   @id @default(cuid())
-  name           String
-  identification String   @unique
-  industry       String
-  description    String
-  users          User[]
-  diagnostics    QualityDiagnostic[]
-  processes      Process[]
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                     String                         @id @default(cuid())
+  name                   String
+  identification         String                         @unique
+  industry               String
+  description            String
+  driveFolderId          String?                        @unique
+  users                  User[]
+  diagnostics            QualityDiagnostic[]
+  processes              Process[]
+  googleDriveConnections CompanyGoogleDriveConnection[]
+  ticketDriveReferences  TicketDriveReference[]
+  googleDriveOAuthStates GoogleDriveOAuthState[]
+  storageOperations      EvidenceStorageOperation[]
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
 
   @@index([name])
 }
 
 model QualityDiagnostic {
-  id             String           @id @default(cuid())
-  companyId      String
-  title          String
-  description    String
-  status         DiagnosticStatus @default(DRAFT)
-  createdById    String
-  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdBy      User             @relation("CreatedDiagnostics", fields: [createdById], references: [id], onDelete: Restrict)
-  swotAnalysis   SWOTAnalysis?
-  aiAnalysis     AIAnalysis?
-  recommendations Recommendation[]
-  actionPlans    ActionPlan[]
-  crosses        StrategicCross[]
+  id                 String              @id @default(cuid())
+  companyId          String
+  title              String
+  description        String
+  status             DiagnosticStatus    @default(DRAFT)
+  createdById        String
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy          User                @relation("CreatedDiagnostics", fields: [createdById], references: [id], onDelete: Restrict)
+  swotAnalysis       SWOTAnalysis?
+  aiAnalysis         AIAnalysis?
+  recommendations    Recommendation[]
+  actionPlans        ActionPlan[]
+  crosses            StrategicCross[]
   strategyWeightings StrategyWeighting[]
-  checkySessions CheckySession[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  checkySessions     CheckySession[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([companyId])
   @@index([createdById])
@@ -370,33 +536,33 @@ model QualityDiagnostic {
 }
 
 model SWOTAnalysis {
-  id           String           @id @default(cuid())
-  diagnosticId String           @unique
+  id           String            @id @default(cuid())
+  diagnosticId String            @unique
   diagnostic   QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
   items        SWOTItem[]
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 }
 
 model SWOTItem {
-  id          String     @id @default(cuid())
-  swotId      String
-  type        SWOTType
-  description String
-  priority    Priority?
-  impact      Impact?
-  swot        SWOTAnalysis @relation(fields: [swotId], references: [id], onDelete: Cascade)
+  id             String           @id @default(cuid())
+  swotId         String
+  type           SWOTType
+  description    String
+  priority       Priority?
+  impact         Impact?
+  swot           SWOTAnalysis     @relation(fields: [swotId], references: [id], onDelete: Cascade)
   factor1Crosses StrategicCross[] @relation("CrossFactor1")
   factor2Crosses StrategicCross[] @relation("CrossFactor2")
-  createdAt   DateTime   @default(now())
+  createdAt      DateTime         @default(now())
 
   @@index([swotId])
   @@index([type])
 }
 
 model AIAnalysis {
-  id                    String           @id @default(cuid())
-  diagnosticId          String           @unique
+  id                    String            @id @default(cuid())
+  diagnosticId          String            @unique
   executiveSummary      String
   diagnosis             String
   keyFindings           Json
@@ -414,38 +580,38 @@ model AIAnalysis {
   /// bueno un análisis del que nadie sabe qué versión de la matriz leyó.
   swotFingerprint       String?
   diagnostic            QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
 }
 
 model Recommendation {
-  id             String              @id @default(cuid())
-  diagnosticId   String
-  title          String
-  description    String
-  priority       Priority
-  expectedImpact String
+  id              String               @id @default(cuid())
+  diagnosticId    String
+  title           String
+  description     String
+  priority        Priority
+  expectedImpact  String
   suggestedAction String
-  status         RecommendationStatus @default(PENDING)
-  diagnostic     QualityDiagnostic    @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
-  actionItems    ActionItem[]
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  status          RecommendationStatus @default(PENDING)
+  diagnostic      QualityDiagnostic    @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  actionItems     ActionItem[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   @@index([diagnosticId])
   @@index([status])
 }
 
 model ActionPlan {
-  id             String            @id @default(cuid())
-  diagnosticId   String
-  title          String
-  description    String
-  status         ActionPlanStatus  @default(DRAFT)
-  createdById    String
-  strategySource String?
-  strategySourceRef String?
-  strategyTitle String?
+  id                  String            @id @default(cuid())
+  diagnosticId        String
+  title               String
+  description         String
+  status              ActionPlanStatus  @default(DRAFT)
+  createdById         String
+  strategySource      String?
+  strategySourceRef   String?
+  strategyTitle       String?
   strategyDescription String?
   /**
    * Riesgo cuyo plan de mitigación ejecuta este plan de acción. Nullable y sin unicidad: un plan
@@ -453,37 +619,37 @@ model ActionPlan {
    * acumular varios planes. El plan sobrevive a la baja del riesgo (SetNull), igual que el resto de
    * los enlaces débiles del proyecto: el diagnóstico al que pertenece no se toca.
    */
-  riskId         String?
-  diagnostic     QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
-  createdBy      User              @relation("CreatedActionPlans", fields: [createdById], references: [id], onDelete: Restrict)
-  risk           Risk?             @relation(fields: [riskId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  items          ActionItem[]
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  riskId              String?
+  diagnostic          QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdBy           User              @relation("CreatedActionPlans", fields: [createdById], references: [id], onDelete: Restrict)
+  risk                Risk?             @relation(fields: [riskId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items               ActionItem[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
+  @@unique([diagnosticId, strategySource, strategySourceRef])
   @@index([diagnosticId])
   @@index([createdById])
   @@index([status])
   @@index([riskId])
-  @@unique([diagnosticId, strategySource, strategySourceRef])
 }
 
 model ActionItem {
-  id               String            @id @default(cuid())
+  id               String           @id @default(cuid())
   actionPlanId     String
   recommendationId String?
   title            String
   description      String
   priority         Priority
-  status           ActionItemStatus  @default(PENDING)
+  status           ActionItemStatus @default(PENDING)
   responsibleId    String?
   dueDate          DateTime?
-  actionPlan       ActionPlan        @relation(fields: [actionPlanId], references: [id], onDelete: Cascade)
-  recommendation   Recommendation?   @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
-  responsible      User?             @relation("ResponsibleActionItems", fields: [responsibleId], references: [id], onDelete: SetNull)
+  actionPlan       ActionPlan       @relation(fields: [actionPlanId], references: [id], onDelete: Cascade)
+  recommendation   Recommendation?  @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+  responsible      User?            @relation("ResponsibleActionItems", fields: [responsibleId], references: [id], onDelete: SetNull)
   ticket           Ticket?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   @@index([actionPlanId])
   @@index([recommendationId])
@@ -492,13 +658,13 @@ model ActionItem {
 }
 
 model StrategicCross {
-  id           String            @id @default(cuid())
-  diagnosticId String
-  crossType    CrossType
-  origin       CrossOrigin       @default(USER)
-  factor1Id    String
-  factor2Id    String
-  strategy     String?
+  id             String                   @id @default(cuid())
+  diagnosticId   String
+  crossType      CrossType
+  origin         CrossOrigin              @default(USER)
+  factor1Id      String
+  factor2Id      String
+  strategy       String?
   /**
    * Decisión tomada sobre la estrategia de este cruce en la pantalla de Checky. Reutiliza el mismo
    * enum que las sugerencias: null significa que todavía no se ha decidido, ACCEPTED es lo que
@@ -506,37 +672,37 @@ model StrategicCross {
    * tabla nueva porque el cruce ya es la fuente de verdad de la pareja DOFA y de su estrategia.
    */
   strategyStatus CheckySuggestionStatus?
-  aiAnalysis   Json?
-  priority     Priority?
-  createdById  String
-  diagnostic   QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
-  factor1      SWOTItem          @relation("CrossFactor1", fields: [factor1Id], references: [id], onDelete: Cascade)
-  factor2      SWOTItem          @relation("CrossFactor2", fields: [factor2Id], references: [id], onDelete: Cascade)
-  createdBy    User              @relation("CreatedStrategicCrosses", fields: [createdById], references: [id], onDelete: Restrict)
-  weighting    StrategicCrossWeighting?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  aiAnalysis     Json?
+  priority       Priority?
+  createdById    String
+  diagnostic     QualityDiagnostic        @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  factor1        SWOTItem                 @relation("CrossFactor1", fields: [factor1Id], references: [id], onDelete: Cascade)
+  factor2        SWOTItem                 @relation("CrossFactor2", fields: [factor2Id], references: [id], onDelete: Cascade)
+  createdBy      User                     @relation("CreatedStrategicCrosses", fields: [createdById], references: [id], onDelete: Restrict)
+  weighting      StrategicCrossWeighting?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
 
+  @@unique([factor1Id, factor2Id])
   @@index([diagnosticId])
   @@index([factor1Id])
   @@index([factor2Id])
-  @@unique([factor1Id, factor2Id])
 }
 
 model StrategicCrossWeighting {
-  id                  String        @id @default(cuid())
-  crossId             String        @unique
+  id                  String         @id @default(cuid())
+  crossId             String         @unique
   impactoEstrategico  WeightingLevel
   viabilidad          WeightingLevel
   urgencia            WeightingLevel
-  sinergiaInterna      WeightingLevel
+  sinergiaInterna     WeightingLevel
   impactoReputacional WeightingLevel
   weightedScore       Float
   cross               StrategicCross @relation(fields: [crossId], references: [id], onDelete: Cascade)
   createdById         String
-  createdBy           User          @relation("CreatedCrossWeightings", fields: [createdById], references: [id], onDelete: Restrict)
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  createdBy           User           @relation("CreatedCrossWeightings", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   @@index([weightedScore])
   @@index([createdById])
@@ -556,15 +722,15 @@ model StrategyWeighting {
   impactoEstrategico  WeightingLevel
   viabilidad          WeightingLevel
   urgencia            WeightingLevel
-  sinergiaInterna      WeightingLevel
+  sinergiaInterna     WeightingLevel
   impactoReputacional WeightingLevel
   weightedScore       Float
   createdById         String
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  diagnostic          QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
-  createdBy           User               @relation("CreatedStrategyWeightings", fields: [createdById], references: [id], onDelete: Restrict)
+  diagnostic QualityDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdBy  User              @relation("CreatedStrategyWeightings", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@unique([diagnosticId, source, sourceRef])
   @@index([diagnosticId, weightedScore])
@@ -587,61 +753,61 @@ model CheckySession {
 }
 
 model CheckyMessage {
-  id                 String                 @id @default(cuid())
-  sessionId          String
-  role               CheckyMessageRole
-  content            String
-  category           CheckyCategory?
-  basis              CheckyFindingBasis?
-  evidenceIds        String[]               @default([])
-  insufficientData   Boolean                @default(false)
-  missingInformation String[]               @default([])
-  status             CheckySuggestionStatus?
-  decisionNote       String?
+  id                           String                  @id @default(cuid())
+  sessionId                    String
+  role                         CheckyMessageRole
+  content                      String
+  category                     CheckyCategory?
+  basis                        CheckyFindingBasis?
+  evidenceIds                  String[]                @default([])
+  insufficientData             Boolean                 @default(false)
+  missingInformation           String[]                @default([])
+  status                       CheckySuggestionStatus?
+  decisionNote                 String?
   suggestedStrategyTitle       String?
   suggestedStrategyDescription String?
-  session            CheckySession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  createdAt          DateTime               @default(now())
+  session                      CheckySession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt                    DateTime                @default(now())
 
   @@index([sessionId])
   @@index([status])
 }
 
 model Process {
-  id            String        @id @default(cuid())
-  companyId     String
-  name          String
-  code          String?
-  type          ProcessType
-  version       String?
-  frequency     String?
+  id                 String          @id @default(cuid())
+  companyId          String
+  name               String
+  code               String?
+  type               ProcessType
+  version            String?
+  frequency          String?
   organizationalArea String?
-  supervision   String?
-  executionType String?
-  objective     String
-  description   String?
-  responsibleId String?
-  status        ProcessStatus @default(ACTIVE)
-  thirdPartyProvided Boolean @default(false)
-  critical      Boolean       @default(false)
-  affectsAccounting Boolean    @default(false)
-  personalData  Boolean       @default(false)
-  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  responsible   User?         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
-  changeHistory ProcessChange[]
-  kpis          Kpi[]
-  sipocSuppliers SipocSupplier[]
-  sipocInputs    SipocInput[]
-  sipocProcesses SipocProcess[]
-  sipocOutputs   SipocOutput[]
-  sipocCustomers SipocCustomer[]
-  risks          Risk[]
-  procedures     Procedure[]
-  audits         Audit[]
-  auditProcesses AuditProcess[]
-  findingAudits  AuditFinding[]
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  supervision        String?
+  executionType      String?
+  objective          String
+  description        String?
+  responsibleId      String?
+  status             ProcessStatus   @default(ACTIVE)
+  thirdPartyProvided Boolean         @default(false)
+  critical           Boolean         @default(false)
+  affectsAccounting  Boolean         @default(false)
+  personalData       Boolean         @default(false)
+  company            Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  responsible        User?           @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
+  changeHistory      ProcessChange[]
+  kpis               Kpi[]
+  sipocSuppliers     SipocSupplier[]
+  sipocInputs        SipocInput[]
+  sipocProcesses     SipocProcess[]
+  sipocOutputs       SipocOutput[]
+  sipocCustomers     SipocCustomer[]
+  risks              Risk[]
+  procedures         Procedure[]
+  audits             Audit[]
+  auditProcesses     AuditProcess[]
+  findingAudits      AuditFinding[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId])
@@ -650,18 +816,18 @@ model Process {
 }
 
 model ProcessChange {
-  id          String             @id @default(cuid())
-  processId   String
-  processName String
-  version     String
-  action      ProcessChangeAction
-  changedById String?
-  changes     Json
-  changedAt   DateTime           @default(now())
+  id             String              @id @default(cuid())
+  processId      String
+  processName    String
+  version        String
+  action         ProcessChangeAction
+  changedById    String?
+  changes        Json
+  changedAt      DateTime            @default(now())
   changedByName  String?
   changedByEmail String?
-  process     Process            @relation(fields: [processId], references: [id], onDelete: Restrict)
-  changedBy   User?              @relation("ProcessChangeActors", fields: [changedById], references: [id], onDelete: SetNull)
+  process        Process             @relation(fields: [processId], references: [id], onDelete: Restrict)
+  changedBy      User?               @relation("ProcessChangeActors", fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([processId, changedAt])
   @@index([changedById])
@@ -703,23 +869,23 @@ model Kpi {
  * proceso (índice) y la API además lo valida contra toda la empresa antes de crear o renombrar.
  */
 model Procedure {
-  id            String          @id @default(cuid())
-  processId     String
-  code          String
-  name          String
-  objective     String
-  scope         String
-  description   String?
-  responsibleId String?
-  status        ProcedureStatus @default(DRAFT)
-  version       String          @default("1.0")
-  process       Process         @relation(fields: [processId], references: [id], onDelete: Restrict)
-  responsible   User?           @relation("ProcedureResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  versions      ProcedureVersion[]
+  id              String             @id @default(cuid())
+  processId       String
+  code            String
+  name            String
+  objective       String
+  scope           String
+  description     String?
+  responsibleId   String?
+  status          ProcedureStatus    @default(DRAFT)
+  version         String             @default("1.0")
+  process         Process            @relation(fields: [processId], references: [id], onDelete: Restrict)
+  responsible     User?              @relation("ProcedureResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  versions        ProcedureVersion[]
   auditProcedures AuditProcedure[]
-  findingAudits AuditFinding[]
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  findingAudits   AuditFinding[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   @@unique([processId, code])
   @@index([processId])
@@ -734,19 +900,19 @@ model Procedure {
  * sobrescribe y el historial sobrevive a la baja del procedimiento salvo que este nunca se aprobara.
  */
 model ProcedureVersion {
-  id            String                @id @default(cuid())
-  procedureId   String
-  version       String
-  status        ProcedureStatus
-  action        ProcedureHistoryAction
-  changes       Json?
-  snapshot      Json?
-  changedById   String?
-  changedByName String?
+  id             String                 @id @default(cuid())
+  procedureId    String
+  version        String
+  status         ProcedureStatus
+  action         ProcedureHistoryAction
+  changes        Json?
+  snapshot       Json?
+  changedById    String?
+  changedByName  String?
   changedByEmail String?
-  changedAt     DateTime              @default(now())
-  procedure     Procedure             @relation(fields: [procedureId], references: [id], onDelete: Restrict)
-  changedBy     User?                 @relation("ProcedureVersionActors", fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt      DateTime               @default(now())
+  procedure      Procedure              @relation(fields: [procedureId], references: [id], onDelete: Restrict)
+  changedBy      User?                  @relation("ProcedureVersionActors", fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([procedureId, changedAt])
   @@index([changedById])
@@ -808,36 +974,38 @@ model SipocCustomer {
 }
 
 model Risk {
-  id                   String        @id @default(cuid())
-  processId            String
-  name                 String
-  description          String
-  riskType             String
-  code                 String?       @unique
-  bpmnActivity         String
-  riskOwnerId          String?
-  acceptanceStatus     RiskAcceptanceStatus @default(PENDING)
-  treatment            RiskTreatmentType?
-  mitigationOwnerId    String?
+  id                  String               @id @default(cuid())
+  processId           String
+  name                String
+  description         String
+  riskType            String
+  code                String?              @unique
+  bpmnActivity        String
+  riskOwnerId         String?
+  acceptanceStatus    RiskAcceptanceStatus @default(PENDING)
+  treatment           RiskTreatmentType?
+  mitigationOwnerId   String?
   // Deprecado: la fecha de inicio del plan ya no se captura ni se expone en la API; la columna
   // se conserva por compatibilidad con los datos existentes (sin migración destructiva).
-  mitigationStartDate  DateTime?
-  mitigationDueDate    DateTime?
-  inherentImpact       Int
-  inherentProbability  Int
-  residualImpact       Int
-  residualProbability  Int
-  process              Process       @relation(fields: [processId], references: [id], onDelete: Cascade)
-  riskOwner            User?         @relation("RiskOwners", fields: [riskOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  mitigationOwner      User?         @relation("RiskMitigationOwners", fields: [mitigationOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  controls             RiskControl[]
-  evidences            RiskEvidence[]
-  approvals            RiskApproval[]
-  auditEvents          RiskAuditEvent[]
-  /** Planes de acción que ejecutan el plan de mitigación de este riesgo (pueden ser varios). */
-  mitigationPlans      ActionPlan[]
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  mitigationStartDate DateTime?
+  mitigationDueDate   DateTime?
+  inherentImpact      Int
+  inherentProbability Int
+  residualImpact      Int
+  residualProbability Int
+  process             Process              @relation(fields: [processId], references: [id], onDelete: Cascade)
+  riskOwner           User?                @relation("RiskOwners", fields: [riskOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  mitigationOwner     User?                @relation("RiskMitigationOwners", fields: [mitigationOwnerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  controls            RiskControl[]
+  evidences           RiskEvidence[]
+  approvals           RiskApproval[]
+  auditEvents         RiskAuditEvent[]
+  /**
+   * Planes de acción que ejecutan el plan de mitigación de este riesgo (pueden ser varios).
+   */
+  mitigationPlans     ActionPlan[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@index([processId])
   @@index([riskOwnerId])
@@ -856,7 +1024,7 @@ model Risk {
  * que controles y evidencias: borrar el riesgo elimina también sus eventos.
  */
 model RiskAuditEvent {
-  id         String            @id @default(cuid())
+  id         String             @id @default(cuid())
   riskId     String
   actorId    String?
   actorName  String?
@@ -865,9 +1033,9 @@ model RiskAuditEvent {
   summary    String
   changes    Json?
   metadata   Json?
-  occurredAt DateTime          @default(now())
-  risk       Risk              @relation(fields: [riskId], references: [id], onDelete: Cascade)
-  actor      User?             @relation("RiskAuditActors", fields: [actorId], references: [id], onDelete: SetNull)
+  occurredAt DateTime           @default(now())
+  risk       Risk               @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  actor      User?              @relation("RiskAuditActors", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([riskId, occurredAt])
   @@index([eventType])
@@ -881,13 +1049,13 @@ model RiskCodeSequence {
 }
 
 model RiskControl {
-  id          String                 @id @default(cuid())
+  id          String                @id @default(cuid())
   riskId      String
   description String
-  evaluation  RiskControlEvaluation  @default(PENDING)
-  risk        Risk                   @relation(fields: [riskId], references: [id], onDelete: Cascade)
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
+  evaluation  RiskControlEvaluation @default(PENDING)
+  risk        Risk                  @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   @@index([riskId])
 }
@@ -912,21 +1080,22 @@ model RiskEvidence {
 // decidir para poder reenviar después. `ticketId` es único igual que Ticket.actionItemId: un ciclo
 // aprobado genera como mucho un ticket, y un reintento nunca duplica la conversión.
 model RiskApproval {
-  id            String             @id @default(cuid())
-  riskId        String
-  risk          Risk               @relation(fields: [riskId], references: [id], onDelete: Cascade)
-  requestedById String
-  requestedBy   User               @relation("RiskApprovalRequesters", fields: [requestedById], references: [id], onDelete: Restrict)
-  status        RiskApprovalStatus @default(PENDING)
-  openKey       String?            @unique
-  decidedById   String?
-  decidedBy     User?              @relation("RiskApprovalDeciders", fields: [decidedById], references: [id], onDelete: SetNull)
-  decidedAt     DateTime?
-  comment       String?
-  ticketId      String?            @unique
-  ticket        Ticket?            @relation(fields: [ticketId], references: [id], onDelete: SetNull)
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  id                       String                    @id @default(cuid())
+  riskId                   String
+  risk                     Risk                      @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  requestedById            String
+  requestedBy              User                      @relation("RiskApprovalRequesters", fields: [requestedById], references: [id], onDelete: Restrict)
+  status                   RiskApprovalStatus        @default(PENDING)
+  openKey                  String?                   @unique
+  decidedById              String?
+  decidedBy                User?                     @relation("RiskApprovalDeciders", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt                DateTime?
+  comment                  String?
+  ticketId                 String?                   @unique
+  ticket                   Ticket?                   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  ticketAssignmentApproval TicketAssignmentApproval?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
 
   @@index([riskId])
   @@index([requestedById])
@@ -1008,6 +1177,9 @@ enum AuditEventType {
   CHECKLIST_ITEM_DELETED
   EVIDENCE_FILE_CREATED
   EVIDENCE_FILE_DELETED
+  EVIDENCE_FILE_STORAGE_READY
+  EVIDENCE_FILE_STORAGE_FAILED
+  EVIDENCE_FILE_DELETE_PENDING
   ACTION_CREATED
   ACTION_UPDATED
   ACTION_STATUS_CHANGED
@@ -1015,33 +1187,36 @@ enum AuditEventType {
 }
 
 model Audit {
-  id            String      @id @default(cuid())
-  processId     String
-  code          String
-  title         String
-  auditType     String?
-  scope         String
-  objectives    String?
-  criteria      String
-  status        AuditStatus @default(PLANNED)
-  plannedDate   DateTime?
-  startDate     DateTime?
-  endDate       DateTime?
-  summary       String?
-  leadAuditorId String?
-  responsibleId String?
-  process       Process     @relation(fields: [processId], references: [id], onDelete: Restrict)
-  leadAuditor   User?       @relation("AuditLeadAuditors", fields: [leadAuditorId], references: [id], onDelete: SetNull)
-  responsible   User?       @relation("AuditResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  findings      AuditFinding[]
-  evidences     AuditEvidence[]
-  evidenceFiles AuditEvidenceFile[]
-  events        AuditEvent[]
-  checklists    AuditChecklist[]
-  relatedProcesses AuditProcess[]
-  procedures    AuditProcedure[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id                         String                     @id @default(cuid())
+  processId                  String
+  code                       String
+  title                      String
+  auditType                  String?
+  scope                      String
+  objectives                 String?
+  criteria                   String
+  status                     AuditStatus                @default(PLANNED)
+  plannedDate                DateTime?
+  startDate                  DateTime?
+  endDate                    DateTime?
+  summary                    String?
+  driveFolderId              String?                    @unique
+  storageDeletionRequestedAt DateTime?
+  leadAuditorId              String?
+  responsibleId              String?
+  process                    Process                    @relation(fields: [processId], references: [id], onDelete: Restrict)
+  leadAuditor                User?                      @relation("AuditLeadAuditors", fields: [leadAuditorId], references: [id], onDelete: SetNull)
+  responsible                User?                      @relation("AuditResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  findings                   AuditFinding[]
+  evidences                  AuditEvidence[]
+  evidenceFiles              AuditEvidenceFile[]
+  events                     AuditEvent[]
+  checklists                 AuditChecklist[]
+  relatedProcesses           AuditProcess[]
+  procedures                 AuditProcedure[]
+  storageOperations          EvidenceStorageOperation[]
+  createdAt                  DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
 
   @@unique([processId, code])
   @@index([processId])
@@ -1058,8 +1233,8 @@ model Audit {
 model AuditProcess {
   auditId   String
   processId String
-  audit     Audit   @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  process   Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+  audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  process   Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   @@id([auditId, processId])
@@ -1072,11 +1247,11 @@ model AuditProcess {
  * retira, sin afectar hallazgos ni evidencias (éstos apuntan al procedimiento con SetNull).
  */
 model AuditProcedure {
-  auditId      String
-  procedureId  String
-  audit        Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  procedure    Procedure  @relation(fields: [procedureId], references: [id], onDelete: Cascade)
-  createdAt    DateTime   @default(now())
+  auditId     String
+  procedureId String
+  audit       Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
 
   @@id([auditId, procedureId])
   @@index([procedureId])
@@ -1096,13 +1271,13 @@ enum AuditChecklistResult {
  * sobreviven con itemId en null (la trazabilidad del hallazgo no se pierde).
  */
 model AuditChecklist {
-  id        String              @id @default(cuid())
+  id        String               @id @default(cuid())
   auditId   String
   name      String
-  audit     Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  audit     Audit                @relation(fields: [auditId], references: [id], onDelete: Cascade)
   items     AuditChecklistItem[]
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
 
   @@index([auditId])
 }
@@ -1115,55 +1290,55 @@ model AuditChecklist {
  * reordenamiento o a la baja del ítem.
  */
 model AuditChecklistItem {
-  id           String               @id @default(cuid())
-  checklistId  String
-  position     Int                  @default(0)
-  description  String
-  criteria     String
-  result       AuditChecklistResult @default(PENDING)
-  observations String?
-  required     Boolean              @default(true)
-  checklist    AuditChecklist       @relation(fields: [checklistId], references: [id], onDelete: Cascade)
-  findings     AuditFinding[]
+  id            String               @id @default(cuid())
+  checklistId   String
+  position      Int                  @default(0)
+  description   String
+  criteria      String
+  result        AuditChecklistResult @default(PENDING)
+  observations  String?
+  required      Boolean              @default(true)
+  checklist     AuditChecklist       @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  findings      AuditFinding[]
   evidenceFiles AuditEvidenceFile[]
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   @@index([checklistId])
   @@index([result])
 }
 
 model AuditFinding {
-  id             String              @id @default(cuid())
-  auditId        String
-  title          String
-  description    String
-  type           AuditFindingType
-  severity       AuditFindingSeverity
-  status         AuditFindingStatus  @default(OPEN)
-  dueDate        DateTime?
-  responsibleId  String?
-  resolution     String?
-  verifiedById   String?
-  verifiedAt     DateTime?
-  itemId         String?
-  processId      String?
-  procedureId    String?
-  efficacyVerification   String?
-  efficacyVerifiedById   String?
-  efficacyVerifiedAt     DateTime?
-  audit          Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  responsible    User?               @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  verifiedBy     User?               @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
-  efficacyVerifiedBy User?           @relation("AuditFindingEfficacyVerifiers", fields: [efficacyVerifiedById], references: [id], onDelete: SetNull)
-  item           AuditChecklistItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  process        Process?            @relation(fields: [processId], references: [id], onDelete: SetNull)
-  procedure      Procedure?          @relation(fields: [procedureId], references: [id], onDelete: SetNull)
-  evidences      AuditEvidence[]
-  evidenceFiles  AuditEvidenceFile[]
-  actions        AuditCorrectiveAction[]
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  id                   String                  @id @default(cuid())
+  auditId              String
+  title                String
+  description          String
+  type                 AuditFindingType
+  severity             AuditFindingSeverity
+  status               AuditFindingStatus      @default(OPEN)
+  dueDate              DateTime?
+  responsibleId        String?
+  resolution           String?
+  verifiedById         String?
+  verifiedAt           DateTime?
+  itemId               String?
+  processId            String?
+  procedureId          String?
+  efficacyVerification String?
+  efficacyVerifiedById String?
+  efficacyVerifiedAt   DateTime?
+  audit                Audit                   @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  responsible          User?                   @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  verifiedBy           User?                   @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
+  efficacyVerifiedBy   User?                   @relation("AuditFindingEfficacyVerifiers", fields: [efficacyVerifiedById], references: [id], onDelete: SetNull)
+  item                 AuditChecklistItem?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  process              Process?                @relation(fields: [processId], references: [id], onDelete: SetNull)
+  procedure            Procedure?              @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  evidences            AuditEvidence[]
+  evidenceFiles        AuditEvidenceFile[]
+  actions              AuditCorrectiveAction[]
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
 
   @@index([auditId])
   @@index([status])
@@ -1244,22 +1419,22 @@ enum AuditCorrectiveActionPriority {
  * (la API responde 409 y el esquema usa Restrict), de modo que la trazabilidad no se destruye.
  */
 model AuditCorrectiveAction {
-  id             String                    @id @default(cuid())
-  findingId      String
-  title          String
-  description    String
-  responsibleId  String?
-  priority       AuditCorrectiveActionPriority @default(MEDIUM)
-  status         AuditCorrectiveActionStatus   @default(OPEN)
-  required       Boolean                   @default(true)
-  dueDate        DateTime?
-  completedAt    DateTime?
-  finding        AuditFinding              @relation(fields: [findingId], references: [id], onDelete: Restrict)
-  responsible    User?                     @relation("AuditActionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  progress       AuditActionProgress[]
-  evidenceFiles  AuditEvidenceFile[]
-  createdAt      DateTime                  @default(now())
-  updatedAt      DateTime                  @updatedAt
+  id            String                        @id @default(cuid())
+  findingId     String
+  title         String
+  description   String
+  responsibleId String?
+  priority      AuditCorrectiveActionPriority @default(MEDIUM)
+  status        AuditCorrectiveActionStatus   @default(OPEN)
+  required      Boolean                       @default(true)
+  dueDate       DateTime?
+  completedAt   DateTime?
+  finding       AuditFinding                  @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  responsible   User?                         @relation("AuditActionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  progress      AuditActionProgress[]
+  evidenceFiles AuditEvidenceFile[]
+  createdAt     DateTime                      @default(now())
+  updatedAt     DateTime                      @updatedAt
 
   @@index([findingId])
   @@index([status])
@@ -1287,33 +1462,156 @@ model AuditActionProgress {
 
 /**
  * Evidencia en PDF adjunta a una auditoría, un hallazgo, una acción correctiva o un ítem de
- * checklist (como mucho uno de ellos; la API lo valida). Mismo contrato que TicketEvidenceFile: el
- * archivo vive en el directorio privado EVIDENCE_UPLOAD_DIR con nombre generado por el servidor y
- * aquí solo se guardan metadatos. La descarga pasa por un endpoint autenticado que relee los bytes
- * de disco. Si el hallazgo o la acción se retiran, la evidencia sobrevive anclada a la auditoría
- * (SET NULL) para no perder el respaldo documental.
+ * checklist (como mucho uno de ellos; la API lo valida). Las filas antiguas usan el proveedor
+ * local y `storedName`; las nuevas pueden usar Google Drive privado y `driveFileId`. La descarga
+ * siempre pasa por un endpoint autenticado. Si el hallazgo o la acción se retiran, la evidencia
+ * sobrevive anclada a la auditoría (SET NULL) para no perder el respaldo documental.
  */
 model AuditEvidenceFile {
-  id           String          @id @default(cuid())
-  auditId      String
-  findingId    String?
-  actionId     String?
-  itemId       String?
-  filename     String
-  storedName   String          @unique
-  mimeType     String
-  size         Int
-  uploadedById String
-  audit        Audit           @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  finding      AuditFinding?   @relation(fields: [findingId], references: [id], onDelete: SetNull)
-  action       AuditCorrectiveAction? @relation(fields: [actionId], references: [id], onDelete: SetNull)
-  item         AuditChecklistItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  uploadedBy   User            @relation("AuditEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
-  createdAt    DateTime        @default(now())
+  id                String                        @id @default(cuid())
+  auditId           String
+  findingId         String?
+  actionId          String?
+  itemId            String?
+  filename          String
+  storedName        String?                       @unique
+  mimeType          String
+  size              Int
+  uploadedById      String
+  storageProvider   EvidenceStorageProvider       @default(LOCAL)
+  storageState      EvidenceStorageState          @default(PENDING)
+  driveFileId       String?                       @unique
+  driveUrl          String?
+  storageError      String?
+  storageErrorCode  String?
+  stagedName        String?
+  lastAttemptAt     DateTime?
+  driveConnectionId String?
+  audit             Audit                         @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding           AuditFinding?                 @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  action            AuditCorrectiveAction?        @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  item              AuditChecklistItem?           @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  uploadedBy        User                          @relation("AuditEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
+  driveConnection   CompanyGoogleDriveConnection? @relation(fields: [driveConnectionId], references: [id], onDelete: Restrict)
+  operations        EvidenceStorageOperation[]
+  createdAt         DateTime                      @default(now())
 
   @@index([auditId])
   @@index([findingId])
   @@index([actionId])
   @@index([itemId])
   @@index([uploadedById])
+}
+
+enum EvidenceStorageProvider {
+  LOCAL
+  GOOGLE_DRIVE
+}
+
+enum EvidenceStorageState {
+  PENDING
+  READY
+  DELETE_PENDING
+  FAILED
+}
+
+enum GoogleDriveConnectionStatus {
+  CONNECTED
+  REAUTH_REQUIRED
+  DISCONNECTED
+}
+
+enum EvidenceStorageOperationType {
+  UPLOAD
+  FILE_DELETE
+  AUDIT_DELETE
+}
+
+enum EvidenceStorageOperationStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  RETRYABLE
+  FAILED
+  CANCELLED
+}
+
+model CompanyGoogleDriveConnection {
+  id                    String                      @id @default(cuid())
+  companyId             String
+  encryptedRefreshToken String
+  googleSubject         String?
+  googleAccountEmail    String?
+  rootFolderId          String?
+  scopes                String[]
+  status                GoogleDriveConnectionStatus @default(CONNECTED)
+  lastRefreshAt         DateTime?
+  lastErrorCode         String?
+  lastError             String?
+  connectedAt           DateTime                    @default(now())
+  disconnectedAt        DateTime?
+  createdAt             DateTime                    @default(now())
+  // The SQL migration also provides a database default for direct inserts; @updatedAt keeps
+  // Prisma writes current on updates.
+  updatedAt             DateTime                    @default(now()) @updatedAt
+  company               Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  evidenceFiles         AuditEvidenceFile[]
+  ticketDriveReferences TicketDriveReference[]
+  operations            EvidenceStorageOperation[]
+
+  // PostgreSQL-only partial UNIQUE index is maintained in the migration SQL because Prisma
+  // cannot express WHERE status = 'CONNECTED' declaratively.
+  @@index([companyId, status])
+}
+
+model GoogleDriveOAuthState {
+  id                String    @id @default(cuid())
+  stateHash         String    @unique
+  companyId         String
+  initiatedById     String
+  sessionId         String
+  encryptedVerifier String
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  initiatedBy       User      @relation(fields: [initiatedById], references: [id], onDelete: Cascade)
+  session           Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([companyId])
+  @@index([sessionId])
+}
+
+model EvidenceStorageOperation {
+  id             String                         @id @default(cuid())
+  companyId      String
+  auditId        String?
+  evidenceFileId String?
+  connectionId   String?
+  operationType  EvidenceStorageOperationType
+  status         EvidenceStorageOperationStatus @default(PENDING)
+  idempotencyKey String                         @unique
+  remoteFileId   String?
+  remoteFolderId String?
+  attemptCount   Int                            @default(0)
+  nextAttemptAt  DateTime?
+  lastAttemptAt  DateTime?
+  leaseOwner     String?
+  leaseUntil     DateTime?
+  lastErrorCode  String?
+  lastError      String?
+  createdAt      DateTime                       @default(now())
+  // The SQL migration also provides a database default for direct inserts; @updatedAt keeps
+  // Prisma writes current on updates.
+  updatedAt      DateTime                       @default(now()) @updatedAt
+  company        Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  audit          Audit?                         @relation(fields: [auditId], references: [id], onDelete: Restrict)
+  evidenceFile   AuditEvidenceFile?             @relation(fields: [evidenceFileId], references: [id], onDelete: Restrict)
+  connection     CompanyGoogleDriveConnection?  @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([leaseUntil])
+  @@index([companyId, auditId])
+  @@index([evidenceFileId])
 }

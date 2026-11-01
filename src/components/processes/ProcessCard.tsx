@@ -2,6 +2,7 @@ import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowRightIcon, PlusIcon, WorkflowIcon } from './ProcessIcons'
 import type { Process } from '../../types'
+import { userOptionLabel } from '../../user-status'
 
 /** Categoría del proceso dentro del mapa: define el tono visual de la tarjeta. */
 export type ProcessCategory = 'estrategico' | 'misional' | 'apoyo'
@@ -97,7 +98,7 @@ export function ProcessMapBand({ band, processes, canCreate, onOpenProcess, onCr
               description={process.description || ''}
               category={band.key}
               status={visualStatusOf[process.status]}
-              responsible={process.responsible?.name ?? null}
+              responsible={process.responsible ? userOptionLabel(process.responsible) : null}
               onOpen={() => onOpenProcess(process)}
               onDelete={canCreate ? () => onDeleteProcess(process) : undefined}
             />
