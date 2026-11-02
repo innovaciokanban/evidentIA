@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { api, apiUpload, ApiError, apiUrl } from '../../api'
+import checkyImage from '../../assets/Aprobado por checky.png'
 import { activeUserOptions, userOptionLabel } from '../../user-status'
 import type {
   Audit,
@@ -20,11 +21,14 @@ import {
   actionStatusLabels,
   actionTransitions,
   auditCloseBlockers,
+  auditChecklistAIContext,
+  auditChecklistAIDimensionLabels,
   auditExecutionSummary,
   auditStatusLabels,
   auditTransitions,
   checklistResultLabels,
   checklistResults,
+  dedupeAuditChecklistAIProposals,
   draftFromFinding,
   emptyActionDraft,
   emptyChecklistDraft,
@@ -42,6 +46,7 @@ import {
   isTerminalAudit,
   pendingEfficacyFindings,
   type ActionDraft,
+  type AuditChecklistAIProposal,
   type AuditWorkspaceSection,
   type ChecklistDraft,
   type ChecklistItemDraft,
@@ -54,6 +59,9 @@ const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', ti
 const shortDateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium' })
 
 const formatMaybeDate = (value: string | null | undefined) => (value ? shortDateFormatter.format(new Date(value)) : '—')
+
+type AuditChecklistAIProcessFilter = 'ALL' | Process['type']
+
 
 function findErrorMessage(requestError: unknown, fallback: string): string {
   if (requestError instanceof ApiError) return requestError.message
@@ -78,14 +86,16 @@ const sectionTabs: Array<{ id: AuditWorkspaceSection; label: string }> = [
   { id: 'resumen', label: 'Resumen' },
   { id: 'checklist', label: 'Checklist' },
   { id: 'hallazgos', label: 'Hallazgos' },
-  { id: 'evidencias', label: 'Evidencias' },
-  { id: 'acciones', label: 'Acciones correctivas' },
   { id: 'historial', label: 'Historial' },
 ]
 
+function visibleSection(section: AuditWorkspaceSection): AuditWorkspaceSection {
+  return section === 'evidencias' || section === 'acciones' ? 'resumen' : section
+}
+
 /**
  * Espacio de trabajo de una auditoría: pestañas Resumen (preparación e inicio), Checklist,
- * Hallazgos, Evidencias, Acciones correctivas e Historial. Reutiliza los endpoints y reglas del
+ * Hallazgos e Historial. Reutiliza los endpoints y reglas del
  * servidor (transiciones, gates de cierre, bloqueos terminales); el cliente solo anticipa los
  * bloqueos para mostrar qué falta, sin sustituir la validación del backend.
  */
@@ -102,18 +112,27 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   initialSection?: AuditWorkspaceSection
 }) {
   const [audit, setAudit] = useState(initial)
-  const [activeSection, setActiveSection] = useState<AuditWorkspaceSection>(initialSection)
+  const [activeSection, setActiveSection] = useState<AuditWorkspaceSection>(() => visibleSection(initialSection))
   const [history, setHistory] = useState<AuditEvent[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '' })
   const [itemDraft, setItemDraft] = useState<ChecklistItemDraft>(emptyChecklistItemDraft)
   const [itemFor, setItemFor] = useState<{ checklistId: string; item: AuditChecklistItem | null } | null>(null)
+  const [aiProposals, setAIProposals] = useState<AuditChecklistAIProposal[]>([])
+  const [aiChecklistId, setAIChecklistId] = useState('')
+  const [aiGenerating, setAIGenerating] = useState(false)
+  const [aiError, setAIError] = useState('')
+  const [aiMissingInformation, setAIMissingInformation] = useState<string[]>([])
+  const [aiProcessFilter, setAIProcessFilter] = useState<AuditChecklistAIProcessFilter>('ALL')
+  const [aiDimensionFilter, setAIDimensionFilter] = useState<AuditChecklistAIProposal['dimension'] | 'ALL'>('ALL')
+  const [aiExpandedProposalIds, setAIExpandedProposalIds] = useState<Set<string>>(new Set())
   const [observationsFor, setObservationsFor] = useState<{ checklistId: string; itemId: string } | null>(null)
   const [observationsDraft, setObservationsDraft] = useState('')
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
   const [findingDraft, setFindingDraft] = useState<FindingDraft>(emptyFindingDraft)
   const [findingFor, setFindingFor] = useState<{ finding: AuditFinding | null } | null>(null)
+  const [pendingNonConformity, setPendingNonConformity] = useState<{ checklistId: string; itemId: string; observations: string } | null>(null)
   const [actionDraft, setActionDraft] = useState<ActionDraft>(emptyActionDraft)
   const [actionFor, setActionFor] = useState<{ findingId: string; action: AuditCorrectiveAction | null } | null>(null)
   const [evidenceDraft, setEvidenceDraft] = useState<EvidenceDraft>(emptyEvidenceDraft)
@@ -133,7 +152,14 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   if (auditKey !== initial.id) {
     setAuditKey(initial.id)
     setAudit(initial)
-    setActiveSection(initialSection)
+    setActiveSection(visibleSection(initialSection))
+    setAIProposals([])
+    setAIChecklistId('')
+    setAIError('')
+    setAIMissingInformation([])
+    setAIProcessFilter('ALL')
+    setAIDimensionFilter('ALL')
+    setAIExpandedProposalIds(new Set())
     historyAuditId.current = initial.id
     setClosing(false)
     setCloseSummary('')
@@ -173,6 +199,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const pendingEfficacy = pendingEfficacyFindings(audit)
   const terminal = isTerminalAudit(audit)
   const readonly = terminal || !canWrite
+  const checklistResponseReadonly = readonly || audit.status !== 'IN_PROGRESS'
   const checklistTotal = results.itemsTotal
   const checklistCompleted = results.itemsEvaluated
   const checklistPending = results.itemsRequiredPending
@@ -199,8 +226,9 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   }
 
   function selectSection(section: AuditWorkspaceSection) {
-    setActiveSection(section)
-    if (section === 'historial' && !historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit) void loadHistory()
+    const nextSection = visibleSection(section)
+    setActiveSection(nextSection)
+    if (nextSection === 'historial' && !historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit) void loadHistory()
   }
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -227,6 +255,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setFindingFor({ finding: null })
     setFindingDraft({ ...emptyFindingDraft, responsibleId: audit.responsible?.id ?? '', ...(itemId ? { itemId } : {}) })
     setActiveSection('hallazgos')
+  }
+
+  function cancelFinding() {
+    setFindingFor(null)
+    setPendingNonConformity(null)
   }
 
   function startAction(findingId: string) {
@@ -306,6 +339,110 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     }
   }
 
+  async function generateChecklistWithAI() {
+    if (readonly || aiGenerating || busy) return
+    setAIGenerating(true)
+    setAIError('')
+    setAIMissingInformation([])
+    try {
+      const result = await api<{
+        proposals: Array<Omit<AuditChecklistAIProposal, 'id' | 'selected'>>
+        missingInformation: string[]
+      }>(`/audits/${audit.id}/checklists/generate`, { method: 'POST', body: JSON.stringify({}) })
+      const existingQuestions = (audit.checklists ?? []).flatMap((checklist) => checklist.items.map((item) => item.description))
+      const uniqueProposals = dedupeAuditChecklistAIProposals(existingQuestions, result.proposals)
+      setAIProposals(uniqueProposals.map((proposal, index) => ({ ...proposal, id: `checky-${Date.now()}-${index}`, selected: true })))
+      setAIExpandedProposalIds(new Set())
+      setAIChecklistId((current) => current || audit.checklists?.[0]?.id || '')
+      setAIMissingInformation(result.missingInformation)
+      if (uniqueProposals.length === 0 && result.missingInformation.length === 0) setAIError('Checky no encontró preguntas sustentadas en la documentación disponible.')
+    } catch (requestError) {
+      setAIError(findErrorMessage(requestError, 'No se pudieron generar preguntas con IA-Checky.'))
+    } finally {
+      setAIGenerating(false)
+    }
+  }
+
+  async function saveAIProposals() {
+    const existingQuestions = (audit.checklists ?? []).flatMap((checklist) => checklist.items.map((item) => item.description))
+    const selected = dedupeAuditChecklistAIProposals(existingQuestions, aiProposals.filter((proposal) => proposal.selected))
+    if (selected.length === 0) {
+      setAIError('Selecciona al menos una propuesta para guardar.')
+      return
+    }
+    if (!aiChecklistId || busy) {
+      setAIError('Selecciona una lista de verificación de destino.')
+      return
+    }
+    if (selected.some((proposal) => proposal.question.trim().length < 10 || proposal.expectedEvidence.trim().length < 3 || proposal.source.trim().length < 3)) {
+      setAIError('Completa la pregunta, la evidencia esperada y la fuente antes de guardar.')
+      return
+    }
+    setBusy(true)
+    setAIError('')
+    const savedIds = new Set<string>()
+    try {
+      for (const proposal of selected) {
+        const criteria = [
+          `Evidencia esperada: ${proposal.expectedEvidence.trim()}`,
+          `Fuente: ${proposal.source.trim()}`,
+          `Dimensión: ${auditChecklistAIDimensionLabels[proposal.dimension]}`,
+        ].join('\n')
+        await api(`/audits/${audit.id}/checklists/${aiChecklistId}/items`, {
+          method: 'POST',
+          body: JSON.stringify({ description: proposal.question.trim(), criteria, required: true }),
+        })
+        savedIds.add(proposal.id)
+      }
+      setAIProposals((current) => current.filter((proposal) => !savedIds.has(proposal.id)))
+      await reload()
+      onNotice(`${savedIds.size} pregunta(s) de IA-Checky guardada(s).`)
+    } catch (requestError) {
+      setAIProposals((current) => current.filter((proposal) => !savedIds.has(proposal.id)))
+      onError(findErrorMessage(requestError, savedIds.size > 0 ? 'Algunas propuestas se guardaron, pero otras no.' : 'No se pudieron guardar las propuestas.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function updateAIProposal(id: string, changes: Partial<AuditChecklistAIProposal>) {
+    setAIProposals((current) => current.map((proposal) => proposal.id === id ? { ...proposal, ...changes } : proposal))
+  }
+
+  function toggleAIProposalDetails(id: string) {
+    setAIExpandedProposalIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function discardAIProposal(id: string) {
+    const proposal = aiProposals.find((item) => item.id === id)
+    if (!proposal) return
+    const confirmed = await askConfirm({
+      title: 'Descartar propuesta',
+      message: 'La propuesta y sus ediciones se retirarán de esta revisión.',
+      confirmLabel: 'Descartar',
+      variant: 'danger',
+    })
+    if (confirmed) setAIProposals((current) => current.filter((item) => item.id !== id))
+  }
+
+  const aiProposalCards = aiProposals.map((proposal) => ({ proposal, context: auditChecklistAIContext(proposal, audit, processes) }))
+  const visibleAIProposalCards = aiProposalCards.filter(({ proposal, context }) => (
+    (aiProcessFilter === 'ALL' || context.processType === aiProcessFilter)
+      && (aiDimensionFilter === 'ALL' || proposal.dimension === aiDimensionFilter)
+  ))
+  const selectedAIProposalCount = aiProposals.filter((proposal) => proposal.selected).length
+  const allVisibleAIProposalsSelected = visibleAIProposalCards.length > 0 && visibleAIProposalCards.every(({ proposal }) => proposal.selected)
+
+  function setVisibleAISelection(selected: boolean) {
+    const visibleIds = new Set(visibleAIProposalCards.map(({ proposal }) => proposal.id))
+    setAIProposals((current) => current.map((proposal) => visibleIds.has(proposal.id) ? { ...proposal, selected } : proposal))
+  }
+
   async function removeChecklist(checklist: AuditChecklist) {
     const confirmed = await askConfirm({ title: 'Eliminar lista', message: `Se eliminará la lista «${checklist.name}» y sus ítems. Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' })
     if (!confirmed) return
@@ -343,7 +480,15 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   }
 
   async function updateItemResult(checklistId: string, item: AuditChecklistItem, result: typeof checklistResults[number], observations: string) {
-    if (!canWrite) return
+    if (checklistResponseReadonly) return
+    if (result === 'NON_CONFORM' && item.result !== 'NON_CONFORM') {
+      const existingFinding = audit.findings.find((finding) => finding.itemId === item.id && finding.type === 'NONCONFORMITY')
+      if (!existingFinding) {
+        setPendingNonConformity({ checklistId, itemId: item.id, observations })
+        startFinding(item.id)
+        return
+      }
+    }
     setBusy(true)
     try {
       await api(`/audits/${audit.id}/checklists/${checklistId}/items/${item.id}`, { method: 'PATCH', body: JSON.stringify({ result, observations: observations || null }) })
@@ -410,8 +555,15 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
         await api(`/audits/${audit.id}/findings/${findingFor.finding.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       } else {
         await api(`/audits/${audit.id}/findings`, { method: 'POST', body: JSON.stringify(payload) })
+        if (pendingNonConformity) {
+          await api(`/audits/${audit.id}/checklists/${pendingNonConformity.checklistId}/items/${pendingNonConformity.itemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ result: 'NON_CONFORM', observations: pendingNonConformity.observations || null }),
+          })
+        }
       }
       setFindingFor(null)
+      setPendingNonConformity(null)
       await reload()
       onNotice(findingFor.finding ? 'Hallazgo actualizado.' : 'Hallazgo creado.')
     } catch (requestError) {
@@ -751,7 +903,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       <span aria-hidden="true">✕</span>
                       <div>
                         <strong>{blocker.message}</strong>
-                        <button type="button" className="text-button" onClick={() => selectSection(blocker.section)}>Resolver en {sectionTabs.find((tab) => tab.id === blocker.section)?.label}</button>
+                        <button type="button" className="text-button" onClick={() => selectSection(blocker.section)}>Resolver en {sectionTabs.find((tab) => tab.id === blocker.section)?.label ?? 'Resumen'}</button>
                       </div>
                     </li>
                   ))}
@@ -800,6 +952,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               {checklistTotal > 0 && (
                 <div className="quality-section-progress"><strong>{checklistPercent}%</strong><span>{checklistCompleted}/{checklistTotal} evaluados</span></div>
               )}
+              {!readonly && (
+                <button type="button" className="button secondary" onClick={() => void generateChecklistWithAI()} disabled={busy || aiGenerating}>
+                  {aiGenerating ? 'Generando preguntas…' : 'Generar preguntas con IA-Checky'}
+                </button>
+              )}
             </div>
             <div className="quality-checklist-progress">
               <span><strong>{checklistCompleted}</strong> de <strong>{checklistTotal}</strong> criterios evaluados</span>
@@ -809,11 +966,125 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             {checklistPending > 0 && !readonly && (
               <p className="quality-attention-note" role="status">Los criterios obligatorios pendientes y las no conformidades se resaltan; el cierre queda bloqueado hasta evaluarlos.</p>
             )}
+            {!readonly && audit.status !== 'IN_PROGRESS' && (
+              <p className="quality-attention-note" role="status">La auditoría está planificada: puedes preparar el checklist, pero las respuestas se habilitan al iniciar la ejecución.</p>
+            )}
             {!readonly && (
               <form onSubmit={saveChecklist} className="quality-inline-form">
                 <input value={checklistDraft.name} onChange={(event) => setChecklistDraft({ name: event.target.value })} placeholder="Nombre de la lista" minLength={1} maxLength={160} required />
                 <button type="submit" className="button secondary" disabled={busy}>Añadir lista</button>
               </form>
+            )}
+            {aiError && <p className="form-error" role="alert">{aiError}</p>}
+            {aiMissingInformation.length > 0 && (
+              <div className="quality-attention-note" role="status">
+                <strong>Documentación incompleta:</strong> {aiMissingInformation.join(' ')}
+              </div>
+            )}
+            {aiProposals.length > 0 && (
+              <section className="quality-ai-review" aria-labelledby="quality-ai-review-title">
+                <header className="quality-ai-review-head">
+                  <div className="quality-ai-avatar-frame"><img src={checkyImage} alt="IA-Checky" /></div>
+                  <div className="quality-ai-review-identity">
+                    <p className="detail-label">REVISIÓN HUMANA</p>
+                    <h3 id="quality-ai-review-title">IA-Checky</h3>
+                    <p className="quality-ai-review-role">Tu consultor experto en auditorías y gestión por procesos</p>
+                    <p className="quality-ai-review-welcome">Preparé estas preguntas para <strong>{audit.title}</strong>. Revisa cada propuesta y conserva solo las que tengan sentido para tu auditoría.</p>
+                  </div>
+                  <div className="quality-ai-review-count" aria-label={`${aiProposals.length} preguntas generadas`}>
+                    <strong>{aiProposals.length}</strong>
+                    <span>preguntas generadas</span>
+                  </div>
+                </header>
+
+                <div className="quality-ai-review-toolbar">
+                  <div className="quality-ai-review-filters" aria-label="Filtros de propuestas">
+                    <label>Proceso
+                      <select value={aiProcessFilter} onChange={(event) => setAIProcessFilter(event.target.value as AuditChecklistAIProcessFilter)} disabled={busy}>
+                        <option value="ALL">Todos los procesos</option>
+                        <option value="STRATEGIC">Estratégico</option>
+                        <option value="MISSIONAL">Misional</option>
+                        <option value="SUPPORT">Apoyo</option>
+                      </select>
+                    </label>
+                    <label>Dimensión
+                      <select value={aiDimensionFilter} onChange={(event) => setAIDimensionFilter(event.target.value as AuditChecklistAIProposal['dimension'] | 'ALL')} disabled={busy}>
+                        <option value="ALL">Todas las dimensiones</option>
+                        {(Object.keys(auditChecklistAIDimensionLabels) as AuditChecklistAIProposal['dimension'][]).map((dimension) => <option key={dimension} value={dimension}>{auditChecklistAIDimensionLabels[dimension]}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="quality-ai-review-selection-cluster" aria-label="Acciones de selección">
+                    <div className="quality-ai-review-selection" aria-live="polite">
+                      <strong>{selectedAIProposalCount} de {aiProposals.length}</strong> seleccionadas
+                      <span>{visibleAIProposalCards.length} visibles</span>
+                    </div>
+                    <div className="quality-ai-review-bulk-actions">
+                      <button type="button" className="text-button" onClick={() => setVisibleAISelection(true)} disabled={busy || visibleAIProposalCards.length === 0 || allVisibleAIProposalsSelected}>Seleccionar visibles</button>
+                      <button type="button" className="text-button" onClick={() => setVisibleAISelection(false)} disabled={busy || visibleAIProposalCards.length === 0 || !visibleAIProposalCards.some(({ proposal }) => proposal.selected)}>Desmarcar visibles</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="quality-ai-review-savebar">
+                  <label>Lista de destino
+                    <select value={aiChecklistId} onChange={(event) => setAIChecklistId(event.target.value)} disabled={busy}>
+                      <option value="">Selecciona una lista</option>
+                      {(audit.checklists ?? []).map((checklist) => <option key={checklist.id} value={checklist.id}>{checklist.name}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" className="button primary" onClick={() => void saveAIProposals()} disabled={busy || aiGenerating || !aiChecklistId || selectedAIProposalCount === 0} aria-busy={busy}>
+                    {busy ? 'Guardando…' : <>Guardar seleccionadas <span aria-hidden="true">→</span></>}
+                  </button>
+                </div>
+
+                {visibleAIProposalCards.length === 0 ? (
+                  <div className="quality-ai-review-empty" role="status">
+                    <span aria-hidden="true">⌕</span>
+                    <strong>No hay propuestas con estos filtros</strong>
+                    <p>Prueba otra combinación de proceso o dimensión. Tus ediciones y selecciones se conservan.</p>
+                  </div>
+                ) : (
+                  <div className="quality-ai-proposal-grid">
+                    {visibleAIProposalCards.map(({ proposal, context }, index) => {
+                      const expanded = aiExpandedProposalIds.has(proposal.id)
+                      return (
+                        <article key={proposal.id} className={`quality-ai-proposal-card${proposal.selected ? ' is-selected' : ''}`}>
+                          <div className="quality-ai-proposal-card-top">
+                            <label className="quality-ai-proposal-select">
+                              <input type="checkbox" checked={proposal.selected} onChange={(event) => updateAIProposal(proposal.id, { selected: event.target.checked })} disabled={busy} />
+                              <span>Incluir propuesta</span>
+                            </label>
+                            <span className={`quality-ai-dimension quality-ai-dimension-${proposal.dimension.toLowerCase()}`}>{auditChecklistAIDimensionLabels[proposal.dimension]}</span>
+                            <button type="button" className="text-button danger" onClick={() => void discardAIProposal(proposal.id)} disabled={busy}>Descartar</button>
+                          </div>
+                          <div className="quality-ai-question-field">
+                            <span className="quality-ai-card-kicker">Pregunta {index + 1}</span>
+                            <textarea aria-label={`Pregunta propuesta ${index + 1}`} value={proposal.question} onChange={(event) => updateAIProposal(proposal.id, { question: event.target.value })} rows={3} maxLength={2000} disabled={busy} />
+                          </div>
+                          <div className="quality-ai-proposal-context">
+                            <div><span>Proceso</span><strong>{context.process ?? 'No identificado en la fuente'}</strong></div>
+                            <div><span>{context.procedure ? 'Procedimiento' : 'Origen documental'}</span><strong>{context.procedure ?? `${context.sourceTypeLabel} · ${context.source}`}</strong></div>
+                          </div>
+                          <button type="button" className="quality-ai-details-toggle" aria-expanded={expanded} aria-controls={`quality-ai-details-${proposal.id}`} onClick={() => toggleAIProposalDetails(proposal.id)}>
+                            <span>{expanded ? 'Ocultar evidencia y fuente' : 'Ver evidencia y fuente'}</span><span aria-hidden="true">{expanded ? '−' : '+'}</span>
+                          </button>
+                          {expanded && (
+                            <div id={`quality-ai-details-${proposal.id}`} className="quality-ai-proposal-details">
+                              <label>Evidencia esperada
+                                <textarea value={proposal.expectedEvidence} onChange={(event) => updateAIProposal(proposal.id, { expectedEvidence: event.target.value })} rows={3} maxLength={1600} disabled={busy} />
+                              </label>
+                              <label>Fuente documental
+                                <input value={proposal.source} onChange={(event) => updateAIProposal(proposal.id, { source: event.target.value })} maxLength={240} disabled={busy} />
+                              </label>
+                            </div>
+                          )}
+                        </article>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
             )}
             {(audit.checklists ?? []).length === 0 ? (
               <p className="muted">Sin listas de verificación todavía.</p>
@@ -846,8 +1117,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                             <span>{item.required ? '★ ' : ''}{item.description}</span>
                             <span className="muted">{item.criteria}</span>
                             <span>
-                              {readonly ? checklistResultLabels[item.result] : (
-                                <select value={item.result} onChange={(event) => void updateItemResult(checklist.id, item, event.target.value as typeof checklistResults[number], item.observations ?? '')} aria-label={`Resultado de ${item.description.slice(0, 40)}`}>
+                               {checklistResponseReadonly ? checklistResultLabels[item.result] : (
+                                 <select value={item.result} onChange={(event) => void updateItemResult(checklist.id, item, event.target.value as typeof checklistResults[number], item.observations ?? '')} aria-label={`Resultado de ${item.description.slice(0, 40)}`}>
                                   {checklistResults.map((result) => <option key={result} value={result}>{checklistResultLabels[result]}</option>)}
                                 </select>
                               )}
@@ -864,8 +1135,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                               ) : (
                                 <>
                                   {item.observations ?? '—'}
-                                  {!readonly && (
-                                    <button type="button" className="text-button quality-observations-trigger" onClick={() => { setObservationsFor({ checklistId: checklist.id, itemId: item.id }); setObservationsDraft(item.observations ?? '') }}>
+                                   {!checklistResponseReadonly && (
+                                     <button type="button" className="text-button quality-observations-trigger" onClick={() => { setObservationsFor({ checklistId: checklist.id, itemId: item.id }); setObservationsDraft(item.observations ?? '') }}>
                                       {item.observations ? 'Editar' : 'Añadir'}
                                     </button>
                                   )}
@@ -992,11 +1263,17 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 <label className="procedure-field-wide">Título
                   <input value={findingDraft.title} onChange={(event) => setFindingDraft((current) => ({ ...current, title: event.target.value }))} minLength={3} maxLength={200} required />
                 </label>
-                <label className="procedure-field-wide">Descripción y evidencia objetiva
-                  <textarea value={findingDraft.description} onChange={(event) => setFindingDraft((current) => ({ ...current, description: event.target.value }))} minLength={1} maxLength={5000} required rows={3} placeholder="Describe el hallazgo y la evidencia objetiva constatada (qué se observó, dónde y cuándo)." />
+                  {findingDraft.itemId && (
+                    <div className="procedure-field-wide quality-finding-criterion">
+                      <strong>Criterio incumplido</strong>
+                      <span>{(audit.checklists ?? []).flatMap((checklist) => checklist.items).find((item) => item.id === findingDraft.itemId)?.criteria ?? 'Criterio no disponible'}</span>
+                    </div>
+                  )}
+                  <label className="procedure-field-wide">Descripción y evidencia objetiva
+                    <textarea value={findingDraft.description} onChange={(event) => setFindingDraft((current) => ({ ...current, description: event.target.value }))} minLength={1} maxLength={5000} required rows={3} placeholder="Describe el hallazgo y la evidencia objetiva constatada (qué se observó, dónde y cuándo)." />
                 </label>
-                <label>Tipo
-                  <select value={findingDraft.type} onChange={(event) => setFindingDraft((current) => ({ ...current, type: event.target.value as FindingDraft['type'] }))}>
+                  <label>Tipo
+                    <select value={findingDraft.type} onChange={(event) => setFindingDraft((current) => ({ ...current, type: event.target.value as FindingDraft['type'] }))} disabled={Boolean(pendingNonConformity)}>
                     {(Object.keys(findingTypeLabels) as Array<FindingDraft['type']>).map((type) => <option key={type} value={type}>{findingTypeLabels[type]}</option>)}
                   </select>
                 </label>
@@ -1014,8 +1291,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 <label>Fecha límite
                   <input type="date" value={findingDraft.dueDate} onChange={(event) => setFindingDraft((current) => ({ ...current, dueDate: event.target.value }))} />
                 </label>
-                <label>Ítem de checklist
-                  <select value={findingDraft.itemId} onChange={(event) => setFindingDraft((current) => ({ ...current, itemId: event.target.value }))}>
+                  <label>Ítem de checklist
+                    <select value={findingDraft.itemId} onChange={(event) => setFindingDraft((current) => ({ ...current, itemId: event.target.value }))} disabled={Boolean(pendingNonConformity)}>
                     <option value="">Sin vínculo</option>
                     {(audit.checklists ?? []).flatMap((checklist) => checklist.items.map((item) => (
                       <option key={item.id} value={item.id}>{checklist.name}: {item.description.slice(0, 60)}</option>
@@ -1045,7 +1322,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 )}
                 <div className="procedure-form-actions procedure-field-wide">
                   <button type="submit" className="button primary" disabled={busy}>Guardar</button>
-                  <button type="button" className="button secondary" onClick={() => setFindingFor(null)}>Cancelar</button>
+                  <button type="button" className="button secondary" onClick={cancelFinding}>Cancelar</button>
                 </div>
               </form>
             </section>

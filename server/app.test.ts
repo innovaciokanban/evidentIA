@@ -1948,6 +1948,58 @@ describe('AI analysis service and API', () => {
     await expect(service.analyze({ title: diagnostic.title, description: diagnostic.description, status: diagnostic.status, swotItems: [] })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 
+  it('classifies an exhausted OpenAI quota during checklist generation', async () => {
+    const client = { responses: { create: vi.fn(async () => { throw { status: 429, code: 'credit_balance_exhausted' } }) } }
+    const service = new AIService(client)
+    await expect(service.generateAuditChecklist({
+      audit: { title: 'Auditoría', objectives: null, scope: 'Alcance', criteria: 'Criterios' },
+      processes: [],
+      procedures: [],
+      sources: [],
+      existingQuestions: [],
+      maxQuestions: 10,
+    })).rejects.toMatchObject({ code: 'PROVIDER_QUOTA' })
+  })
+
+  it('validates and deduplicates audit checklist proposals from the same Checky service', async () => {
+    const sourceId = 'cmuoch1430004uwl58z1940k'
+    const client = {
+      responses: {
+        create: vi.fn(async () => ({ output_text: JSON.stringify({
+          proposals: [
+            { question: '¿Se revisa el procedimiento vigente?', expectedEvidence: 'Registro de revisión y versión aprobada.', sourceId, sourceType: 'PROCEDURE', source: 'PR-01 · Gestión documental', dimension: 'COMPLIANCE' },
+            { question: '¿Se revisa el procedimiento vigente?', expectedEvidence: 'Otra evidencia.', sourceId, sourceType: 'PROCEDURE', source: 'PR-01 · Gestión documental', dimension: 'IMPLEMENTATION' },
+          ],
+          missingInformation: [],
+        }) })),
+      },
+    }
+    const service = new AIService(client)
+    const result = await service.generateAuditChecklist({
+      audit: { title: 'Auditoría', objectives: 'Verificar', scope: 'Proceso comercial', criteria: 'Manual de calidad' },
+      processes: [],
+      procedures: [],
+      sources: [{ id: sourceId, type: 'PROCEDURE', label: 'PR-01 · Gestión documental' }],
+      existingQuestions: [],
+      maxQuestions: 10,
+    })
+    expect(result.proposals).toHaveLength(1)
+    expect(result.proposals[0].sourceId).toBe(sourceId)
+  })
+
+  it('rejects audit proposals with an unknown source', async () => {
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({ proposals: [{ question: '¿Se cumple el procedimiento documentado?', expectedEvidence: 'Registro verificable.', sourceId: 'cmuoch1430004uwl58z1940k', sourceType: 'PROCEDURE', source: 'Fuente', dimension: 'COMPLIANCE' }], missingInformation: [] }) })) } }
+    const service = new AIService(client)
+    await expect(service.generateAuditChecklist({
+      audit: { title: 'Auditoría', objectives: null, scope: 'Alcance', criteria: 'Criterios' },
+      processes: [],
+      procedures: [],
+      sources: [],
+      existingQuestions: [],
+      maxQuestions: 10,
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
   it('persists and retrieves an authorized AI analysis', async () => {
     const aiService = { analyze: vi.fn(async () => aiResult) } as unknown as AIService
     const agent = request.agent(createApp(makeDb('SUPERUSER'), aiService))

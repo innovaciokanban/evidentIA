@@ -278,7 +278,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                 <div className="procedure-field-wide">
                   <AuditScopeSelect
                     processes={companyProcesses.map((process) => ({ id: process.id, label: `${process.code} · ${process.name}` }))}
-                    procedures={procedures.filter((procedure) => companyProcesses.some((process) => process.id === procedure.processId)).map((procedure) => ({ id: procedure.id, label: `${procedure.code} · ${procedure.name}` }))}
+                    procedures={procedures.filter((procedure) => companyProcesses.some((process) => process.id === procedure.processId)).map((procedure) => ({ id: procedure.id, processId: procedure.processId, label: `${procedure.code} · ${procedure.name}` }))}
                     processIds={draft.processIds}
                     procedureIds={draft.procedureIds}
                     lockedProcessId={editing?.processId ?? null}

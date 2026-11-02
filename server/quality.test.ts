@@ -10,6 +10,8 @@ import request from './test-request.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
+import type { AIService } from './ai-service.js'
+import { AIServiceError } from './ai-service.js'
 import { evidenceDirectory } from './evidence-storage.js'
 import type { EvidenceStorage } from './evidence-provider.js'
 
@@ -20,6 +22,8 @@ const admin = { id: 'cmadmin000000000000000001', email: 'admin@quality.test', na
 const companyUser = { id: 'cmuser0000000000000000001', email: 'user@quality.test', name: 'Quality User', role: 'COMPANY_USER' as Role, companyId }
 const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@quality.test', name: 'Foreign Admin', role: 'COMPANY_ADMIN' as Role, companyId: otherCompanyId }
 const process = { id: processId, companyId, name: 'Gestión Comercial', code: 'PROC-01' }
+const procedureId = 'cmprocedure0000000000000001'
+const procedure = { id: procedureId, processId, code: 'PR-01', name: 'Procedimiento comercial', objective: 'Gestionar ventas', scope: 'Desde la solicitud hasta el cierre.', description: 'Registrar y revisar cada actividad comercial.', status: 'APPROVED', version: '1.0', process: { id: processId, companyId, name: process.name, code: process.code } }
 
 const createPayload = {
   title: 'Auditoría interna de calidad',
@@ -39,10 +43,12 @@ type AnyWhere = {
   actionId?: string
   status?: string | { notIn?: string[] }
   auditId?: string
+  companyId?: string
   findingId?: string
   checklistId?: string
   required?: boolean
   result?: string
+  itemId?: string
   storageProvider?: string
   type?: string
   process?: { companyId?: string; id?: string }
@@ -130,6 +136,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
   const findingMatches = (finding: Record<string, unknown>, where?: AnyWhere) => {
     if (typeof where?.id === 'string' && finding.id !== where.id) return false
     if (where?.auditId && finding.auditId !== where.auditId) return false
+    if (where?.itemId && finding.itemId !== where.itemId) return false
     if (typeof where?.status === 'string' && finding.status !== where.status) return false
     if (typeof where?.type === 'string' && finding.type !== where.type) return false
     return true
@@ -195,6 +202,12 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     },
     process: {
       findUnique: vi.fn(async () => ({ ...process, company: { id: process.companyId } })),
+      findMany: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => {
+        const ids = where?.id && typeof where.id === 'object' ? where.id.in ?? [] : []
+        if (ids.length > 0 && !ids.includes(process.id)) return []
+        if (where?.companyId && where.companyId !== process.companyId) return []
+        return [{ ...process, objective: 'Gestionar ventas con trazabilidad.', description: 'Proceso de ventas y seguimiento.', sipocSuppliers: [{ id: 'cmsupplier000000000000001', description: 'Proveedores comerciales' }], sipocInputs: [{ id: 'cminput00000000000000001', description: 'Solicitud del cliente' }], sipocProcesses: [{ id: 'cmsipocprocess0000000000001', description: 'Validación y registro' }], sipocOutputs: [{ id: 'cmoutput0000000000000001', description: 'Venta registrada' }], sipocCustomers: [{ id: 'cmcustomer000000000000001', description: 'Cliente' }], risks: [{ id: 'cmrisk00000000000000001', code: 'R-01', name: 'Registro incompleto', description: 'Puede faltar información.', riskType: 'OPERATIVO', bpmnActivity: 'Registrar venta', controls: [{ id: 'cmcontrol000000000000001', description: 'Revisión de datos', evaluation: 'PENDING' }] }] }]
+      }),
       count: vi.fn(async ({ where }: { where?: { id?: { in?: string[] }; companyId?: string } } = {}) => {
         if (where?.id?.in && where.companyId) return where.id.in.filter((id) => id === processId).length
         return 1
@@ -212,7 +225,12 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'drive-connection', ...data })),
     },
     procedure: {
-      findMany: vi.fn(async () => []),
+      findMany: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => {
+        const ids = where?.id && typeof where.id === 'object' ? where.id.in ?? [] : []
+        if (ids.length > 0 && !ids.includes(procedure.id)) return []
+        if (where?.process?.companyId && where.process.companyId !== companyId) return []
+        return [{ ...procedure }]
+      }),
       count: vi.fn(async () => 0),
     },
     audit: {
@@ -571,6 +589,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     storedOperations,
     storedEvents,
     storedAuditProcesses,
+    storedAuditProcedures,
   }
 }
 
@@ -643,6 +662,164 @@ describe('quality assurance API', () => {
     const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Checklist completa.' })
     expect(closed.status).toBe(200)
     expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
+  })
+
+  it('only records checklist responses while the audit is in progress and blocks them after closing', async () => {
+    const { db } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const created = await agent.post('/api/audits').send(createPayload)
+    const auditId = created.body.audit.id as string
+    const checklist = await agent.post(`/api/audits/${auditId}/checklists`).send({ name: 'Preparación' })
+    const checklistId = checklist.body.checklist.id as string
+    const item = await agent.post(`/api/audits/${auditId}/checklists/${checklistId}/items`).send({
+      description: 'Pregunta preparada',
+      criteria: 'Criterio preparado',
+      required: true,
+    })
+    const itemId = item.body.item.id as string
+
+    const plannedResult = await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ result: 'CONFORM' })
+    expect(plannedResult.status).toBe(409)
+    expect(plannedResult.body.reason).toBe('AUDIT_NOT_IN_PROGRESS')
+
+    const prepared = await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ description: 'Pregunta revisada' })
+    expect(prepared.status).toBe(200)
+
+    expect((await agent.post(`/api/audits/${auditId}/status`).send({ status: 'IN_PROGRESS' })).status).toBe(200)
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ result: 'CONFORM' })).status).toBe(200)
+    expect((await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Checklist evaluada.' })).status).toBe(200)
+
+    const closedObservation = await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ observations: 'Cambio posterior' })
+    expect(closedObservation.status).toBe(409)
+  })
+
+  it('enforces checklist response RBAC and tenant isolation', async () => {
+    const readOnly = makeQualityDb('COMPANY_USER')
+    readOnly.storedAudits.push({ id: 'cmauditreadonlychecklist0001', processId, status: 'IN_PROGRESS', title: 'Auditoría de solo lectura', code: 'AUD-996', scope: 'Alcance', criteria: 'Criterios', auditType: 'Interna', summary: null })
+    readOnly.storedChecklists.push({ id: 'cmchecklistreadonly0001', auditId: 'cmauditreadonlychecklist0001', name: 'Lista' })
+    readOnly.storedItems.push({ id: 'cmitemreadonly00000000001', checklistId: 'cmchecklistreadonly0001', description: 'Pregunta', criteria: 'Criterio', result: 'PENDING', observations: null, required: true, position: 0 })
+    const userAgent = await loggedIn(readOnly.db, companyUser.email)
+    const forbidden = await userAgent.patch('/api/audits/cmauditreadonlychecklist0001/checklists/cmchecklistreadonly0001/items/cmitemreadonly00000000001').send({ result: 'CONFORM' })
+    expect(forbidden.status).toBe(403)
+    expect(readOnly.storedItems[0]).toMatchObject({ result: 'PENDING' })
+
+    const foreign = makeQualityDb('COMPANY_ADMIN', otherCompanyId)
+    foreign.storedAudits.push({ id: 'cmauditforeignchecklist0001', processId, status: 'IN_PROGRESS', title: 'Auditoría ajena', code: 'AUD-995', scope: 'Alcance', criteria: 'Criterios', auditType: 'Interna', summary: null })
+    const foreignAgent = await loggedIn(foreign.db, foreignAdmin.email)
+    const notFound = await foreignAgent.patch('/api/audits/cmauditforeignchecklist0001/checklists/cmchecklist0001/items/cmitem0000000000000000001').send({ result: 'CONFORM' })
+    expect(notFound.status).toBe(404)
+  })
+
+  it('requires a confirmed linked finding for NON_CONFORM and rejects duplicate findings', async () => {
+    const { db, storedFindings, storedItems } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const checklist = await agent.post(`/api/audits/${auditId}/checklists`).send({ name: 'No conformidades' })
+    const checklistId = checklist.body.checklist.id as string
+    const item = await agent.post(`/api/audits/${auditId}/checklists/${checklistId}/items`).send({
+      description: '¿Existe evidencia?',
+      criteria: 'Debe existir evidencia objetiva.',
+    })
+    const itemId = item.body.item.id as string
+
+    const withoutFinding = await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ result: 'NON_CONFORM' })
+    expect(withoutFinding.status).toBe(409)
+    expect(withoutFinding.body.reason).toBe('NON_CONFORMITY_FINDING_REQUIRED')
+    expect(storedItems[0]).toMatchObject({ result: 'PENDING' })
+
+    const finding = await agent.post(`/api/audits/${auditId}/findings`).send({
+      title: 'Evidencia objetiva ausente',
+      description: 'No se encontró el registro requerido durante la revisión.',
+      type: 'NONCONFORMITY',
+      severity: 'MAJOR',
+      itemId,
+    })
+    expect(finding.status).toBe(201)
+    expect(finding.body.finding).toMatchObject({ itemId, type: 'NONCONFORMITY' })
+
+    const evaluated = await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${itemId}`).send({ result: 'NON_CONFORM' })
+    expect(evaluated.status).toBe(200)
+    expect(evaluated.body.item).toMatchObject({ result: 'NON_CONFORM' })
+
+    const duplicate = await agent.post(`/api/audits/${auditId}/findings`).send({
+      title: 'Segundo hallazgo duplicado',
+      description: 'Otra descripción para el mismo criterio.',
+      type: 'NONCONFORMITY',
+      severity: 'MAJOR',
+      itemId,
+    })
+    expect(duplicate.status).toBe(409)
+    expect(duplicate.body.reason).toBe('DUPLICATE_NON_CONFORMITY_FINDING')
+    expect(storedFindings).toHaveLength(1)
+  })
+
+  it('generates authorized checklist proposals for a planned audit without a checklist', async () => {
+    const { db, storedAuditProcedures, storedChecklists, storedItems } = makeQualityDb()
+    const generateAuditChecklist = vi.fn(async (context: { processes: Array<{ sipoc: unknown[] }>; procedures: Array<{ id: string }>; sources: Array<{ id: string; type: string }>; existingQuestions: string[] }) => ({
+      proposals: [{ question: '¿Se revisa el registro de la venta?', expectedEvidence: 'Registro y revisión trazable.', sourceId: procedureId, sourceType: 'PROCEDURE', source: 'PR-01 · Procedimiento comercial', dimension: 'COMPLIANCE' }],
+      missingInformation: context.procedures.length === 0 ? ['No hay procedimientos vinculados.'] : [],
+    }))
+    const agent = request.agent(createApp(db, { generateAuditChecklist } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const created = await agent.post('/api/audits').send(createPayload)
+    expect(created.status).toBe(201)
+    expect(created.body.audit.status).toBe('PLANNED')
+    const auditId = created.body.audit.id as string
+    storedAuditProcedures.push({ auditId, procedureId })
+
+    const response = await agent.post(`/api/audits/${auditId}/checklists/generate`).send({})
+    expect(response.status).toBe(200)
+    expect(response.body.proposals).toHaveLength(1)
+    expect(generateAuditChecklist).toHaveBeenCalledOnce()
+    const context = generateAuditChecklist.mock.calls[0][0]
+    expect(context.processes[0].sipoc).not.toHaveLength(0)
+    expect(context.procedures.map((item) => item.id)).toEqual([procedureId])
+    expect(context.sources).toEqual(expect.arrayContaining([expect.objectContaining({ id: procedureId, type: 'PROCEDURE' })]))
+    expect(storedChecklists).toHaveLength(0)
+    expect(storedItems).toHaveLength(0)
+  })
+
+  it('blocks checklist generation for read-only and foreign users', async () => {
+    const generateAuditChecklist = vi.fn(async () => ({ proposals: [], missingInformation: [] }))
+    const reader = request.agent(createApp(makeQualityDb('COMPANY_USER').db, { generateAuditChecklist } as unknown as AIService))
+    await reader.post('/api/auth/login').send({ email: companyUser.email, password: 'Password123!' })
+    expect((await reader.post('/api/audits/cmaudit000000000000000001/checklists/generate').send({})).status).toBe(403)
+
+    const foreign = request.agent(createApp(makeQualityDb('COMPANY_ADMIN', otherCompanyId).db, { generateAuditChecklist } as unknown as AIService))
+    await foreign.post('/api/auth/login').send({ email: foreignAdmin.email, password: 'Password123!' })
+    expect((await foreign.post('/api/audits/cmaudit000000000000000001/checklists/generate').send({})).status).toBe(404)
+    expect(generateAuditChecklist).not.toHaveBeenCalled()
+  })
+
+  it('returns controlled errors and enforces the existing AI rate limit for checklist generation', async () => {
+    const db = makeQualityDb().db
+    const failing = vi.fn(async () => { throw new AIServiceError('INVALID_RESPONSE') })
+    const agent = request.agent(createApp(db, { generateAuditChecklist: failing } as unknown as AIService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const auditId = await createStartedAudit(agent)
+    const invalid = await agent.post(`/api/audits/${auditId}/checklists/generate`).send({ maxQuestions: 21 })
+    expect(invalid.status).toBe(400)
+    const failed = await agent.post(`/api/audits/${auditId}/checklists/generate`).send({})
+    expect(failed.status).toBe(502)
+    expect(failed.body).toEqual({ error: 'Checky returned invalid checklist proposals' })
+
+    const quotaService = { generateAuditChecklist: vi.fn(async () => { throw new AIServiceError('PROVIDER_QUOTA') }) }
+    const quotaAgent = request.agent(createApp(makeQualityDb().db, quotaService as unknown as AIService))
+    await quotaAgent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const quotaAuditId = await createStartedAudit(quotaAgent)
+    const quotaResponse = await quotaAgent.post(`/api/audits/${quotaAuditId}/checklists/generate`).send({})
+    expect(quotaResponse.status).toBe(503)
+    expect(quotaResponse.body).toEqual({ error: 'Checky no tiene créditos disponibles para generar propuestas' })
+
+    const limitedService = { generateAuditChecklist: vi.fn(async () => ({ proposals: [], missingInformation: [] })) }
+    const limitedAgent = request.agent(createApp(makeQualityDb().db, limitedService as unknown as AIService))
+    await limitedAgent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const limitedAuditId = await createStartedAudit(limitedAgent)
+    for (let index = 0; index < 15; index += 1) {
+      expect((await limitedAgent.post(`/api/audits/${limitedAuditId}/checklists/generate`).send({})).status).toBe(200)
+    }
+    expect((await limitedAgent.post(`/api/audits/${limitedAuditId}/checklists/generate`).send({})).status).toBe(429)
+    expect(limitedService.generateAuditChecklist).toHaveBeenCalledTimes(15)
   })
 
   it('blocks closing while required corrective actions are open and closes after they finish', async () => {
@@ -874,13 +1051,15 @@ describe('quality assurance API', () => {
   })
 
   it('lists audits with quality indicators and supports relations on create', async () => {
-    const { db, storedAuditProcesses } = makeQualityDb()
+    const { db, storedAuditProcesses, storedAuditProcedures } = makeQualityDb()
     const agent = await loggedIn(db)
 
-    const created = await agent.post('/api/audits').send({ ...createPayload, processIds: [processId, processId] })
+    const created = await agent.post('/api/audits').send({ ...createPayload, processIds: [processId, processId], procedureIds: [procedureId] })
     expect(created.status).toBe(201)
     // El proceso principal se deduplica y no se guarda como vínculo.
     expect(storedAuditProcesses).toHaveLength(0)
+    expect(storedAuditProcedures).toHaveLength(1)
+    expect(storedAuditProcedures[0]).toMatchObject({ auditId: created.body.audit.id, procedureId })
 
     const auditId = created.body.audit.id as string
     await agent.post(`/api/audits/${auditId}/status`).send({ status: 'IN_PROGRESS' })

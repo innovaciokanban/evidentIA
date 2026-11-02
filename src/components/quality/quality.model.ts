@@ -249,6 +249,71 @@ export type ChecklistItemDraft = {
 
 export const emptyChecklistItemDraft: ChecklistItemDraft = { description: '', criteria: '', required: true }
 
+export type AuditChecklistAIDimension = 'COMPLIANCE' | 'IMPLEMENTATION' | 'EFFECTIVENESS'
+export type AuditChecklistAIProposal = {
+  id: string
+  question: string
+  expectedEvidence: string
+  sourceId: string
+  sourceType: 'PROCESS' | 'PROCEDURE' | 'SIPOC' | 'RISK' | 'CONTROL'
+  source: string
+  dimension: AuditChecklistAIDimension
+  selected: boolean
+}
+
+export const auditChecklistAIProcessLabels: Record<Process['type'], string> = {
+  STRATEGIC: 'Estratégico',
+  MISSIONAL: 'Misional',
+  SUPPORT: 'Apoyo',
+}
+
+const auditChecklistAISourceLabels: Record<AuditChecklistAIProposal['sourceType'], string> = {
+  PROCESS: 'Proceso',
+  PROCEDURE: 'Procedimiento',
+  SIPOC: 'SIPOC',
+  RISK: 'Riesgo',
+  CONTROL: 'Control',
+}
+
+export type AuditChecklistAIProposalContext = {
+  process: string | null
+  processType: Process['type'] | null
+  procedure: string | null
+  source: string
+  sourceTypeLabel: string
+}
+
+export const auditChecklistAIContext = (proposal: AuditChecklistAIProposal, audit: Audit, processes: Process[]): AuditChecklistAIProposalContext => {
+  const procedure = audit.procedures?.find((item) => item.id === proposal.sourceId)
+  const processId = procedure?.processId ?? (proposal.sourceType === 'PROCESS' ? proposal.sourceId : null)
+  const process = processId ? processes.find((item) => item.id === processId) : null
+  return {
+    process: process ? `${auditChecklistAIProcessLabels[process.type]} · ${process.code ?? 'Proceso'} · ${process.name}` : null,
+    processType: process?.type ?? null,
+    procedure: procedure ? `${procedure.code} · ${procedure.name}` : null,
+    source: proposal.source,
+    sourceTypeLabel: auditChecklistAISourceLabels[proposal.sourceType],
+  }
+}
+
+export const auditChecklistAIDimensionLabels: Record<AuditChecklistAIDimension, string> = {
+  COMPLIANCE: 'Cumplimiento',
+  IMPLEMENTATION: 'Implementación',
+  EFFECTIVENESS: 'Eficacia',
+}
+
+export const normalizeChecklistQuestion = (value: string): string => value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
+
+export const dedupeAuditChecklistAIProposals = <T extends { question: string }>(existingQuestions: string[], proposals: T[]): T[] => {
+  const seen = new Set(existingQuestions.map(normalizeChecklistQuestion))
+  return proposals.filter((proposal) => {
+    const normalized = normalizeChecklistQuestion(proposal.question)
+    if (!normalized || seen.has(normalized)) return false
+    seen.add(normalized)
+    return true
+  })
+}
+
 /** Personas de la empresa visibles para los selectores del módulo. */
 export type QualityUser = Pick<import('../../types').User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 

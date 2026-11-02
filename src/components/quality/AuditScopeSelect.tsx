@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
+import { askConfirm } from '../ui/useConfirm'
 
-export type AuditScopeOption = { id: string; label: string }
+export type AuditScopeOption = { id: string; label: string; processId?: string }
 
 type ScopeKind = 'process' | 'procedure'
 
@@ -20,15 +21,24 @@ export function AuditScopeSelect({ processes, procedures, processIds, procedureI
   onChange: (next: { processIds: string[]; procedureIds: string[] }) => void
 }) {
   const [search, setSearch] = useState('')
+  const [changingProcessId, setChangingProcessId] = useState<string | null>(null)
   const term = search.trim().toLowerCase()
 
+  const proceduresByProcess = useMemo(() => {
+    const grouped = new Map<string, AuditScopeOption[]>()
+    for (const procedure of procedures) {
+      if (!procedure.processId) continue
+      const current = grouped.get(procedure.processId) ?? []
+      current.push(procedure)
+      grouped.set(procedure.processId, current)
+    }
+    return grouped
+  }, [procedures])
+
+  const proceduresForProcess = (processId: string): AuditScopeOption[] => proceduresByProcess.get(processId) ?? []
   const filteredProcesses = useMemo(
-    () => (term ? processes.filter((option) => option.label.toLowerCase().includes(term)) : processes),
-    [processes, term],
-  )
-  const filteredProcedures = useMemo(
-    () => (term ? procedures.filter((option) => option.label.toLowerCase().includes(term)) : procedures),
-    [procedures, term],
+    () => processes.filter((process) => !term || process.label.toLowerCase().includes(term) || proceduresForProcess(process.id).some((procedure) => procedure.label.toLowerCase().includes(term))),
+    [processes, proceduresByProcess, term],
   )
 
   const chips: Array<{ id: string; kind: ScopeKind; label: string; locked: boolean }> = [
@@ -36,10 +46,40 @@ export function AuditScopeSelect({ processes, procedures, processIds, procedureI
     ...procedureIds.map((id) => ({ id, kind: 'procedure' as const, label: optionLabel(procedures, id), locked: false })),
   ]
 
-  function toggle(kind: ScopeKind, id: string, next: boolean) {
+  function visibleProcedures(process: AuditScopeOption): AuditScopeOption[] {
+    const available = proceduresForProcess(process.id)
+    return term && !process.label.toLowerCase().includes(term)
+      ? available.filter((procedure) => procedure.label.toLowerCase().includes(term))
+      : available
+  }
+
+  async function toggle(kind: ScopeKind, id: string, next: boolean) {
     if (kind === 'process') {
       if (!next && id === lockedProcessId) return
-      onChange({ processIds: next ? [...processIds, id] : processIds.filter((item) => item !== id), procedureIds })
+      if (next) {
+        onChange({ processIds: [...processIds, id], procedureIds })
+        return
+      }
+      const processProcedureIds = proceduresForProcess(id).map((procedure) => procedure.id)
+      const selectedProcedureIds = procedureIds.filter((procedureId) => processProcedureIds.includes(procedureId))
+      if (selectedProcedureIds.length > 0) {
+        setChangingProcessId(id)
+        try {
+          const confirmed = await askConfirm({
+            title: 'Retirar proceso del alcance',
+            message: 'También se retirarán los procedimientos seleccionados de este proceso.',
+            confirmLabel: 'Retirar proceso',
+            variant: 'danger',
+          })
+          if (!confirmed) return
+        } finally {
+          setChangingProcessId(null)
+        }
+      }
+      onChange({
+        processIds: processIds.filter((item) => item !== id),
+        procedureIds: procedureIds.filter((procedureId) => !processProcedureIds.includes(procedureId)),
+      })
       return
     }
     onChange({ processIds, procedureIds: next ? [...procedureIds, id] : procedureIds.filter((item) => item !== id) })
@@ -68,30 +108,33 @@ export function AuditScopeSelect({ processes, procedures, processIds, procedureI
         aria-label="Buscar en el alcance"
       />
       <div className="audit-scope-groups" role="group" aria-label="Alcance">
-        {filteredProcesses.length > 0 && <p className="audit-scope-group-label">Procesos</p>}
+        {filteredProcesses.length > 0 && <p className="audit-scope-group-label">Procesos y procedimientos</p>}
         {filteredProcesses.map((option) => (
-          <label key={option.id} className={`audit-scope-option${option.id === lockedProcessId ? ' locked' : ''}${processIds.includes(option.id) ? ' selected' : ''}`}>
-            <input
-              type="checkbox"
-              checked={processIds.includes(option.id)}
-              disabled={option.id === lockedProcessId}
-              onChange={(event) => toggle('process', option.id, event.target.checked)}
-            />
-            <span>{option.label}</span>
-          </label>
+          <div key={option.id} className="audit-scope-process-group">
+            <label className={`audit-scope-option${option.id === lockedProcessId ? ' locked' : ''}${processIds.includes(option.id) ? ' selected' : ''}`}>
+              <input
+                type="checkbox"
+                checked={processIds.includes(option.id)}
+                disabled={option.id === lockedProcessId || changingProcessId === option.id}
+                onChange={(event) => void toggle('process', option.id, event.target.checked)}
+              />
+              <span>{option.label}</span>
+              {option.id === lockedProcessId && <span className="audit-scope-chip-lock">Principal</span>}
+            </label>
+            {(processIds.includes(option.id) || procedureIds.some((id) => proceduresForProcess(option.id).some((procedure) => procedure.id === id))) && (
+              <div className="audit-scope-procedures">
+                {visibleProcedures(option).map((procedure) => (
+                  <label key={procedure.id} className={`audit-scope-option audit-scope-procedure-option${procedureIds.includes(procedure.id) ? ' selected' : ''}`}>
+                    <input type="checkbox" checked={procedureIds.includes(procedure.id)} onChange={(event) => void toggle('procedure', procedure.id, event.target.checked)} />
+                    <span>{procedure.label}</span>
+                  </label>
+                ))}
+                {visibleProcedures(option).length === 0 && <p className="muted audit-scope-empty-list">Este proceso no tiene procedimientos disponibles.</p>}
+              </div>
+            )}
+          </div>
         ))}
-        {filteredProcedures.length > 0 && <p className="audit-scope-group-label">Procedimientos</p>}
-        {filteredProcedures.map((option) => (
-          <label key={option.id} className={`audit-scope-option${procedureIds.includes(option.id) ? ' selected' : ''}`}>
-            <input
-              type="checkbox"
-              checked={procedureIds.includes(option.id)}
-              onChange={(event) => toggle('procedure', option.id, event.target.checked)}
-            />
-            <span>{option.label}</span>
-          </label>
-        ))}
-        {filteredProcesses.length === 0 && filteredProcedures.length === 0 && <p className="muted audit-scope-empty-list">Sin opciones</p>}
+        {filteredProcesses.length === 0 && <p className="muted audit-scope-empty-list">Sin opciones</p>}
       </div>
       <p className="audit-scope-help">Selecciona uno o varios procesos y/o procedimientos incluidos en la auditoría</p>
     </fieldset>

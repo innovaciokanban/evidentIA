@@ -132,10 +132,14 @@ describe('AuditDetailView rendering', () => {
     expect(markup).toContain('Carlos Ruiz')
     expect(markup).toContain('Cerrar auditoría')
     expect(markup).toContain('Cancelar')
-    // Seis pestañas del espacio de trabajo con sus paneles.
+    // Solo se muestran las cuatro pestañas públicas del espacio de trabajo.
     expect(markup).toContain('role="tablist"')
-    expect(markup.match(/role="tab"/g)).toHaveLength(6)
-    expect(markup).toContain('Acciones correctivas')
+    expect(markup.match(/role="tab"/g)).toHaveLength(4)
+    expect(markup.indexOf('id="quality-tab-resumen"')).toBeLessThan(markup.indexOf('id="quality-tab-checklist"'))
+    expect(markup.indexOf('id="quality-tab-checklist"')).toBeLessThan(markup.indexOf('id="quality-tab-hallazgos"'))
+    expect(markup.indexOf('id="quality-tab-hallazgos"')).toBeLessThan(markup.indexOf('id="quality-tab-historial"'))
+    expect(markup).not.toContain('id="quality-tab-evidencias"')
+    expect(markup).not.toContain('id="quality-tab-acciones"')
   })
 
   it('renders checklist progress and highlights required pending and non conform items', () => {
@@ -149,6 +153,21 @@ describe('AuditDetailView rendering', () => {
     expect(markup).toContain('+ Hallazgo')
   })
 
+  it('keeps planned checklist responses read-only while allowing preparation controls', () => {
+    const markup = render({ audit: { ...audit, status: 'PLANNED' } as Audit, initialSection: 'checklist' })
+    expect(markup).toContain('La auditoría está planificada')
+    expect(markup).toContain('Añadir lista')
+    expect(markup).not.toContain('aria-label="Resultado de ¿Se documenta el proceso?"')
+    expect(markup).toContain('No conforme')
+  })
+
+  it('renders the Checky generation action only in the editable checklist', () => {
+    const editable = render({ initialSection: 'checklist' })
+    const readonly = render({ initialSection: 'checklist', canWrite: false })
+    expect(editable).toContain('Generar preguntas con IA-Checky')
+    expect(readonly).not.toContain('Generar preguntas con IA-Checky')
+  })
+
   it('renders findings with type badges, efficacy alert and link back to the criterion', () => {
     const markup = render({ initialSection: 'hallazgos' })
     expect(markup).toContain('Falta de registro de capacitación')
@@ -160,24 +179,19 @@ describe('AuditDetailView rendering', () => {
     expect(markup).toContain('1 acción(es) · 1 abierta(s)')
   })
 
-  it('renders corrective actions with overdue and required badges plus progress entries', () => {
-    const markup = render({ initialSection: 'acciones' })
-    expect(markup).toContain('Dictar la charla faltante')
-    expect(markup).toContain('Vencida')
-    expect(markup).toContain('Obligatoria')
-    expect(markup).toContain('Alta')
-    expect(markup).toContain('Fecha agendada.')
-    expect(markup).toContain('(40%)')
-    expect(markup).toContain('Hallazgo: Falta de registro de capacitación')
+  it('renders the audit history section', () => {
+    const markup = render({ initialSection: 'historial' })
+    expect(markup).toContain('Trazabilidad de la auditoría')
+    expect(markup).toContain('Cargar historial')
   })
 
-  it('renders evidence links and PDF files with their relation label', () => {
-    const markup = render({ initialSection: 'evidencias' })
-    expect(markup).toContain('Acta de la reunión')
-    expect(markup).toContain('informe-calidad.pdf')
-    expect(markup).toContain('2.0 KB')
-    expect(markup).toContain('Hallazgo: Falta de registro de capacitación')
-    expect(markup).toContain('Laura Gómez')
+  it('returns to the summary when a removed section is selected', () => {
+    const actionsMarkup = render({ initialSection: 'acciones' })
+    const evidenceMarkup = render({ initialSection: 'evidencias' })
+    expect(actionsMarkup).toContain('id="quality-panel-resumen"')
+    expect(actionsMarkup).not.toContain('id="quality-panel-acciones"')
+    expect(evidenceMarkup).toContain('id="quality-panel-resumen"')
+    expect(evidenceMarkup).not.toContain('id="quality-panel-evidencias"')
   })
 
   it('hides write controls when the user cannot edit the audit', () => {

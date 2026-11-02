@@ -426,6 +426,23 @@ export const auditChecklistItemUpdateSchema = z.object({
   'At least one checklist item field is required',
 )
 
+export const auditChecklistAIDimensionSchema = z.enum(['COMPLIANCE', 'IMPLEMENTATION', 'EFFECTIVENESS'])
+export const auditChecklistAISourceTypeSchema = z.enum(['PROCESS', 'PROCEDURE', 'SIPOC', 'RISK', 'CONTROL'])
+export const auditChecklistAIGenerationRequestSchema = z.object({
+  maxQuestions: z.coerce.number().int().min(1).max(20).optional(),
+}).strict()
+export const auditChecklistAIGenerationSchema = z.object({
+  proposals: z.array(z.object({
+    question: auditText(2000).refine((value) => value.length >= 10, 'Question must have at least 10 characters'),
+    expectedEvidence: auditText(1600).refine((value) => value.length >= 3, 'Expected evidence is required'),
+    sourceId: idReference,
+    sourceType: auditChecklistAISourceTypeSchema,
+    source: auditText(240).refine((value) => value.length >= 3, 'Source is required'),
+    dimension: auditChecklistAIDimensionSchema,
+  }).strict()).max(20),
+  missingInformation: z.array(z.string().trim().min(1).max(500)).max(10),
+}).strict()
+
 // ---- Acciones correctivas ----
 
 export const auditCorrectiveActionCreateSchema = z.object({

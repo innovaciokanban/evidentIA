@@ -9,7 +9,7 @@ import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossTyp
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSessionForActiveUser, lockUserForUpdate, publicUser, requireRole, revokeUserSessions, setSessionCookie } from './auth.js'
-import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
+import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type AuditChecklistAISourceType, type AuditChecklistContext, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
@@ -28,7 +28,7 @@ import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMulti
 import { TicketAssignmentApprovalError, cancelPendingTicketAssignmentApprovals, cancelPendingTicketAssignmentApprovalsForTickets, cancelPendingTicketAssignmentApprovalsForUser, cancelTicketAssignmentApproval, createTicketAssignmentApproval, decideTicketAssignmentApproval, getTicketAssignmentApproval, listTicketAssignmentApprovals, supersedeTicketAssignmentApproval } from './ticket-assignment-approvals.js'
 import { createNotificationIfAbsent, lockNotificationRecipients } from './notifications.js'
 import { csrfProtection } from './csrf.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -4741,6 +4741,129 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     return process && audit.processId === process.id ? audit : null
   }
 
+  const buildAuditChecklistContext = async (audit: AuditWithInclude, maxQuestions: number): Promise<AuditChecklistContext> => {
+    const clip = (value: string | null | undefined, max: number) => (value ?? '').trim().slice(0, max)
+    const [processLinks, procedureLinks] = await Promise.all([
+      db.auditProcess.findMany({ where: { auditId: audit.id }, select: { processId: true } }),
+      db.auditProcedure.findMany({ where: { auditId: audit.id }, select: { procedureId: true } }),
+    ])
+    const processIds = [...new Set([audit.processId, ...processLinks.map((link) => link.processId)])].slice(0, 20)
+    const procedureIds = [...new Set(procedureLinks.map((link) => link.procedureId))].slice(0, 30)
+    const [processes, procedures, existingItems] = await Promise.all([
+      db.process.findMany({
+        where: { id: { in: processIds }, companyId: audit.process.companyId },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          objective: true,
+          description: true,
+          sipocSuppliers: { select: { id: true, description: true }, orderBy: { createdAt: 'asc' }, take: 20 },
+          sipocInputs: { select: { id: true, description: true }, orderBy: { createdAt: 'asc' }, take: 20 },
+          sipocProcesses: { select: { id: true, description: true }, orderBy: { createdAt: 'asc' }, take: 20 },
+          sipocOutputs: { select: { id: true, description: true }, orderBy: { createdAt: 'asc' }, take: 20 },
+          sipocCustomers: { select: { id: true, description: true }, orderBy: { createdAt: 'asc' }, take: 20 },
+          risks: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              description: true,
+              riskType: true,
+              bpmnActivity: true,
+              controls: { select: { id: true, description: true, evaluation: true }, orderBy: { createdAt: 'asc' }, take: 10 },
+            },
+            orderBy: { createdAt: 'asc' },
+            take: 20,
+          },
+        },
+        orderBy: [{ code: 'asc' }, { name: 'asc' }],
+        take: 20,
+      }),
+      db.procedure.findMany({
+        where: { id: { in: procedureIds }, process: { companyId: audit.process.companyId } },
+        select: { id: true, processId: true, code: true, name: true, objective: true, scope: true, description: true, status: true, version: true },
+        orderBy: [{ code: 'asc' }, { name: 'asc' }],
+        take: 30,
+      }),
+      db.auditChecklistItem.findMany({
+        where: { checklist: { auditId: audit.id } },
+        select: { description: true },
+        orderBy: [{ createdAt: 'asc' }],
+        take: 50,
+      }),
+    ])
+
+    const sources = new Map<string, { id: string; type: AuditChecklistAISourceType; label: string }>()
+    const addSource = (id: string, type: AuditChecklistAISourceType, label: string) => sources.set(`${type}:${id}`, { id, type, label: clip(label, 240) })
+    const sipocRows = (process: (typeof processes)[number]) => [
+      ...process.sipocSuppliers.map((row) => ({ id: row.id, type: 'SUPPLIER' as const, description: row.description })),
+      ...process.sipocInputs.map((row) => ({ id: row.id, type: 'INPUT' as const, description: row.description })),
+      ...process.sipocProcesses.map((row) => ({ id: row.id, type: 'PROCESS' as const, description: row.description })),
+      ...process.sipocOutputs.map((row) => ({ id: row.id, type: 'OUTPUT' as const, description: row.description })),
+      ...process.sipocCustomers.map((row) => ({ id: row.id, type: 'CUSTOMER' as const, description: row.description })),
+    ]
+    const contextProcesses = processes.map((process) => {
+      addSource(process.id, 'PROCESS', `${process.code ?? 'Proceso'} · ${process.name}`)
+      const sipoc = sipocRows(process).map((row) => {
+        addSource(row.id, 'SIPOC', `${process.name} · SIPOC ${row.type}`)
+        return { id: row.id, type: row.type, description: clip(row.description, 500) }
+      })
+      const risks = process.risks.map((risk) => {
+        addSource(risk.id, 'RISK', `${process.name} · Riesgo ${risk.code ?? risk.name}`)
+        const controls = risk.controls.map((control) => {
+          addSource(control.id, 'CONTROL', `${process.name} · Control de ${risk.name}`)
+          return { id: control.id, description: clip(control.description, 700), evaluation: control.evaluation }
+        })
+        return {
+          id: risk.id,
+          code: risk.code,
+          name: clip(risk.name, 240),
+          description: clip(risk.description, 1000),
+          riskType: clip(risk.riskType, 120),
+          bpmnActivity: clip(risk.bpmnActivity, 300),
+          controls,
+        }
+      })
+      return {
+        id: process.id,
+        code: process.code,
+        name: clip(process.name, 240),
+        objective: clip(process.objective, 1200),
+        description: process.description ? clip(process.description, 1200) : null,
+        sipoc,
+        risks,
+      }
+    })
+    const contextProcedures = procedures.map((procedure) => {
+      addSource(procedure.id, 'PROCEDURE', `${procedure.code} · ${procedure.name}`)
+      return {
+        id: procedure.id,
+        processId: procedure.processId,
+        code: procedure.code,
+        name: clip(procedure.name, 240),
+        objective: clip(procedure.objective, 1200),
+        scope: clip(procedure.scope, 1200),
+        description: procedure.description ? clip(procedure.description, 2000) : null,
+        status: procedure.status,
+        version: procedure.version,
+      }
+    })
+    return {
+      audit: {
+        title: clip(audit.title, 240),
+        objectives: audit.objectives ? clip(audit.objectives, 1600) : null,
+        scope: clip(audit.scope, 1600),
+        criteria: clip(audit.criteria, 1600),
+      },
+      processes: contextProcesses,
+      procedures: contextProcedures,
+      sources: [...sources.values()],
+      existingQuestions: existingItems.map((item) => clip(item.description, 500)),
+      maxQuestions,
+    }
+  }
+
   /**
    * Delega una ruta anidada (/api/processes/:processId/audits/...) desde su variante top-level
    * (/api/audits/...): resuelve la auditoría, comprueba el acceso y rellena req.params.processId
@@ -5388,9 +5511,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const actor = auditActorOf(request)
-    const finding = await db.$transaction(async (tx) => {
+    const findingResult = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
+      if (parsed.data.type === 'NONCONFORMITY' && links.itemId) {
+        const duplicate = await tx.auditFinding.findFirst({
+          where: { auditId: existing.id, itemId: links.itemId, type: 'NONCONFORMITY' },
+          select: { id: true },
+        })
+        if (duplicate) return { duplicate: true as const }
+      }
       if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, process.companyId, 'Finding responsible')
       const created = await tx.auditFinding.create({
         data: {
@@ -5430,13 +5560,17 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
           ...(links.procedureId ? { linkedProcedureId: links.procedureId } : {}),
         },
       })
-      return created
+      return { finding: created }
     })
-    if (!finding) {
+    if (!findingResult) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.status(201).json({ finding: auditFindingView(finding) })
+    if ('duplicate' in findingResult) {
+      response.status(409).json({ error: 'A nonconformity finding already exists for this checklist item', reason: 'DUPLICATE_NON_CONFORMITY_FINDING' })
+      return
+    }
+    response.status(201).json({ finding: auditFindingView(findingResult.finding) })
   })
   app.post('/api/processes/:processId/audits/:auditId/findings', authMiddleware, userWriteGuard, createAuditFindingHandler)
   app.post('/api/audits/:auditId/findings', authMiddleware, userWriteGuard, withAuditProcessParam(createAuditFindingHandler))
@@ -6130,6 +6264,55 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   }))
 
   // ---- Listas de verificación ----
+  app.post('/api/audits/:auditId/checklists/generate', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {
+    const auditId = idReference.safeParse(String(request.params.auditId))
+    if (!auditId.success) {
+      response.status(400).json({ error: 'Invalid audit id' })
+      return
+    }
+    const parsed = auditChecklistAIGenerationRequestSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid checklist generation data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findCompanyAudit(request, auditId.data)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    try {
+      const context = await buildAuditChecklistContext(audit, parsed.data.maxQuestions ?? 12)
+      const result = await aiService.generateAuditChecklist(context)
+      response.json(result)
+    } catch (error) {
+      if (error instanceof AIServiceError) {
+        if (error.code === 'NOT_CONFIGURED') {
+          response.status(503).json({ error: 'Checky is not configured' })
+          return
+        }
+        if (error.code === 'CONTEXT_TOO_LARGE') {
+          response.status(413).json({ error: 'The audit documentation is too large to analyze at once' })
+          return
+        }
+        if (error.code === 'PROVIDER_QUOTA') {
+          response.status(503).json({ error: 'Checky no tiene créditos disponibles para generar propuestas' })
+          return
+        }
+        if (error.code === 'INVALID_RESPONSE') {
+          response.status(502).json({ error: 'Checky returned invalid checklist proposals' })
+          return
+        }
+        response.status(502).json({ error: 'Checky is temporarily unavailable' })
+        return
+      }
+      throw error
+    }
+  }))
+
   const listAuditChecklistsHandler = asyncHandler(async (request, response) => {
     const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
     if (!audit) {
@@ -6418,6 +6601,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (isTerminalAuditStatus(audit.status)) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
+    }
+    const responseChangeRequested = parsed.data.result !== undefined || parsed.data.observations !== undefined
+    if (responseChangeRequested && audit.status !== AuditStatus.IN_PROGRESS) {
+      response.status(409).json({ error: 'Checklist responses can only be recorded while the audit is in progress', reason: 'AUDIT_NOT_IN_PROGRESS' })
+      return
+    }
+    if (parsed.data.result === AuditChecklistResult.NON_CONFORM && parsed.data.result !== existing.result) {
+      const linkedFinding = await db.auditFinding.findFirst({
+        where: { auditId: audit.id, itemId: existing.id, type: 'NONCONFORMITY' },
+        select: { id: true },
+      })
+      if (!linkedFinding) {
+        response.status(409).json({ error: 'A nonconformity finding linked to this checklist item is required before selecting NON_CONFORM', reason: 'NON_CONFORMITY_FINDING_REQUIRED' })
+        return
+      }
     }
     const data: Prisma.AuditChecklistItemUncheckedUpdateInput = {}
     const changes: RiskAuditChange[] = []

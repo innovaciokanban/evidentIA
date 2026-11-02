@@ -4,12 +4,14 @@ import {
   actionStatusLabels,
   actionTransitions,
   auditCloseBlockers,
+  auditChecklistAIContext,
   auditExecutionSummary,
   auditStatusLabels,
   auditTransitions,
   checklistResultLabels,
   checklistResults,
   draftFromAudit,
+  dedupeAuditChecklistAIProposals,
   emptyActionDraft,
   emptyAuditDraft,
   emptyChecklistItemDraft,
@@ -101,6 +103,44 @@ describe('quality.model', () => {
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
     expect(eventLabel({ eventType: 'AUDIT_CREATED' } as never)).toContain('Auditoría')
     expect(eventLabel({ eventType: 'FINDING_CREATED' } as never)).toContain('Hallazgo')
+  })
+
+  it('deduplicates Checky proposals against existing questions and each other', () => {
+    const proposals = dedupeAuditChecklistAIProposals(
+      ['¿Se documenta el proceso?'],
+      [{ question: ' ¿SE DOCUMENTA  EL PROCESO? ' }, { question: '¿Se revisa la evidencia?' }, { question: '¿Se revisa la evidencia?' }],
+    )
+    expect(proposals).toEqual([{ question: '¿Se revisa la evidencia?' }])
+  })
+
+  it('resolves proposal cards to their procedure and process context', () => {
+    const context = auditChecklistAIContext({
+      id: 'proposal-1',
+      question: '¿Se revisa el procedimiento?',
+      expectedEvidence: 'Registro de revisión.',
+      sourceId: 'procedure-1',
+      sourceType: 'PROCEDURE',
+      source: 'PR-01 · Procedimiento comercial',
+      dimension: 'COMPLIANCE',
+      selected: true,
+    }, {
+      ...baseAudit,
+      procedures: [{ id: 'procedure-1', code: 'PR-01', name: 'Procedimiento comercial', processId: 'process-1' }],
+    } as unknown as Audit, [{
+      id: 'process-1', companyId: 'company-1', code: 'PRO-MIS-001', name: 'Prestación del servicio', type: 'MISSIONAL', objective: '', description: null, version: null, frequency: null, organizationalArea: null, supervision: null, executionType: null, status: 'ACTIVE', thirdPartyProvided: false, critical: false, affectsAccounting: false, personalData: false, responsible: null, createdAt: '', updatedAt: '',
+    }])
+    expect(context).toEqual({
+      process: 'Misional · PRO-MIS-001 · Prestación del servicio',
+      processType: 'MISSIONAL',
+      procedure: 'PR-01 · Procedimiento comercial',
+      source: 'PR-01 · Procedimiento comercial',
+      sourceTypeLabel: 'Procedimiento',
+    })
+
+    const sipocContext = auditChecklistAIContext({
+      id: 'proposal-2', question: '¿Se controla la entrada?', expectedEvidence: 'Registro.', sourceId: 'sipoc-1', sourceType: 'SIPOC', source: 'Proceso · SIPOC INPUT', dimension: 'IMPLEMENTATION', selected: true,
+    }, baseAudit, [])
+    expect(sipocContext).toEqual({ process: null, processType: null, procedure: null, source: 'Proceso · SIPOC INPUT', sourceTypeLabel: 'SIPOC' })
   })
 
   it('maps an existing audit into the form draft with the anchor process first', () => {
