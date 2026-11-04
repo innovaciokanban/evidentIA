@@ -154,6 +154,68 @@ export type DiagnosticStrategy = {
   /** Plan de acción asociado a esta estrategia, con sus tareas. Lo devuelve el GET de estrategias. */
   actionPlan: StrategyTaskPlan | null
 }
+
+export type StrategicObjectiveStatus = 'DRAFT' | 'APPROVED'
+export type StrategicObjectiveOrigin = 'MANUAL' | 'CHECKY'
+export type StrategicObjectiveStrategySource = 'AI_ANALYSIS' | 'CHECKY' | 'STRATEGIC_CROSS'
+export type StrategicObjectiveIndicator = {
+  id: string
+  objectiveId: string
+  name: string | null
+  unit: string | null
+  baselineValue: string | null
+  targetValue: string | null
+  measurementMethod: string | null
+  deadline: string | null
+  createdAt: string
+  updatedAt: string
+}
+export type StrategicObjectiveStrategy = {
+  id: string
+  objectiveId: string
+  source: StrategicObjectiveStrategySource
+  sourceRef: string
+  strategyTitle: string
+  strategyDescription: string
+  weightedScore: number
+  weightingBand: StrategyBand
+  linkedBy: Pick<User, 'id' | 'name' | 'email'>
+  linkedAt: string
+}
+export type StrategicObjective = {
+  id: string
+  diagnosticId: string
+  title: string
+  statement: string
+  specificCriteria: string | null
+  measurableCriteria: string | null
+  achievableCriteria: string | null
+  relevantCriteria: string | null
+  timeBoundCriteria: string | null
+  status: StrategicObjectiveStatus
+  origin: StrategicObjectiveOrigin
+  createdBy: Pick<User, 'id' | 'name' | 'email'>
+  indicator: StrategicObjectiveIndicator | null
+  strategies: StrategicObjectiveStrategy[]
+  createdAt: string
+  updatedAt: string
+}
+export type StrategicObjectiveSuggestion = {
+  id: string
+  title: string
+  statement: string
+  specificCriteria: string | null
+  measurableCriteria: string | null
+  achievableCriteria: string | null
+  relevantCriteria: string | null
+  timeBoundCriteria: string | null
+  indicator: StrategicObjectiveIndicator | null
+  origin: 'CHECKY'
+  strategyRefs: string[]
+  missingInformation: string[]
+  pendingFields: string[]
+  strategies: Array<Pick<DiagnosticStrategy, 'id' | 'source' | 'title' | 'description' | 'weightedScore' | 'weightingBand'> & { sourceRef: string }>
+}
 export type StrategyTaskPlan = {
   id: string
   strategySource: string | null

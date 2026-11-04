@@ -5,11 +5,11 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, StrategicObjectiveHistoryEventType, StrategicObjectiveOrigin, StrategicObjectiveStatus, StrategicObjectiveStrategySource, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSessionForActiveUser, lockUserForUpdate, publicUser, requireRole, revokeUserSessions, setSessionCookie } from './auth.js'
-import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type AuditChecklistAISourceType, type AuditChecklistContext, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI } from './ai-service.js'
+import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type AuditChecklistAISourceType, type AuditChecklistContext, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI, type StrategicObjectiveSuggestionContext } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
@@ -28,6 +28,7 @@ import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMulti
 import { TicketAssignmentApprovalError, cancelPendingTicketAssignmentApprovals, cancelPendingTicketAssignmentApprovalsForTickets, cancelPendingTicketAssignmentApprovalsForUser, cancelTicketAssignmentApproval, createTicketAssignmentApproval, decideTicketAssignmentApproval, getTicketAssignmentApproval, listTicketAssignmentApprovals, supersedeTicketAssignmentApproval } from './ticket-assignment-approvals.js'
 import { createNotificationIfAbsent, lockNotificationRecipients } from './notifications.js'
 import { csrfProtection } from './csrf.js'
+import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strategicObjectiveHistoryQuerySchema, strategicObjectiveStrategyLinkSchema, strategicObjectiveSuggestionRequestSchema, strategicObjectiveUpdateSchema } from './validation.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -269,6 +270,49 @@ const actionItemInclude = { recommendation: { select: { id: true, title: true, p
 const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof actionItemInclude }>) => item
 const actionPlanInclude = { createdBy: { select: { id: true, name: true, email: true } }, items: { include: actionItemInclude, orderBy: { createdAt: 'asc' as const } } } as const
 const actionPlanView = (plan: Prisma.ActionPlanGetPayload<{ include: typeof actionPlanInclude }>) => plan
+
+const strategicObjectiveInclude = {
+  createdBy: { select: { id: true, name: true, email: true } },
+  indicator: true,
+  strategyLinks: {
+    include: { linkedBy: { select: { id: true, name: true, email: true } } },
+    orderBy: { linkedAt: 'asc' as const },
+  },
+} as const
+type StrategicObjectiveWithInclude = Prisma.StrategicObjectiveGetPayload<{ include: typeof strategicObjectiveInclude }>
+const strategicObjectiveView = (objective: StrategicObjectiveWithInclude) => ({
+  id: objective.id,
+  diagnosticId: objective.diagnosticId,
+  title: objective.title,
+  statement: objective.statement,
+  specificCriteria: objective.specificCriteria,
+  measurableCriteria: objective.measurableCriteria,
+  achievableCriteria: objective.achievableCriteria,
+  relevantCriteria: objective.relevantCriteria,
+  timeBoundCriteria: objective.timeBoundCriteria,
+  status: objective.status,
+  origin: objective.origin,
+  createdBy: objective.createdBy,
+  indicator: objective.indicator,
+  strategies: objective.strategyLinks,
+  createdAt: objective.createdAt,
+  updatedAt: objective.updatedAt,
+})
+const strategicObjectiveHistoryInclude = { actor: { select: { id: true, name: true } } } as const
+type StrategicObjectiveHistoryWithActor = Prisma.StrategicObjectiveHistoryGetPayload<{ include: typeof strategicObjectiveHistoryInclude }>
+const strategicObjectiveHistoryView = (event: StrategicObjectiveHistoryWithActor) => ({
+  id: event.id,
+  objectiveId: event.objectiveId,
+  eventType: event.eventType,
+  summary: event.summary,
+  actorId: event.actorId,
+  actor: event.actor,
+  actorName: event.actorName,
+  actorEmail: event.actorEmail,
+  occurredAt: event.occurredAt,
+  changes: Array.isArray(event.changes) ? event.changes : [],
+  metadata: riskAuditMetadataView(event.metadata),
+})
 const ticketInclude = {
   ...userInclude,
   actionItem: {
@@ -1334,6 +1378,24 @@ const riskAuditWrite = (client: RiskAuditClient, data: {
   },
 })
 
+const strategicObjectiveHistoryWrite = (client: RiskAuditClient, data: {
+  objectiveId: string
+  eventType: StrategicObjectiveHistoryEventType
+  summary: string
+  actor: RiskAuditActor | null | undefined
+  changes?: RiskAuditChange[]
+  metadata?: Record<string, unknown>
+}) => client.strategicObjectiveHistory.create({
+  data: {
+    objectiveId: data.objectiveId,
+    eventType: data.eventType,
+    summary: data.summary,
+    ...(data.changes && data.changes.length > 0 ? { changes: data.changes as unknown as Prisma.InputJsonValue } : {}),
+    ...(data.metadata ? { metadata: data.metadata as unknown as Prisma.InputJsonValue } : {}),
+    ...auditActorFields(data.actor),
+  },
+})
+
 const auditValue = (value: unknown): ProcessChangeValue => {
   if (value === null || value === undefined) return null
   if (value instanceof Date) return value.toISOString().slice(0, 10)
@@ -2316,6 +2378,63 @@ const strategyBandToActionPriority: Record<string, Priority> = {
   MEDIANO_PLAZO: Priority.MEDIUM,
   LARGO_PLAZO: Priority.LOW,
 }
+
+type StrategicObjectiveCandidate = {
+  title: string
+  statement: string
+  specificCriteria: string | null
+  measurableCriteria: string | null
+  achievableCriteria: string | null
+  relevantCriteria: string | null
+  timeBoundCriteria: string | null
+  indicator: {
+    name: string | null
+    unit: string | null
+    baselineValue: string | null
+    targetValue: string | null
+    measurementMethod: string | null
+    deadline: Date | null
+  } | null
+}
+
+const strategicObjectiveMissingFields = (objective: StrategicObjectiveCandidate): string[] => {
+  const missing: string[] = []
+  if (!objective.title.trim()) missing.push('title')
+  if (!objective.statement.trim()) missing.push('statement')
+  if (!objective.specificCriteria?.trim()) missing.push('specificCriteria')
+  if (!objective.measurableCriteria?.trim()) missing.push('measurableCriteria')
+  if (!objective.achievableCriteria?.trim()) missing.push('achievableCriteria')
+  if (!objective.relevantCriteria?.trim()) missing.push('relevantCriteria')
+  if (!objective.timeBoundCriteria?.trim()) missing.push('timeBoundCriteria')
+  if (!objective.indicator) {
+    missing.push('indicator')
+    return missing
+  }
+  if (!objective.indicator.name?.trim()) missing.push('indicator.name')
+  if (!objective.indicator.unit?.trim()) missing.push('indicator.unit')
+  if (!objective.indicator.baselineValue?.trim()) missing.push('indicator.baselineValue')
+  if (!objective.indicator.targetValue?.trim()) missing.push('indicator.targetValue')
+  if (!objective.indicator.measurementMethod?.trim()) missing.push('indicator.measurementMethod')
+  if (!objective.indicator.deadline) missing.push('indicator.deadline')
+  return missing
+}
+
+const strategicObjectiveChangeLabels: Record<string, string> = {
+  title: 'Título',
+  statement: 'Declaración',
+  specificCriteria: 'Criterio específico',
+  measurableCriteria: 'Criterio medible',
+  achievableCriteria: 'Criterio alcanzable',
+  relevantCriteria: 'Criterio relevante',
+  timeBoundCriteria: 'Criterio temporal',
+  indicator: 'Indicador',
+}
+
+const strategicObjectiveUpdateChanges = (existing: StrategicObjectiveWithInclude, update: Record<string, unknown>): RiskAuditChange[] => Object.entries(update).flatMap(([field, value]) => {
+  if (field !== 'indicator') return [{ field, label: strategicObjectiveChangeLabels[field] ?? field, previousValue: processChangeValue(existing[field as keyof typeof existing]), newValue: processChangeValue(value) }]
+  if (value === null) return Object.entries(existing.indicator ?? {}).map(([indicatorField, previousValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(previousValue), newValue: null }))
+  return Object.entries(value as Record<string, unknown>).map(([indicatorField, nextValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(existing.indicator?.[indicatorField as keyof typeof existing.indicator]), newValue: processChangeValue(nextValue) }))
+})
 
 
 export const createApp = (db: PrismaClient = prisma, aiService: AIService = new AIService(), evidenceStorage: EvidenceStorage = createEvidenceStorage(), driveGateway: GoogleDriveGateway = new GoogleDriveGateway()) => {
@@ -7737,6 +7856,396 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       update: strategyWeightingUpsertData(criteria, request.user!.id),
     })
     response.json({ weighting: { source: weighting.source, sourceRef: weighting.sourceRef, ...strategyWeightingView(weighting) } })
+  }))
+
+  const strategicObjectiveForRequest = async (request: Request, objectiveId: string) => {
+    const objective = await db.strategicObjective.findUnique({
+      where: { id: objectiveId },
+      include: {
+        ...strategicObjectiveInclude,
+        diagnostic: { select: { id: true, company: { select: { id: true } } } },
+      },
+    })
+    if (!objective || !canAccessCompany(request, objective.diagnostic.company)) return null
+    return objective
+  }
+
+  app.post('/api/diagnostics/:id/strategic-objectives/suggest', authMiddleware, userWriteGuard, checkyLimiter, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveSuggestionRequestSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective suggestion request', details: parsed.error.issues })
+      return
+    }
+    const diagnostic = await db.qualityDiagnostic.findUnique({
+      where: { id: String(request.params.id) },
+      include: { company: { select: { id: true } } },
+    })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const items = await db.sWOTItem.findMany({ where: { swot: { diagnosticId: diagnostic.id } }, select: { id: true, type: true, description: true } })
+    const eligible = (await loadDiagnosticStrategies(db, diagnostic.id, true))
+      .filter((strategy) => strategy.weighting !== null && strategy.weightingBand !== null)
+      .map((strategy) => sanitizedStrategyView(strategy, items))
+    const selectedRefs = parsed.data.strategyRefs
+    const selected = selectedRefs === undefined ? eligible : eligible.filter((strategy) => selectedRefs.includes(strategy.id))
+    if (selectedRefs && selected.length !== new Set(selectedRefs).size) {
+      response.status(400).json({ error: 'Every selected strategy must be accepted, weighted and classified for this diagnostic' })
+      return
+    }
+    if (selected.length === 0) {
+      response.status(409).json({ error: 'There are no accepted, weighted and classified strategies available yet' })
+      return
+    }
+    const context: StrategicObjectiveSuggestionContext = {
+      diagnostic: { title: diagnostic.title, description: diagnostic.description, status: diagnostic.status },
+      strategies: selected.map((strategy) => ({
+        strategyRef: strategy.id,
+        source: strategy.source,
+        title: strategy.title,
+        description: strategy.description,
+        weightedScore: strategy.weightedScore as number,
+        weightingBand: strategy.weightingBand as string,
+        factors: [strategy.factor1, strategy.factor2]
+          .filter((factor): factor is NonNullable<typeof factor> => factor !== null)
+          .map((factor) => ({ type: factor.type, description: factor.description })),
+      })),
+    }
+    let result
+    try {
+      result = await aiService.suggestStrategicObjectives(context)
+    } catch (error) {
+      if (error instanceof AIServiceError) {
+        if (error.code === 'NOT_CONFIGURED') {
+          response.status(503).json({ error: 'Checky is not configured' })
+          return
+        }
+        if (error.code === 'CONTEXT_TOO_LARGE') {
+          response.status(413).json({ error: 'The strategic context is too large to analyze' })
+          return
+        }
+        response.status(502).json({ error: 'Checky returned invalid strategic objective suggestions' })
+        return
+      }
+      throw error
+    }
+    const selectedById = new Map(selected.map((strategy) => [strategy.id, strategy]))
+    const pendingFields = (proposal: typeof result.suggestions[number]) => [
+      ['specificCriteria', proposal.specificCriteria],
+      ['measurableCriteria', proposal.measurableCriteria],
+      ['achievableCriteria', proposal.achievableCriteria],
+      ['relevantCriteria', proposal.relevantCriteria],
+      ['timeBoundCriteria', proposal.timeBoundCriteria],
+      ['indicator', proposal.indicator],
+    ].flatMap(([field, value]) => value === null || (typeof value === 'string' && !value.trim()) ? [field] : [])
+    response.json({
+      suggestions: result.suggestions.map((proposal) => ({
+        ...proposal,
+        origin: StrategicObjectiveOrigin.CHECKY,
+        missingInformation: result.missingInformation,
+        pendingFields: pendingFields(proposal),
+        strategies: proposal.strategyRefs.map((ref) => {
+          const strategy = selectedById.get(ref)
+          return strategy ? {
+            id: strategy.id,
+            source: strategy.source,
+            sourceRef: strategySourceRef(strategy.description),
+            title: strategy.title,
+            description: strategy.description,
+            weightedScore: strategy.weightedScore,
+            weightingBand: strategy.weightingBand,
+          } : null
+        }).filter((strategy): strategy is NonNullable<typeof strategy> => strategy !== null),
+      })),
+      missingInformation: result.missingInformation,
+    })
+  }))
+
+  app.get('/api/diagnostics/:id/strategic-objectives', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const objectives = await db.strategicObjective.findMany({ where: { diagnosticId: diagnostic.id }, include: strategicObjectiveInclude, orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }] })
+    response.json({ objectives: objectives.map(strategicObjectiveView) })
+  }))
+
+  app.post('/api/diagnostics/:id/strategic-objectives', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective data', details: parsed.error.issues })
+      return
+    }
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const indicator = parsed.data.indicator
+    const objective = await runInTransaction(db, async (tx) => {
+      const created = await tx.strategicObjective.create({
+        data: {
+          diagnosticId: diagnostic.id,
+          title: parsed.data.title,
+          statement: parsed.data.statement,
+          specificCriteria: parsed.data.specificCriteria ?? null,
+          measurableCriteria: parsed.data.measurableCriteria ?? null,
+          achievableCriteria: parsed.data.achievableCriteria ?? null,
+          relevantCriteria: parsed.data.relevantCriteria ?? null,
+          timeBoundCriteria: parsed.data.timeBoundCriteria ?? null,
+          origin: (parsed.data.origin ?? StrategicObjectiveOrigin.MANUAL) as StrategicObjectiveOrigin,
+          createdById: request.user!.id,
+          ...(indicator ? { indicator: { create: indicator } } : {}),
+        },
+        include: strategicObjectiveInclude,
+      })
+      await strategicObjectiveHistoryWrite(tx, {
+        objectiveId: created.id,
+        eventType: StrategicObjectiveHistoryEventType.CREATED,
+        summary: 'Objetivo estratégico creado',
+        actor: request.user!,
+        changes: [
+          { field: 'title', label: 'Título', previousValue: null, newValue: created.title },
+          { field: 'statement', label: 'Declaración', previousValue: null, newValue: created.statement },
+          { field: 'status', label: 'Estado', previousValue: null, newValue: created.status },
+        ],
+        metadata: { origin: created.origin },
+      })
+      return created
+    })
+    response.status(201).json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.get('/api/strategic-objectives/:id', authMiddleware, asyncHandler(async (request, response) => {
+    const objective = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!objective) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    response.json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.patch('/api/strategic-objectives/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective data', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const incomingIndicator = parsed.data.indicator
+    const candidateIndicator = incomingIndicator === undefined
+      ? existing.indicator
+      : incomingIndicator === null
+        ? null
+        : {
+            name: incomingIndicator.name ?? existing.indicator?.name ?? null,
+            unit: incomingIndicator.unit ?? existing.indicator?.unit ?? null,
+            baselineValue: incomingIndicator.baselineValue ?? existing.indicator?.baselineValue ?? null,
+            targetValue: incomingIndicator.targetValue ?? existing.indicator?.targetValue ?? null,
+            measurementMethod: incomingIndicator.measurementMethod ?? existing.indicator?.measurementMethod ?? null,
+            deadline: incomingIndicator.deadline ?? existing.indicator?.deadline ?? null,
+          }
+    const candidate: StrategicObjectiveCandidate = {
+      title: parsed.data.title ?? existing.title,
+      statement: parsed.data.statement ?? existing.statement,
+      specificCriteria: parsed.data.specificCriteria !== undefined ? parsed.data.specificCriteria : existing.specificCriteria,
+      measurableCriteria: parsed.data.measurableCriteria !== undefined ? parsed.data.measurableCriteria : existing.measurableCriteria,
+      achievableCriteria: parsed.data.achievableCriteria !== undefined ? parsed.data.achievableCriteria : existing.achievableCriteria,
+      relevantCriteria: parsed.data.relevantCriteria !== undefined ? parsed.data.relevantCriteria : existing.relevantCriteria,
+      timeBoundCriteria: parsed.data.timeBoundCriteria !== undefined ? parsed.data.timeBoundCriteria : existing.timeBoundCriteria,
+      indicator: candidateIndicator,
+    }
+    const missingFields = strategicObjectiveMissingFields(candidate)
+    if (existing.status === StrategicObjectiveStatus.APPROVED && missingFields.length > 0) {
+      response.status(400).json({ error: 'An approved strategic objective must remain SMART-complete', missingFields })
+      return
+    }
+    const objective = await runInTransaction(db, async (tx) => {
+      const data: Prisma.StrategicObjectiveUncheckedUpdateInput = {}
+      if (parsed.data.title !== undefined) data.title = parsed.data.title
+      if (parsed.data.statement !== undefined) data.statement = parsed.data.statement
+      if (parsed.data.specificCriteria !== undefined) data.specificCriteria = parsed.data.specificCriteria
+      if (parsed.data.measurableCriteria !== undefined) data.measurableCriteria = parsed.data.measurableCriteria
+      if (parsed.data.achievableCriteria !== undefined) data.achievableCriteria = parsed.data.achievableCriteria
+      if (parsed.data.relevantCriteria !== undefined) data.relevantCriteria = parsed.data.relevantCriteria
+      if (parsed.data.timeBoundCriteria !== undefined) data.timeBoundCriteria = parsed.data.timeBoundCriteria
+      const updated = await tx.strategicObjective.update({ where: { id: existing.id }, data, include: strategicObjectiveInclude })
+      if (incomingIndicator === null) {
+        if (existing.indicator) await tx.strategicObjectiveIndicator.delete({ where: { objectiveId: existing.id } })
+      } else if (incomingIndicator) {
+        if (existing.indicator) {
+          await tx.strategicObjectiveIndicator.update({ where: { objectiveId: existing.id }, data: incomingIndicator })
+        } else {
+          await tx.strategicObjectiveIndicator.create({ data: { objectiveId: existing.id, ...incomingIndicator } })
+        }
+      }
+      await strategicObjectiveHistoryWrite(tx, {
+        objectiveId: existing.id,
+        eventType: StrategicObjectiveHistoryEventType.UPDATED,
+        summary: 'Objetivo estratégico actualizado',
+        actor: request.user!,
+         changes: strategicObjectiveUpdateChanges(existing, parsed.data),
+      })
+      return (await tx.strategicObjective.findUnique({ where: { id: updated.id }, include: strategicObjectiveInclude })) ?? updated
+    })
+    response.json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.post('/api/strategic-objectives/:id/approve', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveApprovalSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective approval', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    if (existing.status === StrategicObjectiveStatus.APPROVED) {
+      response.status(409).json({ error: 'Strategic objective is already approved' })
+      return
+    }
+    const missingFields = strategicObjectiveMissingFields(existing)
+    if (missingFields.length > 0) {
+      response.status(400).json({ error: 'Strategic objective is incomplete', missingFields })
+      return
+    }
+    const objective = await runInTransaction(db, async (tx) => {
+      const updated = await tx.strategicObjective.update({ where: { id: existing.id }, data: { status: StrategicObjectiveStatus.APPROVED }, include: strategicObjectiveInclude })
+      await strategicObjectiveHistoryWrite(tx, {
+        objectiveId: existing.id,
+        eventType: StrategicObjectiveHistoryEventType.STATUS_CHANGED,
+        summary: 'Objetivo estratégico aprobado',
+        actor: request.user!,
+        changes: [{ field: 'status', label: 'Estado', previousValue: existing.status, newValue: updated.status }],
+      })
+      return updated
+    })
+    response.json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.delete('/api/strategic-objectives/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    await db.strategicObjective.delete({ where: { id: existing.id } })
+    response.status(204).send()
+  }))
+
+  app.post('/api/strategic-objectives/:id/strategies', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveStrategyLinkSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective strategy link', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const strategies = await loadDiagnosticStrategies(db, existing.diagnosticId, true)
+    const strategy = strategies.find((candidate) => candidate.source === parsed.data.source && strategySourceRef(candidate.description) === parsed.data.sourceRef)
+    const weighting = strategy?.weighting
+    const weightingBand = strategy?.weightingBand
+    if (!strategy || !weighting || !weightingBand) {
+      response.status(404).json({ error: 'Accepted and weighted strategy not found' })
+      return
+    }
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        await tx.strategicObjectiveStrategy.create({
+          data: {
+            objectiveId: existing.id,
+            source: parsed.data.source as StrategicObjectiveStrategySource,
+            sourceRef: parsed.data.sourceRef,
+            strategyTitle: strategy.title,
+            strategyDescription: strategy.description,
+            weightedScore: weighting.weightedScore,
+            weightingBand,
+            linkedById: request.user!.id,
+          },
+        })
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: existing.id,
+          eventType: StrategicObjectiveHistoryEventType.STRATEGY_LINKED,
+          summary: 'Estrategia vinculada al objetivo estratégico',
+          actor: request.user!,
+          metadata: { source: parsed.data.source, sourceRef: parsed.data.sourceRef, strategyTitle: strategy.title },
+        })
+        return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+      })
+      response.status(201).json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        response.status(409).json({ error: 'This strategy is already linked to the objective' })
+        return
+      }
+      throw error
+    }
+  }))
+
+  app.delete('/api/strategic-objectives/:id/strategies/:source/:sourceRef', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const linkParsed = strategicObjectiveStrategyLinkSchema.safeParse({ source: request.params.source, sourceRef: request.params.sourceRef })
+    if (!linkParsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective strategy link', details: linkParsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const link = existing.strategyLinks.find((item) => item.source === linkParsed.data.source && item.sourceRef === linkParsed.data.sourceRef)
+    if (!link) {
+      response.status(404).json({ error: 'Strategic objective strategy link not found' })
+      return
+    }
+    const objective = await runInTransaction(db, async (tx) => {
+      await tx.strategicObjectiveStrategy.delete({ where: { id: link.id } })
+      await strategicObjectiveHistoryWrite(tx, {
+        objectiveId: existing.id,
+        eventType: StrategicObjectiveHistoryEventType.STRATEGY_UNLINKED,
+        summary: 'Estrategia desvinculada del objetivo estratégico',
+        actor: request.user!,
+        metadata: { source: link.source, sourceRef: link.sourceRef, strategyTitle: link.strategyTitle },
+      })
+      return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+    })
+    response.json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.get('/api/diagnostics/:diagnosticId/strategic-objectives/:objectiveId/history', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveHistoryQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective history filters', details: parsed.error.issues })
+      return
+    }
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.diagnosticId) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const objective = await db.strategicObjective.findUnique({ where: { id: String(request.params.objectiveId) }, select: { id: true, diagnosticId: true } })
+    if (!objective || objective.diagnosticId !== diagnostic.id) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const where: Prisma.StrategicObjectiveHistoryWhereInput = { objectiveId: objective.id, ...(parsed.data.eventType ? { eventType: parsed.data.eventType } : {}) }
+    const skip = (parsed.data.page - 1) * parsed.data.pageSize
+    const [total, events] = await Promise.all([
+      db.strategicObjectiveHistory.count({ where }),
+      db.strategicObjectiveHistory.findMany({ where, include: strategicObjectiveHistoryInclude, orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], skip, take: parsed.data.pageSize }),
+    ])
+    response.json({ events: events.map(strategicObjectiveHistoryView), page: parsed.data.page, pageSize: parsed.data.pageSize, total })
   }))
 
   app.post('/api/diagnostics/:id/crosses/generate', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {

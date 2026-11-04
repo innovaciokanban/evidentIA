@@ -2000,6 +2000,84 @@ describe('AI analysis service and API', () => {
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 
+  it('validates strategic objective suggestions and keeps unsupported indicator data pending', async () => {
+    const strategyRef = 'cross:cmcross000000000000000001'
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({
+      suggestions: [{
+        title: 'Aprovechar la expansión comercial',
+        statement: 'Convertir la capacidad del equipo en acciones comerciales enfocadas.',
+        specificCriteria: 'En la operación comercial.',
+        measurableCriteria: 'Definir el indicador con el equipo responsable.',
+        achievableCriteria: null,
+        relevantCriteria: 'Conecta una estrategia priorizada con el crecimiento.',
+        timeBoundCriteria: null,
+        indicator: null,
+        strategyRefs: [strategyRef],
+      }],
+      missingInformation: ['Definir responsable, línea base, meta y fecha.'],
+    }) })) } }
+    const service = new AIService(client)
+    const result = await service.suggestStrategicObjectives({
+      diagnostic: { title: diagnostic.title, description: diagnostic.description, status: diagnostic.status },
+      strategies: [{ strategyRef, source: 'STRATEGIC_CROSS', title: 'Aprovechar la expansión comercial', description: 'Usar la fortaleza para capturar la oportunidad', weightedScore: 4.2, weightingBand: 'INMEDIATA', factors: [] }],
+    })
+    expect(result.suggestions).toHaveLength(1)
+    expect(result.suggestions[0].indicator).toBeNull()
+    expect(result.suggestions[0].strategyRefs).toEqual([strategyRef])
+    expect(client.responses.create).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a strategic objective suggestion that references an ineligible strategy', async () => {
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({
+      suggestions: [{ title: 'Objetivo válido', statement: 'Una propuesta trazable.', specificCriteria: null, measurableCriteria: null, achievableCriteria: null, relevantCriteria: null, timeBoundCriteria: null, indicator: null, strategyRefs: ['cross:foreign'] }],
+      missingInformation: [],
+    }) })) } }
+    const service = new AIService(client)
+    await expect(service.suggestStrategicObjectives({
+      diagnostic: { title: diagnostic.title, description: diagnostic.description, status: diagnostic.status },
+      strategies: [{ strategyRef: 'cross:owned', source: 'STRATEGIC_CROSS', title: 'Estrategia', description: 'Descripción de estrategia', weightedScore: 4, weightingBand: 'INMEDIATA', factors: [] }],
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
+  it('returns ephemeral SMART suggestions only from accepted weighted strategies', async () => {
+    const seededCross: SeededCross = {
+      id: strategicCrossFixture.id,
+      crossType: 'FO',
+      origin: 'USER',
+      factor1Id: checkyFactorIds.strength,
+      factor2Id: checkyFactorIds.opportunity,
+      strategy: 'Usar el equipo comprometido para capturar el mercado en expansión',
+      strategyStatus: 'ACCEPTED',
+      weighting: { impactoEstrategico: 'ALTO', viabilidad: 'ALTO', urgencia: 'ALTO', sinergiaInterna: 'ALTO', impactoReputacional: 'MEDIO', weightedScore: 4.2 },
+    }
+    const db = makeDb('SUPERUSER', member.id, null, company.id, [], [seededCross])
+    const aiService = {
+      suggestStrategicObjectives: vi.fn(async () => ({
+        suggestions: [{ title: 'Acelerar la expansión', statement: 'Aumentar la capacidad de ejecución comercial.', specificCriteria: 'En el proceso comercial.', measurableCriteria: null, achievableCriteria: null, relevantCriteria: 'Conecta la estrategia priorizada.', timeBoundCriteria: null, indicator: null, strategyRefs: [`cross:${strategicCrossFixture.id}`] }],
+        missingInformation: ['Definir indicador, meta y fecha.'],
+      })),
+    } as unknown as AIService
+    const agent = request.agent(createApp(db, aiService))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+
+    const response = await agent.post(`/api/diagnostics/${diagnostic.id}/strategic-objectives/suggest`).send({})
+
+    expect(response.status).toBe(200)
+    expect(response.body.suggestions[0]).toMatchObject({ title: 'Acelerar la expansión', origin: 'CHECKY', pendingFields: ['measurableCriteria', 'achievableCriteria', 'timeBoundCriteria', 'indicator'] })
+    expect(response.body.suggestions[0].strategies).toEqual([expect.objectContaining({ source: 'STRATEGIC_CROSS', weightedScore: 4.2, weightingBand: 'INMEDIATA' })])
+    expect(aiService.suggestStrategicObjectives).toHaveBeenCalledOnce()
+    expect(db.strategicCross.create).not.toHaveBeenCalled()
+  })
+
+  it('does not expose or generate suggestions for another company diagnostic', async () => {
+    const aiService = { suggestStrategicObjectives: vi.fn(async () => ({ suggestions: [], missingInformation: [] })) } as unknown as AIService
+    const agent = request.agent(createApp(makeDb('COMPANY_ADMIN', member.id, null, otherCompanyId), aiService))
+    await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
+    const response = await agent.post(`/api/diagnostics/${diagnostic.id}/strategic-objectives/suggest`).send({})
+    expect(response.status).toBe(404)
+    expect(aiService.suggestStrategicObjectives).not.toHaveBeenCalled()
+  })
+
   it('persists and retrieves an authorized AI analysis', async () => {
     const aiService = { analyze: vi.fn(async () => aiResult) } as unknown as AIService
     const agent = request.agent(createApp(makeDb('SUPERUSER'), aiService))

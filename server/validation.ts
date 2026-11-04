@@ -751,6 +751,85 @@ export const strategyTasksCreateSchema = z.object({
 export const crossTypeSchema = z.enum(['FO', 'DO', 'FA', 'DA'])
 export const crossOriginSchema = z.enum(['USER', 'AI', 'BOTH'])
 
+export const strategicObjectiveStatusSchema = z.enum(['DRAFT', 'APPROVED'])
+export const strategicObjectiveOriginSchema = z.enum(['MANUAL', 'CHECKY'])
+export const strategicObjectiveStrategySourceSchema = z.enum(['AI_ANALYSIS', 'CHECKY', 'STRATEGIC_CROSS'])
+
+const strategicObjectiveCriterion = (max: number) => z.string().trim().max(max).nullable().optional()
+
+export const strategicObjectiveIndicatorSchema = z.object({
+  name: z.string().trim().min(3).max(200).optional(),
+  unit: z.string().trim().min(1).max(80).optional(),
+  baselineValue: z.string().trim().min(1).max(120).optional(),
+  targetValue: z.string().trim().min(1).max(120).optional(),
+  measurementMethod: z.string().trim().min(3).max(1000).optional(),
+  deadline: calendarDateInput.nullable().optional(),
+}).strict()
+
+export const strategicObjectiveCreateSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  statement: z.string().trim().min(3).max(5000),
+  specificCriteria: strategicObjectiveCriterion(2000),
+  measurableCriteria: strategicObjectiveCriterion(2000),
+  achievableCriteria: strategicObjectiveCriterion(2000),
+  relevantCriteria: strategicObjectiveCriterion(2000),
+  timeBoundCriteria: strategicObjectiveCriterion(2000),
+  origin: strategicObjectiveOriginSchema.optional(),
+  indicator: strategicObjectiveIndicatorSchema.nullable().optional(),
+}).strict()
+
+export const strategicObjectiveUpdateSchema = strategicObjectiveCreateSchema.omit({ origin: true }).partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one strategic objective field is required',
+)
+
+export const strategicObjectiveStrategyLinkSchema = z.object({
+  source: strategicObjectiveStrategySourceSchema,
+  sourceRef: z.string().trim().min(1).max(128),
+}).strict()
+
+/** La selección es opcional: sin ella Checky recibe todas las estrategias elegibles del diagnóstico. */
+export const strategicObjectiveSuggestionRequestSchema = z.object({
+  strategyRefs: z.array(z.string().trim().min(1).max(200)).max(12).optional(),
+}).strict()
+
+const strategicObjectiveAISuggestionSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  statement: z.string().trim().min(3).max(5000),
+  specificCriteria: z.string().trim().max(2000).nullable(),
+  measurableCriteria: z.string().trim().max(2000).nullable(),
+  achievableCriteria: z.string().trim().max(2000).nullable(),
+  relevantCriteria: z.string().trim().max(2000).nullable(),
+  timeBoundCriteria: z.string().trim().max(2000).nullable(),
+  indicator: z.object({
+    name: z.string().trim().max(200).nullable(),
+    unit: z.string().trim().max(80).nullable(),
+    baselineValue: z.string().trim().max(120).nullable(),
+    targetValue: z.string().trim().max(120).nullable(),
+    measurementMethod: z.string().trim().max(1000).nullable(),
+    deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  }).strict().nullable(),
+  strategyRefs: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+}).strict()
+
+export function buildStrategicObjectiveSuggestionSchema(allowedStrategyRefs: Set<string>) {
+  return z.object({
+    suggestions: z.array(strategicObjectiveAISuggestionSchema.extend({
+      strategyRefs: z.array(z.string().trim().min(1).max(200).refine((value) => allowedStrategyRefs.has(value), 'Strategy must be an eligible strategy from this diagnostic')).min(1).max(8),
+    })).max(8),
+    missingInformation: z.array(z.string().trim().min(1).max(1000)).max(20),
+  }).strict()
+}
+
+export const strategicObjectiveApprovalSchema = z.object({}).strict()
+
+export const strategicObjectiveHistoryEventTypeSchema = z.enum(['CREATED', 'UPDATED', 'STATUS_CHANGED', 'STRATEGY_LINKED', 'STRATEGY_UNLINKED'])
+export const strategicObjectiveHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  eventType: strategicObjectiveHistoryEventTypeSchema.optional(),
+})
+
 export const crossCreateSchema = z.object({
   // Los factores DOFA son SWOTItem: solo nacen desde Prisma, nunca desde el seed, así que sus ids
   // son cuid. El endpoint exige además que ambos pertenezcan a la matriz del diagnóstico.

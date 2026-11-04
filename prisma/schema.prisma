@@ -141,6 +141,30 @@ enum CheckyCategory {
   NEXT_STEPS
 }
 
+enum StrategicObjectiveStatus {
+  DRAFT
+  APPROVED
+}
+
+enum StrategicObjectiveOrigin {
+  MANUAL
+  CHECKY
+}
+
+enum StrategicObjectiveStrategySource {
+  AI_ANALYSIS
+  CHECKY
+  STRATEGIC_CROSS
+}
+
+enum StrategicObjectiveHistoryEventType {
+  CREATED
+  UPDATED
+  STATUS_CHANGED
+  STRATEGY_LINKED
+  STRATEGY_UNLINKED
+}
+
 /**
  * Fuentes de una estrategia que se pueden ponderar sin ser un cruce. Los cruces siguen pesándose en
  * StrategicCrossWeighting, así que no aparecen aquí a propósito: esta tabla no los reemplaza.
@@ -290,6 +314,9 @@ model User {
   auditActionResponsibles       AuditCorrectiveAction[]    @relation("AuditActionResponsibles")
   auditActionProgressCreators   AuditActionProgress[]      @relation("AuditActionProgressCreators")
   auditEvidenceUploaders        AuditEvidenceFile[]        @relation("AuditEvidenceUploaders")
+  createdStrategicObjectives    StrategicObjective[]       @relation("CreatedStrategicObjectives")
+  strategicObjectiveLinks       StrategicObjectiveStrategy[] @relation("LinkedStrategicObjectiveStrategies")
+  strategicObjectiveHistory     StrategicObjectiveHistory[] @relation("StrategicObjectiveHistoryActors")
   googleDriveOAuthStates        GoogleDriveOAuthState[]
   statusEvents                  UserStatusEvent[]          @relation("UserStatusChanges")
   performedStatusEvents         UserStatusEvent[]          @relation("UserStatusActors")
@@ -527,6 +554,7 @@ model QualityDiagnostic {
   crosses            StrategicCross[]
   strategyWeightings StrategyWeighting[]
   checkySessions     CheckySession[]
+  strategicObjectives StrategicObjective[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -771,6 +799,85 @@ model CheckyMessage {
 
   @@index([sessionId])
   @@index([status])
+}
+
+model StrategicObjective {
+  id                 String                           @id @default(cuid())
+  diagnosticId       String
+  title              String
+  statement          String
+  specificCriteria   String?
+  measurableCriteria String?
+  achievableCriteria String?
+  relevantCriteria   String?
+  timeBoundCriteria  String?
+  status             StrategicObjectiveStatus         @default(DRAFT)
+  origin             StrategicObjectiveOrigin         @default(MANUAL)
+  createdById        String
+  diagnostic         QualityDiagnostic                @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  createdBy          User                             @relation("CreatedStrategicObjectives", fields: [createdById], references: [id], onDelete: Restrict)
+  strategyLinks      StrategicObjectiveStrategy[]
+  indicator          StrategicObjectiveIndicator?
+  history            StrategicObjectiveHistory[]
+  createdAt          DateTime                         @default(now())
+  updatedAt          DateTime                         @updatedAt
+
+  @@index([diagnosticId, status])
+  @@index([createdById])
+}
+
+model StrategicObjectiveStrategy {
+  id                  String                            @id @default(cuid())
+  objectiveId         String
+  source              StrategicObjectiveStrategySource
+  sourceRef           String
+  strategyTitle       String
+  strategyDescription String
+  weightedScore       Float
+  weightingBand       String
+  linkedById          String
+  objective           StrategicObjective                 @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  linkedBy            User                               @relation("LinkedStrategicObjectiveStrategies", fields: [linkedById], references: [id], onDelete: Restrict)
+  linkedAt            DateTime                           @default(now())
+
+  @@unique([objectiveId, source, sourceRef])
+  @@index([source, sourceRef])
+  @@index([linkedById])
+}
+
+model StrategicObjectiveIndicator {
+  id                String             @id @default(cuid())
+  objectiveId       String             @unique
+  name              String?
+  unit              String?
+  baselineValue     String?
+  targetValue       String?
+  measurementMethod String?
+  deadline          DateTime?
+  objective         StrategicObjective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([deadline])
+}
+
+model StrategicObjectiveHistory {
+  id          String                              @id @default(cuid())
+  objectiveId String
+  actorId     String?
+  actorName   String?
+  actorEmail  String?
+  eventType   StrategicObjectiveHistoryEventType
+  summary     String
+  changes     Json?
+  metadata    Json?
+  occurredAt  DateTime                          @default(now())
+  objective   StrategicObjective                  @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  actor       User?                              @relation("StrategicObjectiveHistoryActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([objectiveId, occurredAt])
+  @@index([eventType])
+  @@index([actorId])
 }
 
 model Process {

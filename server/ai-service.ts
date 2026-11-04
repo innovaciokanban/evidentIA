@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import { env } from './env.js'
-import { aiAnalysisSchema, auditChecklistAIGenerationSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, crossAnalysisSchema, crossTypeFor, crossTypeSchema } from './validation.js'
+import { aiAnalysisSchema, auditChecklistAIGenerationSchema, buildCheckyConsultSchema, buildGeneratedCrossSchema, buildGeneratedCrossesAnalysisSchema, buildStrategicObjectiveSuggestionSchema, crossAnalysisSchema, crossTypeFor, crossTypeSchema } from './validation.js'
 import { WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import type { z } from 'zod'
@@ -84,6 +84,39 @@ export type AuditChecklistContext = {
   maxQuestions: number
 }
 export type AuditChecklistGenerationResult = z.infer<typeof auditChecklistAIGenerationSchema>
+export type StrategicObjectiveSuggestionContext = {
+  diagnostic: { title: string; description: string; status: string }
+  strategies: Array<{
+    strategyRef: string
+    source: string
+    title: string
+    description: string
+    weightedScore: number
+    weightingBand: string
+    factors: Array<{ type: string; description: string }>
+  }>
+}
+export type StrategicObjectiveSuggestionResult = {
+  suggestions: Array<{
+    title: string
+    statement: string
+    specificCriteria: string | null
+    measurableCriteria: string | null
+    achievableCriteria: string | null
+    relevantCriteria: string | null
+    timeBoundCriteria: string | null
+    indicator: {
+      name: string | null
+      unit: string | null
+      baselineValue: string | null
+      targetValue: string | null
+      measurementMethod: string | null
+      deadline: string | null
+    } | null
+    strategyRefs: string[]
+  }>
+  missingInformation: string[]
+}
 
 /** Clasificación por rango del ponderado que ya está guardado en la columna weightedScore. */
 export type CheckyWeightingBand = 'INMEDIATA' | 'CORTO_PLAZO' | 'MEDIANO_PLAZO' | 'LARGO_PLAZO'
@@ -536,6 +569,47 @@ const auditChecklistGenerationJsonSchema = {
     missingInformation: { type: 'array', maxItems: 10, items: { type: 'string' } },
   },
   required: ['proposals', 'missingInformation'],
+}
+
+const strategicObjectiveSuggestionJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    suggestions: {
+      type: 'array',
+      maxItems: 8,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string' },
+          statement: { type: 'string' },
+          specificCriteria: { type: ['string', 'null'] },
+          measurableCriteria: { type: ['string', 'null'] },
+          achievableCriteria: { type: ['string', 'null'] },
+          relevantCriteria: { type: ['string', 'null'] },
+          timeBoundCriteria: { type: ['string', 'null'] },
+          indicator: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            properties: {
+              name: { type: ['string', 'null'] },
+              unit: { type: ['string', 'null'] },
+              baselineValue: { type: ['string', 'null'] },
+              targetValue: { type: ['string', 'null'] },
+              measurementMethod: { type: ['string', 'null'] },
+              deadline: { type: ['string', 'null'] },
+            },
+            required: ['name', 'unit', 'baselineValue', 'targetValue', 'measurementMethod', 'deadline'],
+          },
+          strategyRefs: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' } },
+        },
+        required: ['title', 'statement', 'specificCriteria', 'measurableCriteria', 'achievableCriteria', 'relevantCriteria', 'timeBoundCriteria', 'indicator', 'strategyRefs'],
+      },
+    },
+    missingInformation: { type: 'array', maxItems: 20, items: { type: 'string' } },
+  },
+  required: ['suggestions', 'missingInformation'],
 }
 
 const CHECKY_CROSS_TYPES = 'Únicos cruces DOFA válidos: FO = STRENGTH + OPPORTUNITY, DO = WEAKNESS + OPPORTUNITY, FA = STRENGTH + THREAT, DA = WEAKNESS + THREAT. El factor interno (STRENGTH o WEAKNESS) se guarda como factor1 y el externo (OPPORTUNITY o THREAT) como factor2.'
@@ -1195,6 +1269,50 @@ export class AIService {
         console.error('[AIService] OpenAI provider quota exhausted', { status: providerError.status, code: providerError.code, model: env.OPENAI_MODEL })
         throw new AIServiceError('PROVIDER_QUOTA')
       }
+      this.fail(error)
+    }
+  }
+
+  async suggestStrategicObjectives(context: StrategicObjectiveSuggestionContext): Promise<StrategicObjectiveSuggestionResult> {
+    if (!this.client) throw new AIServiceError('NOT_CONFIGURED')
+    const allowedStrategyRefs = new Set(context.strategies.map((strategy) => strategy.strategyRef))
+    const contextJson = JSON.stringify(context)
+    if (contextJson.length > 120_000) throw new AIServiceError('CONTEXT_TOO_LARGE')
+    const prompt = [
+      CHECKY_ROLE,
+      CHECKY_JUDGMENT_RULES,
+      CHECKY_DO_NOT_INVENT,
+      CHECKY_NO_INTERNAL_IDS,
+      'Actúa como asesor de planeación estratégica y propone objetivos SMART a partir exclusivamente del diagnóstico y de las estrategias recibidas.',
+      'Las estrategias recibidas son las únicas elegibles: ya fueron aceptadas por la persona, ponderadas y clasificadas por el servidor. Cada propuesta debe referenciar una o más strategyRef exactamente como llegan en el contexto.',
+      'No inventes hechos, cifras, recursos, fechas, líneas base, metas, responsables, indicadores ni información externa.',
+      'Redacta objetivos y criterios accionables, pero deja en null cualquier dato que el contexto no defina. En particular, no inventes baselineValue, targetValue, deadline ni un indicador: indicator debe ser null cuando no exista una definición explícita en el contexto.',
+      'Los criterios que queden en null son pendientes por definir y deben aparecer en missingInformation de forma concreta. No rellenes esos vacíos con recomendaciones disfrazadas de hechos.',
+      'No escribas strategyRef, ids técnicos ni metadatos internos dentro de title, statement, criterios o missingInformation. Las referencias solo pueden ir en strategyRefs.',
+      'Devuelve únicamente JSON válido según el schema solicitado.',
+      contextJson,
+    ].join('\n\n')
+    try {
+      const response = await this.client.responses.create({
+        model: env.OPENAI_MODEL,
+        input: prompt,
+        text: { format: { type: 'json_schema', name: 'strategic_objective_suggestions', strict: true, schema: strategicObjectiveSuggestionJsonSchema } },
+      })
+      if (!response.output_text) throw new AIServiceError('INVALID_RESPONSE')
+      let candidate: unknown
+      try { candidate = JSON.parse(response.output_text) } catch { throw new AIServiceError('INVALID_RESPONSE') }
+      const parsed = buildStrategicObjectiveSuggestionSchema(allowedStrategyRefs).safeParse(candidate)
+      if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
+      const forbiddenReferences = [...allowedStrategyRefs]
+      const textFields = (suggestion: typeof parsed.data.suggestions[number]) => [suggestion.title, suggestion.statement, suggestion.specificCriteria, suggestion.measurableCriteria, suggestion.achievableCriteria, suggestion.relevantCriteria, suggestion.timeBoundCriteria, suggestion.indicator?.name, suggestion.indicator?.unit, suggestion.indicator?.baselineValue, suggestion.indicator?.targetValue, suggestion.indicator?.measurementMethod, suggestion.indicator?.deadline]
+      if (parsed.data.suggestions.some((suggestion) => textFields(suggestion).some((text) => text !== null && text !== undefined && forbiddenReferences.some((reference) => text.includes(reference))) || parsed.data.missingInformation.some((text) => forbiddenReferences.some((reference) => text.includes(reference))) || new Set(suggestion.strategyRefs).size !== suggestion.strategyRefs.length)) {
+        throw new AIServiceError('INVALID_RESPONSE')
+      }
+      return {
+        ...parsed.data,
+        suggestions: parsed.data.suggestions.map((suggestion) => ({ ...suggestion, indicator: null })),
+      }
+    } catch (error) {
       this.fail(error)
     }
   }

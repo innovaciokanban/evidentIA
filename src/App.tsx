@@ -21,6 +21,8 @@ import { canManageGoogleDrive, drivePickerViewConfig, googleDrivePaths, googleDr
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import { TicketHistorySection } from './components/tickets/TicketHistorySection'
 import { ticketEventMeta } from './components/tickets/ticket-history-meta'
+import { StrategicObjectivesSection } from './components/strategic/StrategicObjectivesSection'
+import { diagnosticFlow, type FlowStep, type StrategicScreen } from './diagnostic-flow'
 import { calendarRelativeDate, formatCalendarDate, isCalendarDateBeforeToday } from './calendar-dates'
 import { userOptionLabel } from './user-status'
 import logo from './assets/logokanban.png'
@@ -176,32 +178,8 @@ const weightingBands: Array<{ min: number; label: string; tone: string }> = [
 
 const swotTypeLabels = Object.fromEntries(swotTypes.map((item) => [item.value, item.label])) as Record<SWOTType, string>
 
-/** Las etapas intermedias se muestran sobre la vista de la matriz DOFA, que es la que las abre. */
-type StrategicScreen = 'checky' | 'ponderacion'
-
-/** Etapas del análisis estratégico, en el único orden en el que se recorren. */
-type FlowStep = 'diagnostico' | 'dofa' | StrategicScreen
-
-/**
- * Unico recorrido del análisis. El indicador del detalle y los chips numerados de cada bloque salen de
- * aqui, de modo que ninguna pantalla puede anunciar una etapa que el indicador no tiene ni repetirla.
- *
- * El análisis estratégico con IA no aparece como etapa propia: Checky lo orquesta dentro de su propia
- * pantalla, que es donde se lee, y así el usuario ejecuta un análisis y no dos.
- *
- * Las secciones de recomendaciones y planes de acción quedan deliberadamente fuera: no son una etapa
- * del análisis estratégico, asi que no aparecen en el indicador. Se siguen alcanzando desde el
- * contenido del propio análisis y desde las rutas que ya existen.
- */
-const diagFlow: Array<{ key: FlowStep; label: string }> = [
-  { key: 'diagnostico', label: 'Análisis estratégico' },
-  { key: 'dofa', label: 'Matriz DOFA' },
-  { key: 'checky', label: 'Checky' },
-  { key: 'ponderacion', label: 'Ponderación' },
-]
-
 /** Numero de etapa que anuncia el indicador. Solo lo consumen los bloques que llevan chip numerado. */
-const flowStepNumber = (key: FlowStep) => diagFlow.findIndex((step) => step.key === key) + 1
+const flowStepNumber = (key: FlowStep) => diagnosticFlow.findIndex((step) => step.key === key) + 1
 
 /** La pareja DOFA se resuelve en `checky-crosses`, que es donde también se decide qué cruces de la
  *  sección de Checky son estrategias aceptables. */
@@ -2398,7 +2376,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
   // La etapa vigente es la unica que decide que pantalla se muestra. Cuando el analisis esta en una
   // seccion que no pertenece al recorrido (recomendaciones o planes de accion) no hay ninguna.
   const activeFlow: FlowStep | null = diagStage === 'diagnostico' ? 'diagnostico' : diagStage === 'dofa' ? subScreen ?? 'dofa' : null
-  const activeIndex = activeFlow ? diagFlow.findIndex((step) => step.key === activeFlow) : -1
+  const activeIndex = activeFlow ? diagnosticFlow.findIndex((step) => step.key === activeFlow) : -1
   // Un solo recorrido: elegir una etapa del indicador deja el analisis en esa etapa y cierra la
   // subpantalla anterior, en vez de abrir un segundo indicador dentro de la matriz DOFA.
   function goToFlowStep(key: FlowStep) {
@@ -2488,7 +2466,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           </div>
         </div>
       </header>
-      <ol className="diag-stepper">{diagFlow.map((step, index) => {
+      <ol className="diag-stepper">{diagnosticFlow.map((step, index) => {
         const isDone = isFlowDone(step.key, index)
         const isCurrent = step.key === activeFlow
         const isReachable = isFlowReachable(index)
@@ -2535,6 +2513,15 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
           <StrategyWeightingScreen diagnostic={diagnostic} canValue={canValue} />
           <div className="diag-nav">
             <button className="button secondary" onClick={() => goToFlowStep('checky')}>← Volver a Checky</button>
+            <button className="button primary" onClick={() => goToFlowStep('objetivos')}>Objetivos SMART →</button>
+          </div>
+        </section>
+      )}
+      {activeFlow === 'objetivos' && (
+        <section className="diag-stage active">
+          <StrategicObjectivesSection diagnosticId={diagnostic.id} canWrite={canValue} />
+          <div className="diag-nav">
+            <button className="button secondary" onClick={() => goToFlowStep('ponderacion')}>← Volver a Ponderación</button>
           </div>
         </section>
       )}
