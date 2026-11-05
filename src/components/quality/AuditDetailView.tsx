@@ -22,7 +22,6 @@ import {
   actionPriorityLabels,
   actionStatusLabels,
   actionTransitions,
-  auditEvidenceStorageSummary,
   auditCloseBlockers,
   auditChecklistAIContext,
   auditChecklistAIDimensionLabels,
@@ -64,6 +63,21 @@ const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', ti
 const shortDateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium' })
 
 const formatMaybeDate = (value: string | null | undefined) => (value ? shortDateFormatter.format(new Date(value)) : '—')
+
+const wordForCount = (count: number, singular: string, plural: string): string => count === 1 ? singular : plural
+
+const closeBlockerMessage = (reason: string, count: number): string => {
+  switch (reason) {
+    case 'CHECKLIST_PENDING': return `Hay ${count} ${wordForCount(count, 'criterio obligatorio pendiente de evaluación.', 'criterios obligatorios pendientes de evaluación.')}`
+    case 'CHECKLIST_FINDING_MISSING': return `Hay ${count} ${wordForCount(count, 'no conformidad que necesita un hallazgo asociado.', 'no conformidades que necesitan un hallazgo asociado.')}`
+    case 'ACTIONS_PENDING': return `Hay ${count} ${wordForCount(count, 'acción correctiva obligatoria abierta.', 'acciones correctivas obligatorias abiertas.')}`
+    case 'EFFICACY_PENDING': return `Hay ${count} ${wordForCount(count, 'no conformidad resuelta pendiente de verificación de eficacia.', 'no conformidades resueltas pendientes de verificación de eficacia.')}`
+    case 'EVIDENCE_PENDING': return `Hay ${count} ${wordForCount(count, 'archivo de evidencia pendiente de disponibilidad.', 'archivos de evidencia pendientes de disponibilidad.')}`
+    case 'EVIDENCE_FAILED': return `Hay ${count} ${wordForCount(count, 'archivo de evidencia que requiere revisión.', 'archivos de evidencia que requieren revisión.')}`
+    case 'EVIDENCE_DELETE_PENDING': return `Hay ${count} ${wordForCount(count, 'archivo de evidencia pendiente de eliminación.', 'archivos de evidencia pendientes de eliminación.')}`
+    default: return 'Hay una condición de cierre que requiere atención.'
+  }
+}
 
 const auditHistoryGlyph = (eventType: AuditEvent['eventType']): string => {
   if (eventType.includes('DELETED')) return '−'
@@ -340,7 +354,6 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   const results = auditExecutionSummary(audit)
   const closeBlockers = auditCloseBlockers(audit)
-  const evidenceStorage = auditEvidenceStorageSummary(audit)
   const pendingEfficacy = pendingEfficacyFindings(audit)
   const terminal = isTerminalAudit(audit)
   const readonly = terminal || !canWrite
@@ -362,8 +375,15 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const visibleEvidenceCount = filteredEvidenceFiles.length
   const activeStorageOperations = Object.values(evidenceOperations).filter((operation) => !isTerminalStorageOperation(operation.status) || operation.status === 'FAILED')
   const closeWarnings = [
-    results.itemsPending - results.itemsRequiredPending > 0 ? `${results.itemsPending - results.itemsRequiredPending} pregunta(s) no obligatoria(s) siguen pendientes; no bloquean el cierre.` : '',
-    results.findingsOpen > 0 ? `${results.findingsOpen} hallazgo(s) siguen abiertos; el cierre no exige que todos estén verificados.` : '',
+    results.itemsPending - results.itemsRequiredPending > 0
+      ? `Hay ${results.itemsPending - results.itemsRequiredPending} ${wordForCount(results.itemsPending - results.itemsRequiredPending, 'pregunta no obligatoria pendiente', 'preguntas no obligatorias pendientes')}; no ${wordForCount(results.itemsPending - results.itemsRequiredPending, 'bloquea', 'bloquean')} el cierre.`
+      : '',
+    results.findingsOpen > 0
+      ? `Hay ${results.findingsOpen} ${wordForCount(results.findingsOpen, 'hallazgo abierto', 'hallazgos abiertos')}. Puedes cerrar la auditoría si cumples los requisitos obligatorios.`
+      : '',
+    results.actionsOpen - results.actionsRequiredOpen > 0
+      ? `Hay ${results.actionsOpen - results.actionsRequiredOpen} ${wordForCount(results.actionsOpen - results.actionsRequiredOpen, 'acción correctiva no obligatoria abierta', 'acciones correctivas no obligatorias abiertas')}; no ${wordForCount(results.actionsOpen - results.actionsRequiredOpen, 'bloquea', 'bloquean')} el cierre.`
+      : '',
   ].filter(Boolean)
   const openActions = results.actionsRequiredOpen
   const overdueActions = results.actionsOverdue
@@ -398,6 +418,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   function goToCloseBlocker(section: AuditWorkspaceSection) {
     if (section === 'acciones') goToActions()
+    else if (section === 'evidencias') selectEvidenceContext()
     else selectSection(section)
   }
 
@@ -1115,44 +1136,81 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
           {closing && !terminal && (
             <section className="panel quality-close-panel" aria-labelledby="quality-close-title">
-              <p className="detail-label">CIERRE DE AUDITORÍA</p>
-              <h3 id="quality-close-title">Resumen de resultados</h3>
+              <div className="quality-close-heading">
+                <div>
+                  <p className="detail-label">CIERRE DE AUDITORÍA</p>
+                  <h3 id="quality-close-title">Resumen de resultados</h3>
+                  <p className="quality-close-intro">Revisa el estado de la auditoría antes de confirmar el cierre.</p>
+                </div>
+                <div className={`quality-close-state ${closeBlockers.length === 0 ? 'is-ready' : 'is-pending'}`} role="status">
+                  <span aria-hidden="true">{closeBlockers.length === 0 ? '✓' : '!'}</span>
+                  <div>
+                    <strong>{closeBlockers.length === 0 ? 'Lista para cerrar' : 'Cierre pendiente'}</strong>
+                    <small>{closeBlockers.length === 0 ? 'No hay requisitos pendientes.' : `${closeBlockers.length} ${wordForCount(closeBlockers.length, 'requisito pendiente', 'requisitos pendientes')}`}</small>
+                  </div>
+                </div>
+              </div>
               <div className="quality-close-stats">
-                 <div><small>Criterios evaluados</small><strong>{checklistCompleted}/{checklistTotal}</strong><span>{results.itemsPending} pendientes totales · {results.itemsRequiredPending} obligatorios</span></div>
-                 <div><small>Preguntas obligatorias</small><strong>{results.itemsRequiredEvaluated}/{results.itemsRequiredTotal}</strong><span>{results.itemsRequiredPending} pendientes que bloquean</span></div>
-                 <div><small>Conformidades</small><strong>{results.conform}</strong><span>criterios conformes</span></div>
-                 <div><small>No conformidades</small><strong>{results.nonConform}</strong><span>criterios no conformes</span></div>
-                 <div><small>Hallazgos</small><strong>{results.findingsTotal}</strong><span>{results.findingsOpen} abiertos</span></div>
-                 <div><small>Acciones pendientes</small><strong>{results.actionsOpen}</strong><span>{overdueActions} vencidas</span></div>
-                 <div><small>Archivos READY</small><strong>{evidenceStorage.READY}</strong><span>disponibles</span></div>
-                 <div><small>Archivos PENDING</small><strong>{evidenceStorage.PENDING}</strong><span>sincronización pendiente</span></div>
-                 <div><small>Archivos FAILED</small><strong>{evidenceStorage.FAILED}</strong><span>requieren revisión</span></div>
-                 <div><small>DELETE_PENDING</small><strong>{evidenceStorage.DELETE_PENDING}</strong><span>eliminación pendiente</span></div>
-                 <div><small>Requisitos pendientes</small><strong>{closeBlockers.length}</strong><span>para poder cerrar</span></div>
-               </div>
-              {closeBlockers.length > 0 ? (
-                <ul className="quality-close-blockers">
-                  {closeBlockers.map((blocker) => (
-                    <li key={blocker.reason}>
-                      <span aria-hidden="true">✕</span>
-                      <div>
-                        <strong>{blocker.message}</strong>
-                         <button type="button" className="text-button" onClick={() => goToCloseBlocker(blocker.section)}>Resolver en {sectionLabels[blocker.section]}</button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="quality-close-ok" role="status">Condiciones de cierre cumplidas: criterios obligatorios evaluados, acciones finalizadas y eficacia verificada.</p>
+                <div className="quality-close-stat quality-close-stat-evaluated">
+                  <span className="quality-close-stat-mark blue" aria-hidden="true">◷</span>
+                  <div>
+                    <small>Criterios evaluados</small>
+                    <strong>{checklistCompleted}/{checklistTotal}</strong>
+                    <span className="quality-close-stat-caption">{checklistPercent}% del checklist</span>
+                    <div className="quality-close-progress" role="progressbar" aria-label="Criterios evaluados" aria-valuemin={0} aria-valuemax={checklistTotal} aria-valuenow={checklistCompleted} aria-valuetext={`${checklistCompleted} de ${checklistTotal} criterios evaluados`}>
+                      <span style={{ width: `${checklistPercent}%` }} />
+                    </div>
+                  </div>
+                </div>
+                <div className="quality-close-stat">
+                  <span className="quality-close-stat-mark green" aria-hidden="true">✓</span>
+                  <div><small>Conformidades</small><strong>{results.conform}</strong><span className="quality-close-stat-caption">criterios conformes</span></div>
+                </div>
+                <div className="quality-close-stat">
+                  <span className="quality-close-stat-mark red" aria-hidden="true">!</span>
+                  <div><small>No conformidades</small><strong>{results.nonConform}</strong><span className="quality-close-stat-caption">criterios no conformes</span></div>
+                </div>
+                <div className="quality-close-stat">
+                  <span className="quality-close-stat-mark purple" aria-hidden="true">⌁</span>
+                  <div><small>Hallazgos</small><strong>{results.findingsTotal}</strong><span className="quality-close-stat-caption">{results.findingsOpen} abiertos</span></div>
+                </div>
+              </div>
+              {closeBlockers.length > 0 && (
+                <section className="quality-close-validation quality-close-validation-blocked" aria-labelledby="quality-close-blockers-title">
+                  <div className="quality-close-section-heading">
+                    <div>
+                      <h4 id="quality-close-blockers-title">Impedimentos de cierre</h4>
+                      <p>Resuelve estas condiciones para poder confirmar la auditoría.</p>
+                    </div>
+                    <span>{closeBlockers.length}</span>
+                  </div>
+                  <ul className="quality-close-blockers">
+                    {closeBlockers.map((blocker) => (
+                      <li key={blocker.reason}>
+                        <span aria-hidden="true">!</span>
+                        <div>
+                          <strong>{closeBlockerMessage(blocker.reason, blocker.count)}</strong>
+                          <button type="button" className="text-button" onClick={() => goToCloseBlocker(blocker.section)}>Ir a {sectionLabels[blocker.section]}</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {closeBlockers.length === 0 && (
+                <p className="quality-close-ok" role="status">Las validaciones de cierre están completas. Puedes registrar el resumen y confirmar la auditoría.</p>
               )}
               {closeWarnings.length > 0 && (
-                <div className="quality-close-warnings" role="status">
-                  <strong>Advertencias que no bloquean el cierre</strong>
+                <section className="quality-close-validation quality-close-validation-warnings" aria-labelledby="quality-close-warnings-title">
+                  <div className="quality-close-section-heading">
+                    <div>
+                      <h4 id="quality-close-warnings-title">Advertencias</h4>
+                      <p>Estas situaciones no impiden cerrar la auditoría.</p>
+                    </div>
+                    <span aria-hidden="true">i</span>
+                  </div>
                   <ul>{closeWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
-                </div>
-              )}
-              {pendingEfficacy.length > 0 && (
-                <p className="muted">Las no conformidades resueltas sin eficacia se muestran en Hallazgos.</p>
+                </section>
               )}
               <label>Resumen de cierre
                 <textarea value={closeSummary} onChange={(event) => setCloseSummary(event.target.value)} minLength={3} maxLength={10000} rows={3} placeholder="Resultados, decisiones y seguimiento acordado…" />
