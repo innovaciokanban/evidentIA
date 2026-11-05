@@ -1333,6 +1333,8 @@ describe('quality assurance API', () => {
   it('uses the injected private R2 provider without exposing its object key', async () => {
     const { db, storedFiles, storedOperations } = makeQualityDb()
     const remote = new Map<string, Buffer>()
+    const read = vi.fn(async ({ storedName }: { storedName?: string | null }) => remote.get(storedName ?? '') ?? Buffer.alloc(0))
+    const remove = vi.fn(async ({ storedName }: { storedName?: string | null }) => { if (storedName) remote.delete(storedName) })
     const r2Storage: EvidenceStorage = {
       kind: 'R2',
       ensureAuditFolder: vi.fn(async () => ({ auditFolderId: 'r2-audit-folder', companyFolderId: 'r2-company-folder', rootFolderId: 'r2' })),
@@ -1340,8 +1342,8 @@ describe('quality assurance API', () => {
         remote.set(objectKey ?? 'r2-object-1', data)
         return { storedName: objectKey ?? 'r2-object-1', driveFileId: null, driveUrl: null }
       }),
-      read: vi.fn(async ({ storedName }) => remote.get(storedName ?? '') ?? Buffer.alloc(0)),
-      remove: vi.fn(async ({ storedName }) => { if (storedName) remote.delete(storedName) }),
+      read,
+      remove,
     }
     const agent = request.agent(createApp(db, undefined, r2Storage))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
@@ -1353,6 +1355,17 @@ describe('quality assurance API', () => {
     expect(uploaded.body.file).not.toHaveProperty('driveFileId')
     expect(storedFiles[0]).toMatchObject({ storedName: expect.stringContaining('audits/'), storageProvider: 'R2' })
     expect(storedOperations).toHaveLength(0)
+
+    const validStoredName = storedFiles[0]!.storedName as string
+    storedFiles[0]!.storedName = 'evidentia/cmcompany00000000000000002/audits/other-resource/00000000-0000-0000-0000-000000000000.pdf'
+    const invalidDownload = await agent.get(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
+    expect(invalidDownload.status).toBe(422)
+    expect(read).not.toHaveBeenCalled()
+    const invalidDelete = await agent.delete(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
+    expect(invalidDelete.status).toBe(422)
+    expect(remove).not.toHaveBeenCalled()
+    expect(storedFiles).toHaveLength(1)
+    storedFiles[0]!.storedName = validStoredName
 
     const downloaded = await agent.get(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
     expect(downloaded.status).toBe(200)

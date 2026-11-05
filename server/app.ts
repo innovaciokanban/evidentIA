@@ -21,7 +21,7 @@ import { mitigationCompletedNotification, mitigationNotificationRecipients, miti
 import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
 import { EvidenceValidationError, validateEvidenceUpload } from './evidence-storage.js'
 import { createEvidenceStorage, createLocalEvidenceStorage, type EvidenceStorage } from './evidence-provider.js'
-import { nextEvidenceObjectKey } from './evidence-keys.js'
+import { isEvidenceObjectKeyFor, nextEvidenceObjectKey } from './evidence-keys.js'
 import { GoogleDriveError, GoogleDriveGateway } from './google-drive.js'
 import { createOAuthState, createPkcePair, decryptOAuthSecret, encryptOAuthSecret, hashOAuthState } from './oauth-crypto.js'
 import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
@@ -576,6 +576,18 @@ const visibleCheckyMessages = <T extends { id: string; role: string; category: s
 
 const canAccessTicket = (request: Request, ticket: { createdBy: { companyId: string | null } | null; assignedTo: { companyId: string | null } | null }) => request.user?.role === Role.SUPERUSER || ticket.createdBy?.companyId === request.user?.companyId || ticket.assignedTo?.companyId === request.user?.companyId
 const canOperateAssignedActionItemTicket = (request: Request, ticket: { actionItemId?: string | null; actionItem?: { responsibleId: string | null } | null }) => request.user?.role !== Role.COMPANY_USER || !ticket.actionItemId || ticket.actionItem?.responsibleId === request.user.id
+const ticketCompanyId = (ticket: { createdBy: { companyId: string | null } | null; assignedTo: { companyId: string | null } | null }) => ticket.createdBy?.companyId ?? ticket.assignedTo?.companyId ?? null
+const canOperateTicketEvidence = (request: Request, ticket: {
+  createdBy: { id: string; companyId: string | null } | null
+  assignedTo: { id: string; companyId: string | null } | null
+  actionItemId?: string | null
+  actionItem?: { responsibleId: string | null } | null
+}) => {
+  if (request.user?.role !== Role.COMPANY_USER) return true
+  const userId = request.user.id
+  if (ticket.createdBy?.id !== userId && ticket.assignedTo?.id !== userId) return false
+  return !ticket.actionItemId || ticket.actionItem?.responsibleId === userId
+}
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
 const canAccessCompany = (request: Request, company: { id: string }) => request.user?.role === Role.SUPERUSER || company.id === request.user?.companyId
 
@@ -1821,7 +1833,6 @@ const auditActionView = (action: AuditActionWithInclude) => ({
 // del servidor, mismo criterio que TicketEvidenceFile).
 const auditEvidenceFileInclude = {
   uploadedBy: { select: { id: true, name: true } },
-  driveConnection: { select: { id: true, companyId: true, encryptedRefreshToken: true, rootFolderId: true, status: true } },
 } as const
 type AuditEvidenceFileWithInclude = Prisma.AuditEvidenceFileGetPayload<{ include: typeof auditEvidenceFileInclude }>
 const auditEvidenceFileView = (file: AuditEvidenceFileWithInclude) => ({
@@ -5539,7 +5550,7 @@ response.json({
     }
     // La auditoría permanece viva mientras el outbox elimina sus evidencias. Esto permite recuperar
     // una operación pendiente incluso si la auditoría pasa después a un estado terminal.
-    const deletion = await db.$transaction(async (tx): Promise<{ blocked: true; evidenceFileId: string } | { unavailable: true; evidenceFileId: string } | false | null | { deleted: true; files: Array<{ storedName: string | null; storageProvider: 'LOCAL' | 'R2' | 'GOOGLE_DRIVE' }> }> => {
+    const deletion = await db.$transaction(async (tx): Promise<{ blocked: true; evidenceFileId: string } | { unavailable: true; evidenceFileId: string } | { invalidKey: true; evidenceFileId: string } | false | null | { deleted: true; files: Array<{ storedName: string | null; storageProvider: 'LOCAL' | 'R2' | 'GOOGLE_DRIVE' }> }> => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
       const lockedFinding = await tx.auditFinding.findFirst({ where: { auditId: existing.id }, select: { id: true } })
@@ -5551,6 +5562,8 @@ response.json({
       }
       const unavailableR2File = files.find((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')
       if (unavailableR2File) return { unavailable: true, evidenceFileId: unavailableR2File.id }
+      const invalidR2File = files.find((file) => file.storageProvider === 'R2' && !isEvidenceObjectKeyFor(file.storedName, { companyId: process.companyId, module: 'audits', resourceId: existing.id }))
+      if (invalidR2File) return { invalidKey: true, evidenceFileId: invalidR2File.id }
       await tx.auditEvidenceFile.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvidence.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvent.deleteMany({ where: { auditId: existing.id } })
@@ -5573,9 +5586,16 @@ response.json({
       response.status(503).json({ error: 'El proveedor R2 de esta evidencia no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED', evidenceFileId: deletion.evidenceFileId })
       return
     }
+    if ('invalidKey' in deletion) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece a la auditoría autorizada', evidenceFileId: deletion.evidenceFileId })
+      return
+    }
     for (const file of deletion.files) {
       const provider = file.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
-      await provider.remove({ storedName: file.storedName }).catch((error) => console.error('[evidence] no se pudo borrar el archivo tras eliminar la auditoría', { auditId: existing.id, storedName: file.storedName, provider: file.storageProvider, error }))
+      const objectKeyContext = file.storageProvider === 'R2'
+        ? { companyId: process.companyId, module: 'audits' as const, resourceId: existing.id }
+        : undefined
+      await provider.remove({ storedName: file.storedName, objectKeyContext }).catch((error) => console.error('[evidence] no se pudo borrar el archivo tras eliminar la auditoría', { auditId: existing.id, storedName: file.storedName, provider: file.storageProvider, error }))
     }
     response.status(204).send()
   })
@@ -7005,11 +7025,14 @@ response.json({
       return
     }
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
+    const objectKeyContext = evidenceStorage.kind === 'R2'
+      ? { companyId: audit.process.companyId, module: 'audits' as const, resourceId: audit.id }
+      : undefined
     const stored = await evidenceStorage.upload({
       filename: upload.filename,
       mimeType: upload.mimeType,
       data: file.data,
-      objectKey: evidenceStorage.kind === 'R2' ? nextEvidenceObjectKey({ companyId: audit.process.companyId, module: 'audits', resourceId: audit.id }) : undefined,
+      objectKey: objectKeyContext ? nextEvidenceObjectKey(objectKeyContext) : undefined,
     })
     try {
       const actor = auditActorOf(request)
@@ -7050,7 +7073,7 @@ response.json({
       })
       if (!created) {
         try {
-          await evidenceStorage.remove(stored)
+          await evidenceStorage.remove({ storedName: stored.storedName, objectKeyContext })
         } catch (cleanupError) {
           console.error('[evidence] no se pudo retirar el recurso tras rechazar la subida por estado', { auditId: audit.id, stored, cleanupError })
         }
@@ -7060,7 +7083,7 @@ response.json({
       response.status(201).json({ file: auditEvidenceFileView(created) })
     } catch (error) {
       try {
-        await evidenceStorage.remove(stored)
+        await evidenceStorage.remove({ storedName: stored.storedName, objectKeyContext })
       } catch (cleanupError) {
         console.error('[evidence] no se pudo retirar el recurso tras fallar la subida', { auditId: audit.id, stored, cleanupError })
       }
@@ -7114,10 +7137,17 @@ response.json({
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
+    const objectKeyContext = record.storageProvider === 'R2'
+      ? { companyId: audit.process.companyId, module: 'audits' as const, resourceId: audit.id }
+      : undefined
+    if (record.storageProvider === 'R2' && !isEvidenceObjectKeyFor(record.storedName, objectKeyContext!)) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece a la auditoría autorizada' })
+      return
+    }
     let data: Buffer
     try {
       const provider = record.storageProvider === 'LOCAL' ? localEvidenceStorage : evidenceStorage
-      data = await provider.read({ storedName: record.storedName })
+      data = await provider.read({ storedName: record.storedName, objectKeyContext })
     } catch (error) {
       const remoteStatus = typeof error === 'object' && error !== null && 'response' in error
         ? (error as { response?: { status?: number } }).response?.status
@@ -7155,8 +7185,15 @@ response.json({
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
+    const objectKeyContext = existing.storageProvider === 'R2'
+      ? { companyId: audit.process.companyId, module: 'audits' as const, resourceId: audit.id }
+      : undefined
+    if (existing.storageProvider === 'R2' && !isEvidenceObjectKeyFor(existing.storedName, objectKeyContext!)) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece a la auditoría autorizada' })
+      return
+    }
     const actor = auditActorOf(request)
-    const reference = { storedName: existing.storedName }
+    const reference = { storedName: existing.storedName, objectKeyContext }
     const deleted = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
@@ -9208,8 +9245,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // la fila que lo referenciaba.
     const evidenceFiles = await db.$transaction(async (tx) => {
       const linked = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, select: { id: true } })
-      const files = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { storedName: true, storageProvider: true } }) : []
+      const files = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { id: true, ticketId: true, storedName: true, storageProvider: true } }) : []
       if (files.some((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) return null
+      const invalidR2File = linked && files.find((file) => file.storageProvider === 'R2' && !isEvidenceObjectKeyFor(file.storedName, { companyId: existing.actionPlan.diagnostic.company.id, module: 'tickets', resourceId: linked.id }))
+      if (invalidR2File) return { invalidKey: true as const, evidenceFileId: invalidR2File.id }
       if (linked) {
         await cancelPendingTicketAssignmentApprovals(tx, {
           ticketId: linked.id,
@@ -9225,9 +9264,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(503).json({ error: 'El proveedor R2 de la evidencia del ticket no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED' })
       return
     }
+    if ('invalidKey' in evidenceFiles) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece al ticket autorizado', evidenceFileId: evidenceFiles.evidenceFileId })
+      return
+    }
     for (const evidenceFile of evidenceFiles) {
       const provider = evidenceFile.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
-      await provider.remove({ storedName: evidenceFile.storedName }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar la actividad', { actionItemId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
+      const objectKeyContext = evidenceFile.storageProvider === 'R2'
+        ? { companyId: existing.actionPlan.diagnostic.company.id, module: 'tickets' as const, resourceId: evidenceFile.ticketId }
+        : undefined
+      await provider.remove({ storedName: evidenceFile.storedName, objectKeyContext }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar la actividad', { actionItemId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
     }
     response.status(204).send()
   }))
@@ -9376,6 +9422,39 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
   const findAccessibleTicket = async (request: Request, ticketId: string) => {
     const ticket = await db.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
     return ticket && canAccessTicket(request, ticket) ? ticket : null
+  }
+
+  type TicketEvidenceWriteAuthorization =
+    | { allowed: true; ticket: Prisma.TicketGetPayload<{ include: typeof ticketInclude }> }
+    | { allowed: false; status: 403 | 404 | 409 | 422 | 503; error: string }
+
+  const lockTicketForEvidenceWrite = async (
+    tx: Prisma.TransactionClient,
+    request: Request,
+    ticketId: string,
+    expectedCompanyId: string,
+  ): Promise<TicketEvidenceWriteAuthorization> => {
+    if (request.user) {
+      await lockUserForUpdate(tx, request.user.id)
+      const actor = await tx.user.findUnique({ where: { id: request.user.id }, select: { id: true, role: true, companyId: true, isActive: true } })
+      if (!actor || actor.isActive === false || actor.role !== request.user.role || actor.companyId !== request.user.companyId) {
+        return { allowed: false, status: 403, error: 'Insufficient permissions' }
+      }
+    }
+    if (typeof tx.$queryRaw === 'function') {
+      await tx.$queryRaw`SELECT "id" FROM "Ticket" WHERE "id" = ${ticketId} FOR UPDATE`
+    }
+    const ticket = await tx.ticket.findUnique({ where: { id: ticketId }, include: ticketInclude })
+    if (!ticket || !canAccessTicket(request, ticket)) {
+      return { allowed: false, status: 404, error: 'Ticket not found' }
+    }
+    if (!canOperateTicketEvidence(request, ticket)) {
+      return { allowed: false, status: 403, error: 'You can only operate evidence for tickets you created or are assigned to' }
+    }
+    if (ticketCompanyId(ticket) !== expectedCompanyId) {
+      return { allowed: false, status: 409, error: 'The ticket authorization changed; retry the operation' }
+    }
+    return { allowed: true, ticket }
   }
 
   // Google Picker recibe un access token corto. El refresh token de la conexión de empresa nunca
@@ -9574,8 +9653,8 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
-    if (!canOperateAssignedActionItemTicket(request, ticket)) {
-      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
+    if (!canOperateTicketEvidence(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for tickets you created or are assigned to' })
       return
     }
     // El cuerpo se lee a mano: express.json solo procesa application/json y aquí llega binario.
@@ -9591,7 +9670,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // Toda la validación (extensión, MIME declarado, firma %PDF y tamaño) ocurre ANTES de tocar
     // disco: si algo falla, no queda ni fila ni archivo.
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
-    const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
+    const companyId = ticketCompanyId(ticket)
     if (!companyId) {
       response.status(409).json({ error: 'El ticket no tiene una empresa asociada para almacenar la evidencia' })
       return
@@ -9602,12 +9681,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       data: file.data,
       objectKey: evidenceStorage.kind === 'R2' ? nextEvidenceObjectKey({ companyId, module: 'tickets', resourceId: ticket.id }) : undefined,
     })
-    let created: Prisma.TicketEvidenceFileGetPayload<{ include: typeof evidenceInclude }>
+    const objectKeyContext = evidenceStorage.kind === 'R2'
+      ? { companyId, module: 'tickets' as const, resourceId: ticket.id }
+      : undefined
     try {
-      created = await db.$transaction(async (tx) => {
+      const result = await db.$transaction(async (tx) => {
+        const authorization = await lockTicketForEvidenceWrite(tx, request, ticket.id, companyId)
+        if (!authorization.allowed) return authorization
         const evidence = await tx.ticketEvidenceFile.create({
           data: {
-            ticketId: ticket.id,
+            ticketId: authorization.ticket.id,
             filename: upload.filename,
             storedName: stored.storedName!,
             storageProvider: evidenceStorage.kind,
@@ -9618,7 +9701,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
           include: evidenceInclude,
         })
         await ticketAuditWrite(tx, {
-          ticketId: ticket.id,
+          ticketId: authorization.ticket.id,
           eventType: TicketAuditEventType.EVIDENCE_ATTACHED,
           summary: `Evidencia adjuntada: ${upload.filename}`,
           actor: request.user!,
@@ -9628,13 +9711,19 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
           ],
           metadata: { evidenceId: evidence.id, mimeType: upload.mimeType, size: upload.size },
         })
-        return evidence
+        return { allowed: true as const, evidence }
       })
+      if (!result.allowed) {
+        await evidenceStorage.remove({ storedName: stored.storedName, objectKeyContext }).catch(() => undefined)
+        response.status(result.status).json({ error: result.error })
+        return
+      }
+      const created = result.evidence
+      response.status(201).json({ evidence: evidenceView(created) })
     } catch (error) {
-      await evidenceStorage.remove(stored).catch((cleanupError) => console.error('[evidence] no se pudo retirar el archivo tras fallar la escritura de la fila', { ticketId: ticket.id, stored, cleanupError }))
+      await evidenceStorage.remove({ storedName: stored.storedName, objectKeyContext }).catch((cleanupError) => console.error('[evidence] no se pudo retirar el archivo tras fallar la escritura de la fila', { ticketId: ticket.id, stored, cleanupError }))
       throw error
     }
-    response.status(201).json({ evidence: evidenceView(created) })
   }))
 
   app.get('/api/tickets/:id/evidence', authMiddleware, asyncHandler(async (request, response) => {
@@ -9662,10 +9751,18 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
+    const companyId = ticketCompanyId(ticket)
+    const objectKeyContext = record.storageProvider === 'R2' && companyId
+      ? { companyId, module: 'tickets' as const, resourceId: ticket.id }
+      : undefined
+    if (record.storageProvider === 'R2' && (!objectKeyContext || !isEvidenceObjectKeyFor(record.storedName, objectKeyContext))) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece al ticket autorizado' })
+      return
+    }
     let data: Buffer
     try {
       const provider = record.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
-      data = await provider.read({ storedName: record.storedName })
+      data = await provider.read({ storedName: record.storedName, objectKeyContext })
     } catch (error) {
       // Fila sin archivo detrás (limpieza incompleta): se informa como no disponible, no como 500.
       if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -9690,8 +9787,8 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Ticket not found' })
       return
     }
-    if (!canOperateAssignedActionItemTicket(request, ticket)) {
-      response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
+    if (!canOperateTicketEvidence(request, ticket)) {
+      response.status(403).json({ error: 'You can only operate evidence for tickets you created or are assigned to' })
       return
     }
     const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, filename: true, storedName: true, storageProvider: true } })
@@ -9703,21 +9800,50 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
-    // Base de datos primero y almacenamiento después: si la limpieza falla queda un objeto huérfano (que se
-    // registra), nunca una fila que promete un archivo ya borrado.
-    await db.$transaction(async (tx) => {
-      await tx.ticketEvidenceFile.delete({ where: { id: record.id } })
+    const companyId = ticketCompanyId(ticket)
+    if (!companyId) {
+      response.status(409).json({ error: 'El ticket no tiene una empresa asociada para almacenar la evidencia' })
+      return
+    }
+    const objectKeyContext = record.storageProvider === 'R2'
+      ? { companyId, module: 'tickets' as const, resourceId: ticket.id }
+      : undefined
+    if (record.storageProvider === 'R2' && !isEvidenceObjectKeyFor(record.storedName, objectKeyContext!)) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece al ticket autorizado' })
+      return
+    }
+    // El ticket se bloquea y se vuelve a autorizar dentro de la transacción antes de retirar la fila.
+    const result = await db.$transaction(async (tx) => {
+      const authorization = await lockTicketForEvidenceWrite(tx, request, ticket.id, companyId)
+      if (!authorization.allowed) return authorization
+      const currentRecord = await tx.ticketEvidenceFile.findFirst({ where: { id: record.id, ticketId: authorization.ticket.id }, select: { id: true, filename: true, storedName: true, storageProvider: true } })
+      if (!currentRecord) return { allowed: false as const, status: 404 as const, error: 'Evidence not found' }
+      if (currentRecord.storageProvider === 'R2' && evidenceStorage.kind !== 'R2') {
+        return { allowed: false as const, status: 503 as const, error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' }
+      }
+      const currentObjectKeyContext = currentRecord.storageProvider === 'R2'
+        ? { companyId, module: 'tickets' as const, resourceId: authorization.ticket.id }
+        : undefined
+      if (currentRecord.storageProvider === 'R2' && !isEvidenceObjectKeyFor(currentRecord.storedName, currentObjectKeyContext!)) {
+        return { allowed: false as const, status: 422 as const, error: 'La clave R2 de evidencia no pertenece al ticket autorizado' }
+      }
+      await tx.ticketEvidenceFile.delete({ where: { id: currentRecord.id } })
       await ticketAuditWrite(tx, {
-        ticketId: ticket.id,
+        ticketId: authorization.ticket.id,
         eventType: TicketAuditEventType.EVIDENCE_DELETED,
         summary: 'Evidencia eliminada',
         actor: request.user!,
-        changes: [{ field: 'filename', label: 'Archivo', previousValue: record.filename, newValue: null }],
-        metadata: { evidenceId: record.id },
+        changes: [{ field: 'filename', label: 'Archivo', previousValue: currentRecord.filename, newValue: null }],
+        metadata: { evidenceId: currentRecord.id },
       })
+      return { allowed: true as const, record: currentRecord, objectKeyContext: currentObjectKeyContext }
     })
-    const provider = record.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
-    await provider.remove({ storedName: record.storedName }).catch((error) => console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: record.storedName, provider: record.storageProvider, error }))
+    if (!result.allowed) {
+      response.status(result.status).json({ error: result.error })
+      return
+    }
+    const provider = result.record.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+    await provider.remove({ storedName: result.record.storedName, objectKeyContext: result.objectKeyContext }).catch((error) => console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: result.record.storedName, provider: result.record.storageProvider, error }))
     response.status(204).send()
   }))
 
@@ -9853,9 +9979,15 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // sus evidencias) y SOLO entonces se borran los archivos. Un archivo que no salga se registra
     // como huérfano; nunca se borra primero el disco, porque si la escritura fallara quedarían filas
     // de evidencia apuntando a un archivo ya borrado.
-    const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true, storageProvider: true } })
+    const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { ticketId: true, storedName: true, storageProvider: true } })
     if (evidenceFiles.some((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) {
       response.status(503).json({ error: 'El proveedor R2 de la evidencia del ticket no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED' })
+      return
+    }
+    const companyId = ticketCompanyId(existing)
+    const invalidR2File = companyId && evidenceFiles.find((file) => file.storageProvider === 'R2' && !isEvidenceObjectKeyFor(file.storedName, { companyId, module: 'tickets', resourceId: existing.id }))
+    if (invalidR2File) {
+      response.status(422).json({ error: 'La clave R2 de evidencia no pertenece al ticket autorizado' })
       return
     }
     await db.$transaction(async (tx) => {
@@ -9877,7 +10009,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     })
     for (const evidenceFile of evidenceFiles) {
       const provider = evidenceFile.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
-      await provider.remove({ storedName: evidenceFile.storedName }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar el ticket', { ticketId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
+      const objectKeyContext = evidenceFile.storageProvider === 'R2' && companyId
+        ? { companyId, module: 'tickets' as const, resourceId: evidenceFile.ticketId }
+        : undefined
+      await provider.remove({ storedName: evidenceFile.storedName, objectKeyContext }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar el ticket', { ticketId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
     }
     response.status(204).send()
   }))

@@ -1,11 +1,13 @@
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { readEvidenceFile, removeEvidenceFiles, writeEvidenceFile, nextStoredName } from './evidence-storage.js'
 import { env } from './env.js'
+import { isEvidenceObjectKeyFor, type EvidenceObjectKeyContext } from './evidence-keys.js'
 
 export type EvidenceStorageKind = 'LOCAL' | 'R2'
 
 export type EvidenceStorageReference = {
   storedName?: string | null
+  objectKeyContext?: EvidenceObjectKeyContext
 }
 
 export type EvidenceStorageUpload = {
@@ -96,6 +98,9 @@ class R2EvidenceStorage implements EvidenceStorage {
 
   async read(reference: EvidenceStorageReference): Promise<Buffer> {
     if (!reference.storedName) throw new Error('La referencia R2 de evidencia no existe')
+    if (!reference.objectKeyContext || !isEvidenceObjectKeyFor(reference.storedName, reference.objectKeyContext)) {
+      throw new Error('La clave R2 de evidencia no pertenece al recurso autorizado')
+    }
     const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: reference.storedName }))
     if (!result.Body) throw new Error('El objeto R2 no tiene contenido')
     return Buffer.from(await result.Body.transformToByteArray())
@@ -103,6 +108,9 @@ class R2EvidenceStorage implements EvidenceStorage {
 
   async remove(reference: EvidenceStorageReference): Promise<void> {
     if (!reference.storedName) return
+    if (!reference.objectKeyContext || !isEvidenceObjectKeyFor(reference.storedName, reference.objectKeyContext)) {
+      throw new Error('La clave R2 de evidencia no pertenece al recurso autorizado')
+    }
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: reference.storedName }))
   }
 }

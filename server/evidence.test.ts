@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { Request } from 'express'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
-import { createLocalEvidenceStorage } from './evidence-provider.js'
+import { createLocalEvidenceStorage, type EvidenceStorage } from './evidence-provider.js'
 import { MAX_EVIDENCE_BYTES, evidenceDirectory, evidenceFilePath, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
 import { readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
 
@@ -41,7 +41,9 @@ const creator = { id: 'cmuserevidence0000000001', email: 'creator@evidence.test'
 const assignee = { id: 'cmuserevidence0000000002', email: 'assignee@evidence.test', name: 'Beto Responsable', role: 'COMPANY_USER' as Role, companyId }
 const foreignUser = { id: 'cmuserevidence0000000003', email: 'foreign@evidence.test', name: 'Fer Ajena', role: 'COMPANY_USER' as Role, companyId: otherCompanyId }
 const superuser = { id: 'cmuserevidence0000000004', email: 'global@evidence.test', name: 'Sol Super', role: 'SUPERUSER' as Role, companyId: null }
-const users = [creator, assignee, foreignUser, superuser]
+const companyPeer = { id: 'cmuserevidence0000000005', email: 'peer@evidence.test', name: 'Pia Compañera', role: 'COMPANY_USER' as Role, companyId }
+const companyAdmin = { id: 'cmuserevidence0000000006', email: 'admin@evidence.test', name: 'Ada Administradora', role: 'COMPANY_ADMIN' as Role, companyId }
+const users = [creator, assignee, foreignUser, superuser, companyPeer, companyAdmin]
 const passwordHash = bcrypt.hashSync('Password123!', 4)
 
 const ticketId = 'cmticketevidence000000001'
@@ -54,15 +56,15 @@ const foreignTicketId = 'cmticketevidence000000004'
  * resuelve scopeForUser/canAccessTicket) y `riskId` el stand-in del enlace ticket.actionItemId ->
  * actionItem.actionPlan.riskId: marca a los tickets cuyo plan pertenece a ese riesgo.
  */
-type StoredTicket = { id: string; title: string; companyId: string; createdById: string; assignedToId: string | null; riskId: string | null }
+type StoredTicket = { id: string; title: string; companyId: string; createdById: string; assignedToId: string | null; actionItemId: string | null; actionItemResponsibleId: string | null; riskId: string | null }
 type StoredEvidence = { id: string; ticketId: string; filename: string; storedName: string; mimeType: string; size: number; uploadedById: string; createdAt: Date }
 
 const baseTickets = (): Record<string, StoredTicket> => ({
-  [ticketId]: { id: ticketId, title: 'Instalar extractor', companyId, createdById: creator.id, assignedToId: null, riskId },
-  [assignedTicketId]: { id: assignedTicketId, title: 'Capacitar al equipo', companyId, createdById: creator.id, assignedToId: assignee.id, riskId },
-  [otherRiskTicketId]: { id: otherRiskTicketId, title: 'Actividad de otro riesgo', companyId, createdById: creator.id, assignedToId: null, riskId: otherRiskId },
+  [ticketId]: { id: ticketId, title: 'Instalar extractor', companyId, createdById: creator.id, assignedToId: null, actionItemId: null, actionItemResponsibleId: null, riskId },
+  [assignedTicketId]: { id: assignedTicketId, title: 'Capacitar al equipo', companyId, createdById: creator.id, assignedToId: assignee.id, actionItemId: 'cmactionitemevidence000001', actionItemResponsibleId: assignee.id, riskId },
+  [otherRiskTicketId]: { id: otherRiskTicketId, title: 'Actividad de otro riesgo', companyId, createdById: creator.id, assignedToId: null, actionItemId: null, actionItemResponsibleId: null, riskId: otherRiskId },
   // Ticket de otra empresa colgado del mismo plan: el alcance por empresa debe descartarlo.
-  [foreignTicketId]: { id: foreignTicketId, title: 'Actividad ajena', companyId: otherCompanyId, createdById: foreignUser.id, assignedToId: null, riskId },
+  [foreignTicketId]: { id: foreignTicketId, title: 'Actividad ajena', companyId: otherCompanyId, createdById: foreignUser.id, assignedToId: null, actionItemId: null, actionItemResponsibleId: null, riskId },
 })
 
 function makeEvidenceDb() {
@@ -70,6 +72,7 @@ function makeEvidenceDb() {
   const tickets = baseTickets()
   const evidenceRows: StoredEvidence[] = []
   let nextEvidence = 1
+  let beforeTransaction: (() => Promise<void>) | undefined
 
   const viewTicket = (stored: StoredTicket) => {
     const owner = users.find((user) => user.id === stored.createdById) ?? creator
@@ -78,7 +81,7 @@ function makeEvidenceDb() {
       ...stored,
       createdBy: { id: owner.id, name: owner.name, email: owner.email, companyId: owner.companyId },
       assignedTo: assigneeUser ? { id: assigneeUser.id, name: assigneeUser.name, email: assigneeUser.email, companyId: assigneeUser.companyId } : null,
-      actionItem: null,
+      actionItem: stored.actionItemId ? { responsibleId: stored.actionItemResponsibleId } : null,
       riskApprovals: [],
     }
   }
@@ -202,18 +205,29 @@ function makeEvidenceDb() {
     ticketDriveReference: {
       count: vi.fn(async () => 0),
     },
-    // Ningún fallo de escritura se prueba aquí: las rutas de evidencia no usan transacciones
-    // (la subida escribe disco primero y la fila después; el borrado, la fila primero).
-    $transaction: vi.fn(async (operation: (client: unknown) => Promise<unknown>) => operation(db)),
+    // El arnés ejecuta las transacciones sobre el mismo cliente y permite simular cambios justo
+    // antes de la revalidación de autorización.
+    $transaction: vi.fn(async (operation: (client: unknown) => Promise<unknown>) => {
+      const hook = beforeTransaction
+      beforeTransaction = undefined
+      await hook?.()
+      return operation(db)
+    }),
   }
 
-  return { db: db as unknown as PrismaClient, state: { tickets, evidenceRows } }
+  return { db: db as unknown as PrismaClient, state: { tickets, evidenceRows, setBeforeTransaction: (hook: () => Promise<void>) => { beforeTransaction = hook } } }
 }
 
 type TestAgent = ReturnType<typeof request.agent>
 
 async function loggedIn(db: PrismaClient, email: string): Promise<TestAgent> {
   const agent = request.agent(createApp(db, undefined, createLocalEvidenceStorage()))
+  await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
+  return agent
+}
+
+async function loggedInWithStorage(db: PrismaClient, email: string, storage: EvidenceStorage): Promise<TestAgent> {
+  const agent = request.agent(createApp(db, undefined, storage))
   await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
   return agent
 }
@@ -305,6 +319,77 @@ describe('subida de evidencia PDF', () => {
     const response = await sendUpload(agent, assignedTicketId, [pdfField('capacitacion.pdf', 'application/pdf', validPdf())])
     expect(response.status).toBe(201)
     expect(response.body.evidence.uploadedBy.id).toBe(assignee.id)
+  })
+
+  it('conserva la lectura para la empresa pero bloquea la escritura de un usuario no creador ni asignado', async () => {
+    const { db, state } = makeEvidenceDb()
+    const owner = await loggedIn(db, creator.email)
+    const uploaded = await sendUpload(owner, ticketId, [pdfField('interno.pdf', 'application/pdf', validPdf())])
+    expect(uploaded.status).toBe(201)
+
+    const peer = await loggedIn(db, companyPeer.email)
+    expect((await peer.get(uploadPath(ticketId))).status).toBe(200)
+    expect((await peer.get(`${uploadPath(ticketId)}/${uploaded.body.evidence.id}`)).status).toBe(200)
+    expect((await sendUpload(peer, ticketId, [pdfField('no-autorizado.pdf', 'application/pdf', validPdf())])).status).toBe(403)
+    expect((await peer.delete(`${uploadPath(ticketId)}/${uploaded.body.evidence.id}`)).status).toBe(403)
+    expect((await sendUpload(peer, assignedTicketId, [pdfField('actividad-no-autorizada.pdf', 'application/pdf', validPdf())])).status).toBe(403)
+    expect(state.evidenceRows).toHaveLength(1)
+  })
+
+  it('conserva la escritura de administradores de empresa y superusuarios', async () => {
+    const { db, state } = makeEvidenceDb()
+    const admin = await loggedIn(db, companyAdmin.email)
+    const adminUpload = await sendUpload(admin, ticketId, [pdfField('admin.pdf', 'application/pdf', validPdf())])
+    expect(adminUpload.status).toBe(201)
+    expect((await admin.delete(`${uploadPath(ticketId)}/${adminUpload.body.evidence.id}`)).status).toBe(204)
+
+    const global = await loggedIn(db, superuser.email)
+    const globalUpload = await sendUpload(global, foreignTicketId, [pdfField('global.pdf', 'application/pdf', validPdf())])
+    expect(globalUpload.status).toBe(201)
+    expect((await global.delete(`${uploadPath(foreignTicketId)}/${globalUpload.body.evidence.id}`)).status).toBe(204)
+    expect(state.evidenceRows).toHaveLength(0)
+  })
+
+  it('revoca una subida si cambia la autorizacion mientras el archivo esta en vuelo', async () => {
+    const { db, state } = makeEvidenceDb()
+    const agent = await loggedIn(db, assignee.email)
+    state.setBeforeTransaction(async () => {
+      state.tickets[assignedTicketId]!.actionItemResponsibleId = creator.id
+    })
+
+    const response = await sendUpload(agent, assignedTicketId, [pdfField('revocado.pdf', 'application/pdf', validPdf())])
+    expect(response.status).toBe(403)
+    expect(state.evidenceRows).toHaveLength(0)
+    expect(await readdir(evidenceDirectory())).toHaveLength(0)
+  })
+
+  it('rechaza claves R2 de otro ticket antes de leer o borrar el objeto', async () => {
+    const { db, state } = makeEvidenceDb()
+    const remote = new Map<string, Buffer>()
+    const read = vi.fn(async ({ storedName }: { storedName?: string | null }) => remote.get(storedName ?? '') ?? Buffer.alloc(0))
+    const remove = vi.fn(async ({ storedName }: { storedName?: string | null }) => { if (storedName) remote.delete(storedName) })
+    const storage: EvidenceStorage = {
+      kind: 'R2',
+      ensureAuditFolder: vi.fn(async () => null),
+      upload: vi.fn(async ({ data, objectKey }) => {
+        remote.set(objectKey!, data)
+        return { storedName: objectKey!, driveFileId: null, driveUrl: null }
+      }),
+      read,
+      remove,
+    }
+    const agent = await loggedInWithStorage(db, creator.email, storage)
+    const uploaded = await sendUpload(agent, ticketId, [pdfField('interno.pdf', 'application/pdf', validPdf())])
+    expect(uploaded.status).toBe(201)
+    const validStoredName = state.evidenceRows[0]!.storedName
+    state.evidenceRows[0]!.storedName = 'evidentia/cmcompanyevidence000000002/tickets/otro-ticket/00000000-0000-0000-0000-000000000000.pdf'
+
+    expect((await agent.get(`${uploadPath(ticketId)}/${uploaded.body.evidence.id}`)).status).toBe(422)
+    expect((await agent.delete(`${uploadPath(ticketId)}/${uploaded.body.evidence.id}`)).status).toBe(422)
+    expect(read).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+    expect(state.evidenceRows).toHaveLength(1)
+    state.evidenceRows[0]!.storedName = validStoredName
   })
 
   it('rechaza un cuerpo que no es multipart/form-data y un formulario sin archivo', async () => {
