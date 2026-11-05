@@ -13,7 +13,7 @@ import { createApp } from './app.js'
 import type { AIService } from './ai-service.js'
 import { AIServiceError } from './ai-service.js'
 import { evidenceDirectory } from './evidence-storage.js'
-import type { EvidenceStorage } from './evidence-provider.js'
+import { createLocalEvidenceStorage, type EvidenceStorage } from './evidence-provider.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -50,6 +50,7 @@ type AnyWhere = {
   result?: string
   itemId?: string
   storageProvider?: string
+  storageState?: string
   type?: string
   process?: { companyId?: string; id?: string }
   finding?: { auditId?: string }
@@ -173,6 +174,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
     if (typeof where?.id === 'string' && file.id !== where.id) return false
     if (where?.auditId && file.auditId !== where.auditId) return false
     if (where?.storageProvider && (file.storageProvider ?? 'LOCAL') !== where.storageProvider) return false
+    if (where?.storageState && file.storageState !== where.storageState) return false
     return true
   }
   const operationView = (operation: Record<string, unknown>) => ({
@@ -321,8 +323,9 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
       }),
     },
     auditEvidence: {
-      findMany: vi.fn(async () => []),
-      findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedEvidences.filter((evidence) => (!where?.auditId || evidence.auditId === where.auditId))),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => storedEvidences.find((evidence) => evidence.id === where.id) ?? null),
+      findFirst: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedEvidences.find((evidence) => (!where?.id || evidence.id === where.id) && (!where?.auditId || evidence.auditId === where.auditId)) ?? null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         evidenceSeq += 1
         const evidence = { id: `cmevidence${String(evidenceSeq).padStart(18, '0')}`, findingId: null, createdAt: new Date(), updatedAt: new Date(), ...data }
@@ -452,6 +455,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
       findMany: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedFiles.filter((file) => fileMatches(file, where))),
       findFirst: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedFiles.find((file) => fileMatches(file, where)) ?? null),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => storedFiles.find((file) => file.id === where.id) ?? null),
+      count: vi.fn(async ({ where }: { where?: AnyWhere } = {}) => storedFiles.filter((file) => fileMatches(file, where)).length),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         fileSeq += 1
         const file = { id: `cmfile${String(fileSeq).padStart(22, '0')}`, createdAt: new Date(), updatedAt: new Date(), ...data }
@@ -594,7 +598,7 @@ function makeQualityDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) 
 }
 
 async function loggedIn(db: PrismaClient, email = admin.email) {
-  const agent = request.agent(createApp(db))
+  const agent = request.agent(createApp(db, undefined, createLocalEvidenceStorage()))
   await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
   return agent as unknown as ReturnType<typeof request.agent>
 }
@@ -753,6 +757,28 @@ describe('quality assurance API', () => {
     expect(storedFindings).toHaveLength(1)
   })
 
+  it('updates an evidence finding link when the PATCH only changes findingId', async () => {
+    const { db, storedEvents } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const firstFinding = await createFinding(agent, auditId, { title: 'Primer hallazgo' })
+    const secondFinding = await createFinding(agent, auditId, { title: 'Segundo hallazgo' })
+
+    const created = await agent.post(`/api/audits/${auditId}/evidences`).send({
+      name: 'Registro de prueba',
+      description: 'Documento que demuestra el control.',
+      url: 'https://example.test/registro',
+      findingId: firstFinding.id,
+    })
+    expect(created.status).toBe(201)
+
+    const updated = await agent.patch(`/api/audits/${auditId}/evidences/${created.body.evidence.id}`).send({ findingId: secondFinding.id })
+    expect(updated.status).toBe(200)
+    expect(updated.body.evidence).toMatchObject({ findingId: secondFinding.id })
+    expect(storedEvents.at(-1)).toMatchObject({ eventType: 'EVIDENCE_UPDATED' })
+    expect(storedEvents.at(-1)?.changes).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'findingId' })]))
+  })
+
   it('generates authorized checklist proposals for a planned audit without a checklist', async () => {
     const { db, storedAuditProcedures, storedChecklists, storedItems } = makeQualityDb()
     const generateAuditChecklist = vi.fn(async (context: { processes: Array<{ sipoc: unknown[] }>; procedures: Array<{ id: string }>; sources: Array<{ id: string; type: string }>; existingQuestions: string[] }) => ({
@@ -882,6 +908,79 @@ describe('quality assurance API', () => {
     expect(patched.status).toBe(200)
 
     const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Eficacia verificada.' })
+    expect(closed.status).toBe(200)
+    expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
+  })
+
+  it('blocks closing when a NON_CONFORM checklist item has no valid linked finding', async () => {
+    const { db, storedItems } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const checklist = await agent.post(`/api/audits/${auditId}/checklists`).send({ name: 'Consistencia' })
+    const item = await agent.post(`/api/audits/${auditId}/checklists/${checklist.body.checklist.id}/items`).send({ description: 'Pregunta no conforme', criteria: 'Criterio', required: true })
+    storedItems.find((row) => row.id === item.body.item.id)!.result = 'NON_CONFORM'
+
+    const blocked = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre bloqueado.' })
+    expect(blocked.status).toBe(409)
+    expect(blocked.body.reason).toBe('CHECKLIST_FINDING_MISSING')
+  })
+
+  it('protects the last valid NONCONFORMITY finding linked to a NON_CONFORM item', async () => {
+    const { db, storedItems, storedFindings } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const checklist = await agent.post(`/api/audits/${auditId}/checklists`).send({ name: 'Consistencia' })
+    const item = await agent.post(`/api/audits/${auditId}/checklists/${checklist.body.checklist.id}/items`).send({ description: 'Pregunta no conforme', criteria: 'Criterio', required: true })
+    const finding = await createFinding(agent, auditId, { type: 'NONCONFORMITY', itemId: item.body.item.id })
+    const evaluated = await agent.patch(`/api/audits/${auditId}/checklists/${checklist.body.checklist.id}/items/${item.body.item.id}`).send({ result: 'NON_CONFORM' })
+    expect(evaluated.status).toBe(200)
+
+    const deleted = await agent.delete(`/api/audits/${auditId}/findings/${finding.id}`)
+    expect(deleted.status).toBe(409)
+    expect(deleted.body.reason).toBe('NON_CONFORMITY_FINDING_REQUIRED')
+    const retyped = await agent.patch(`/api/audits/${auditId}/findings/${finding.id}`).send({ type: 'OBSERVATION' })
+    expect(retyped.status).toBe(409)
+    expect(retyped.body.reason).toBe('NON_CONFORMITY_FINDING_REQUIRED')
+    expect(storedFindings).toHaveLength(1)
+    expect(storedItems[0]).toMatchObject({ result: 'NON_CONFORM' })
+  })
+
+  it('requires explicit finding review when changing NON_CONFORM to CONFORM or NOT_APPLICABLE', async () => {
+    const { db } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    const checklist = await agent.post(`/api/audits/${auditId}/checklists`).send({ name: 'Revisión' })
+    const checklistId = checklist.body.checklist.id as string
+    const firstItem = await agent.post(`/api/audits/${auditId}/checklists/${checklistId}/items`).send({ description: 'Pregunta conforme', criteria: 'Criterio' })
+    const secondItem = await agent.post(`/api/audits/${auditId}/checklists/${checklistId}/items`).send({ description: 'Pregunta no aplicable', criteria: 'Criterio' })
+    await createFinding(agent, auditId, { type: 'NONCONFORMITY', itemId: firstItem.body.item.id })
+    await createFinding(agent, auditId, { type: 'NONCONFORMITY', itemId: secondItem.body.item.id })
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${firstItem.body.item.id}`).send({ result: 'NON_CONFORM' })).status).toBe(200)
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${firstItem.body.item.id}`).send({ result: 'CONFORM' })).body.reason).toBe('FINDING_REVIEW_REQUIRED')
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${firstItem.body.item.id}`).send({ result: 'CONFORM', findingReviewConfirmed: true })).status).toBe(200)
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${secondItem.body.item.id}`).send({ result: 'NON_CONFORM' })).status).toBe(200)
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${secondItem.body.item.id}`).send({ result: 'NOT_APPLICABLE' })).body.reason).toBe('FINDING_REVIEW_REQUIRED')
+    expect((await agent.patch(`/api/audits/${auditId}/checklists/${checklistId}/items/${secondItem.body.item.id}`).send({ result: 'NOT_APPLICABLE', findingReviewConfirmed: true })).status).toBe(200)
+  })
+
+  it.each(['PENDING', 'FAILED', 'DELETE_PENDING'] as const)('blocks closing while evidence storage is %s', async (storageState) => {
+    const { db, storedFiles } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    storedFiles.push({ id: `file-${storageState}`, auditId, storageProvider: 'GOOGLE_DRIVE', storageState })
+
+    const blocked = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre bloqueado.' })
+    expect(blocked.status).toBe(409)
+    expect(blocked.body.reason).toBe(storageState === 'PENDING' ? 'EVIDENCE_PENDING' : storageState === 'FAILED' ? 'EVIDENCE_FAILED' : 'EVIDENCE_DELETE_PENDING')
+  })
+
+  it('allows closing when evidence files are READY', async () => {
+    const { db, storedFiles } = makeQualityDb()
+    const agent = await loggedIn(db)
+    const auditId = await createStartedAudit(agent)
+    storedFiles.push({ id: 'file-ready', auditId, storageProvider: 'GOOGLE_DRIVE', storageState: 'READY' })
+
+    const closed = await agent.post(`/api/audits/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre con evidencia disponible.' })
     expect(closed.status).toBe(200)
     expect(closed.body.audit).toMatchObject({ status: 'CLOSED' })
   })
@@ -1231,28 +1330,29 @@ describe('quality assurance API', () => {
     expect(storedFiles).toHaveLength(1)
   })
 
-  it('uses the injected private Drive provider without exposing its file id', async () => {
-    const { db, storedFiles } = makeQualityDb()
+  it('uses the injected private R2 provider without exposing its object key', async () => {
+    const { db, storedFiles, storedOperations } = makeQualityDb()
     const remote = new Map<string, Buffer>()
-    const driveStorage: EvidenceStorage = {
-      kind: 'GOOGLE_DRIVE',
-      ensureAuditFolder: vi.fn(async () => ({ auditFolderId: 'drive-audit-folder', companyFolderId: 'drive-company-folder', rootFolderId: 'drive-company-folder' })),
-      upload: vi.fn(async ({ data }) => {
-        remote.set('drive-file-1', data)
-        return { storedName: null, driveFileId: 'drive-file-1', driveUrl: 'https://drive.google.com/file/d/drive-file-1/view' }
+    const r2Storage: EvidenceStorage = {
+      kind: 'R2',
+      ensureAuditFolder: vi.fn(async () => ({ auditFolderId: 'r2-audit-folder', companyFolderId: 'r2-company-folder', rootFolderId: 'r2' })),
+      upload: vi.fn(async ({ data, objectKey }) => {
+        remote.set(objectKey ?? 'r2-object-1', data)
+        return { storedName: objectKey ?? 'r2-object-1', driveFileId: null, driveUrl: null }
       }),
-      read: vi.fn(async ({ driveFileId }) => remote.get(driveFileId ?? '') ?? Buffer.alloc(0)),
-      remove: vi.fn(async ({ driveFileId }) => { if (driveFileId) remote.delete(driveFileId) }),
+      read: vi.fn(async ({ storedName }) => remote.get(storedName ?? '') ?? Buffer.alloc(0)),
+      remove: vi.fn(async ({ storedName }) => { if (storedName) remote.delete(storedName) }),
     }
-    const agent = request.agent(createApp(db, undefined, driveStorage))
+    const agent = request.agent(createApp(db, undefined, r2Storage))
     await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
     const auditId = await createStartedAudit(agent)
 
     const uploaded = await agent.post(`/api/audits/${auditId}/evidence-files`).attach('file', Buffer.from('%PDF-1.7\ndrive'), { filename: 'drive.pdf', contentType: 'application/pdf' })
     expect(uploaded.status).toBe(201)
-    expect(uploaded.body.file).toMatchObject({ storageProvider: 'GOOGLE_DRIVE', storageState: 'READY', filename: 'drive.pdf' })
+    expect(uploaded.body.file).toMatchObject({ storageProvider: 'R2', storageState: 'READY', filename: 'drive.pdf' })
     expect(uploaded.body.file).not.toHaveProperty('driveFileId')
-    expect(storedFiles[0]).toMatchObject({ driveFileId: 'drive-file-1', storedName: null })
+    expect(storedFiles[0]).toMatchObject({ storedName: expect.stringContaining('audits/'), storageProvider: 'R2' })
+    expect(storedOperations).toHaveLength(0)
 
     const downloaded = await agent.get(`/api/audits/${auditId}/evidence-files/${uploaded.body.file.id}`)
     expect(downloaded.status).toBe(200)

@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { Request } from 'express'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp } from './app.js'
+import { createLocalEvidenceStorage } from './evidence-provider.js'
 import { MAX_EVIDENCE_BYTES, evidenceDirectory, evidenceFilePath, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
 import { readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
 
@@ -212,7 +213,7 @@ function makeEvidenceDb() {
 type TestAgent = ReturnType<typeof request.agent>
 
 async function loggedIn(db: PrismaClient, email: string): Promise<TestAgent> {
-  const agent = request.agent(createApp(db))
+  const agent = request.agent(createApp(db, undefined, createLocalEvidenceStorage()))
   await agent.post('/api/auth/login').send({ email, password: 'Password123!' })
   return agent
 }
@@ -349,7 +350,7 @@ describe('subida de evidencia PDF', () => {
 
   it('exige sesión para subir, listar o descargar', async () => {
     const { db } = makeEvidenceDb()
-    const anonymous = request.agent(createApp(db))
+    const anonymous = request.agent(createApp(db, undefined, createLocalEvidenceStorage()))
 
     expect((await sendUpload(anonymous, ticketId, [pdfField('informe.pdf', 'application/pdf', validPdf())])).status).toBe(401)
     expect((await anonymous.get(uploadPath(ticketId))).status).toBe(401)

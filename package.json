@@ -21,6 +21,7 @@
     "db:seed:demo:clean": "tsx prisma/seed-demo.ts clean"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "bcryptjs": "^3.0.3",

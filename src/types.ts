@@ -606,6 +606,9 @@ export type AuditEventType =
   | 'CHECKLIST_ITEM_DELETED'
   | 'EVIDENCE_FILE_CREATED'
   | 'EVIDENCE_FILE_DELETED'
+  | 'EVIDENCE_FILE_STORAGE_READY'
+  | 'EVIDENCE_FILE_STORAGE_FAILED'
+  | 'EVIDENCE_FILE_DELETE_PENDING'
   | 'ACTION_CREATED'
   | 'ACTION_UPDATED'
   | 'ACTION_STATUS_CHANGED'
@@ -695,10 +698,26 @@ export type AuditEvidenceFile = {
   filename: string
   mimeType: string
   size: number
-  storageProvider: 'LOCAL' | 'GOOGLE_DRIVE'
-  storageState: 'READY' | 'DELETE_PENDING' | 'FAILED'
+  storageProvider: 'LOCAL' | 'R2' | 'GOOGLE_DRIVE'
+  storageState: 'PENDING' | 'READY' | 'DELETE_PENDING' | 'FAILED'
   uploadedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   createdAt: string
+}
+
+export type EvidenceStorageOperationStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCEEDED' | 'RETRYABLE' | 'FAILED' | 'CANCELLED'
+
+export type EvidenceStorageOperation = {
+  id: string
+  auditId: string
+  evidenceFileId: string | null
+  operationType: 'UPLOAD' | 'FILE_DELETE' | 'AUDIT_DELETE'
+  status: EvidenceStorageOperationStatus
+  attemptCount: number
+  nextAttemptAt: string | null
+  lastAttemptAt: string | null
+  lastErrorCode: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export type AuditEvidence = {

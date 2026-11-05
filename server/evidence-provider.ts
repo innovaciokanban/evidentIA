@@ -1,30 +1,19 @@
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { readEvidenceFile, removeEvidenceFiles, writeEvidenceFile, nextStoredName } from './evidence-storage.js'
-import { GoogleDriveError, GoogleDriveGateway } from './google-drive.js'
-import { decryptOAuthSecret } from './oauth-crypto.js'
 import { env } from './env.js'
 
-export type EvidenceStorageKind = 'LOCAL' | 'GOOGLE_DRIVE'
-
-export type DriveConnectionReference = {
-  id: string
-  companyId: string
-  encryptedRefreshToken: string
-  rootFolderId: string | null
-}
+export type EvidenceStorageKind = 'LOCAL' | 'R2'
 
 export type EvidenceStorageReference = {
   storedName?: string | null
-  driveFileId?: string | null
-  connection?: DriveConnectionReference | null
 }
 
 export type EvidenceStorageUpload = {
   filename: string
   mimeType: string
   data: Buffer
-  folderId?: string | null
+  objectKey?: string
   idempotencyKey?: string
-  connection?: DriveConnectionReference | null
 }
 
 export type EvidenceFolderResult = {
@@ -35,24 +24,11 @@ export type EvidenceFolderResult = {
 
 export interface EvidenceStorage {
   readonly kind: EvidenceStorageKind
-  ensureAuditFolder(input: { connection?: DriveConnectionReference | null; companyId: string; auditId: string; existingFolderId?: string | null; existingCompanyFolderId?: string | null }): Promise<EvidenceFolderResult | null>
+  ensureAuditFolder(input: { companyId: string; auditId: string; existingFolderId?: string | null; existingCompanyFolderId?: string | null }): Promise<EvidenceFolderResult | null>
   upload(input: EvidenceStorageUpload): Promise<{ storedName: string | null; driveFileId: string | null; driveUrl: string | null }>
   read(reference: EvidenceStorageReference): Promise<Buffer>
   remove(reference: EvidenceStorageReference): Promise<void>
 }
-
-const requireConnection = (connection: DriveConnectionReference | null | undefined): DriveConnectionReference => {
-  if (!connection) throw new GoogleDriveError('No hay una conexión Google Drive activa para la empresa', { code: 'DRIVE_CONNECTION_REQUIRED' })
-  return connection
-}
-
-const requireDriveFile = (reference: EvidenceStorageReference): { connection: DriveConnectionReference; fileId: string } => {
-  const connection = requireConnection(reference.connection)
-  if (!reference.driveFileId) throw new GoogleDriveError('La evidencia Drive no tiene driveFileId', { code: 'DRIVE_REFERENCE_INVALID' })
-  return { connection, fileId: reference.driveFileId }
-}
-
-const refreshToken = (connection: DriveConnectionReference): string => decryptOAuthSecret(connection.encryptedRefreshToken)
 
 class LocalEvidenceStorage implements EvidenceStorage {
   readonly kind = 'LOCAL' as const
@@ -61,7 +37,7 @@ class LocalEvidenceStorage implements EvidenceStorage {
     return null
   }
 
-  async upload(input: EvidenceStorageUpload) {
+  async upload(input: EvidenceStorageUpload): Promise<{ storedName: string; driveFileId: null; driveUrl: null }> {
     const storedName = nextStoredName()
     await writeEvidenceFile(storedName, input.data)
     return { storedName, driveFileId: null, driveUrl: null }
@@ -79,74 +55,65 @@ class LocalEvidenceStorage implements EvidenceStorage {
   }
 }
 
-export class GoogleDriveEvidenceStorage implements EvidenceStorage {
-  readonly kind = 'GOOGLE_DRIVE' as const
-  private readonly gateway: GoogleDriveGateway
+class R2EvidenceStorage implements EvidenceStorage {
+  readonly kind = 'R2' as const
+  private readonly client: S3Client
+  private readonly bucket: string
 
-  constructor(gateway: GoogleDriveGateway = new GoogleDriveGateway()) {
-    this.gateway = gateway
+  constructor() {
+    const endpoint = env.R2_ENDPOINT
+    const bucket = env.R2_BUCKET
+    const accessKeyId = env.R2_ACCESS_KEY_ID
+    const secretAccessKey = env.R2_SECRET_ACCESS_KEY
+    if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) throw new Error('R2 storage is not configured')
+    this.bucket = bucket
+    this.client = new S3Client({
+      region: 'auto',
+      endpoint,
+      credentials: { accessKeyId, secretAccessKey },
+    })
   }
 
-  async ensureAuditFolder(input: { connection?: DriveConnectionReference | null; companyId: string; auditId: string; existingFolderId?: string | null; existingCompanyFolderId?: string | null }): Promise<EvidenceFolderResult> {
-    const connection = requireConnection(input.connection)
-    if (connection.companyId !== input.companyId) throw new GoogleDriveError('La conexión Drive no pertenece a la empresa de la auditoría', { code: 'DRIVE_TENANT_MISMATCH' })
-    const token = refreshToken(connection)
-    const configuredRootId = env.GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID
-    const rootIsValid = configuredRootId
-      ? await this.gateway.verifyFolderRoot(token, configuredRootId)
-      : connection.rootFolderId
-        ? await this.gateway.verifyRootFolder(token, connection.rootFolderId, input.companyId)
-        : false
-    if (configuredRootId && !rootIsValid) {
-      throw new GoogleDriveError('La carpeta raíz configurada de evidencias no está disponible', { code: 'DRIVE_EVIDENCE_ROOT_INVALID' })
+  async ensureAuditFolder(input: { companyId: string; auditId: string }): Promise<EvidenceFolderResult> {
+    return {
+      rootFolderId: 'r2',
+      companyFolderId: `evidentia/${input.companyId}`,
+      auditFolderId: `evidentia/${input.companyId}/audits/${input.auditId}`,
     }
-    const root = configuredRootId
-      ? { id: configuredRootId, name: null }
-      : rootIsValid
-        ? { id: connection.rootFolderId!, name: null }
-        : await this.gateway.ensureRootFolder(token, input.companyId)
-    const companyProperties = { evidentiaType: 'company-folder', evidentiaCompanyId: input.companyId }
-    const existingCompanyValid = input.existingCompanyFolderId
-      ? await this.gateway.verifyFolder(refreshToken(connection), input.existingCompanyFolderId, root.id, companyProperties)
-      : false
-    const companyFolder = existingCompanyValid
-      ? { id: input.existingCompanyFolderId!, name: null }
-      : await this.gateway.ensureFolder(refreshToken(connection), root.id, companyProperties, `Empresa ${input.companyId}`)
-    const properties = { evidentiaType: 'audit-folder', evidentiaCompanyId: input.companyId, evidentiaAuditId: input.auditId }
-    const existingValid = input.existingFolderId
-      ? await this.gateway.verifyFolder(refreshToken(connection), input.existingFolderId, companyFolder.id, properties)
-      : false
-    const auditFolder = existingValid
-      ? { id: input.existingFolderId!, name: null }
-      : await this.gateway.ensureFolder(refreshToken(connection), companyFolder.id, properties, `Auditoría ${input.auditId}`)
-    return { companyFolderId: companyFolder.id, auditFolderId: auditFolder.id, rootFolderId: root.id }
   }
 
   async upload(input: EvidenceStorageUpload) {
-    const connection = requireConnection(input.connection)
-    if (!input.folderId || !input.idempotencyKey) throw new GoogleDriveError('La carga Drive no tiene carpeta o idempotencyKey', { code: 'DRIVE_UPLOAD_REFERENCE_INVALID' })
-    const uploaded = await this.gateway.upload(refreshToken(connection), input.folderId, {
-      filename: input.filename,
-      mimeType: input.mimeType,
-      data: input.data,
-      idempotencyKey: input.idempotencyKey,
-    })
-    return { storedName: null, driveFileId: uploaded.id, driveUrl: uploaded.webViewLink ?? `https://drive.google.com/file/d/${uploaded.id}/view` }
+    if (!input.objectKey) throw new Error('La carga R2 no tiene una clave de objeto')
+    await this.client.send(new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: input.objectKey,
+      Body: input.data,
+      ContentType: input.mimeType,
+      ContentDisposition: `attachment; filename="${input.filename.replace(/["\r\n]/g, '_')}"`,
+    }))
+    return { storedName: input.objectKey, driveFileId: null, driveUrl: null }
   }
 
   async read(reference: EvidenceStorageReference): Promise<Buffer> {
-    const { connection, fileId } = requireDriveFile(reference)
-    return this.gateway.read(refreshToken(connection), fileId)
+    if (!reference.storedName) throw new Error('La referencia R2 de evidencia no existe')
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: reference.storedName }))
+    if (!result.Body) throw new Error('El objeto R2 no tiene contenido')
+    return Buffer.from(await result.Body.transformToByteArray())
   }
 
   async remove(reference: EvidenceStorageReference): Promise<void> {
-    const { connection, fileId } = requireDriveFile(reference)
-    await this.gateway.remove(refreshToken(connection), fileId)
+    if (!reference.storedName) return
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: reference.storedName }))
   }
 }
 
 export const createLocalEvidenceStorage = (): EvidenceStorage => new LocalEvidenceStorage()
+export const createR2EvidenceStorage = (): EvidenceStorage => new R2EvidenceStorage()
 
-export const createEvidenceStorage = (gateway?: GoogleDriveGateway): EvidenceStorage => env.EVIDENCE_STORAGE_PROVIDER === 'google-drive'
-  ? new GoogleDriveEvidenceStorage(gateway)
-  : createLocalEvidenceStorage()
+export const createEvidenceStorage = (): EvidenceStorage => {
+  if (env.EVIDENCE_STORAGE_PROVIDER === 'r2') return createR2EvidenceStorage()
+  return createLocalEvidenceStorage()
+}
+
+// Kept as a small compatibility helper for callers that need a private staging name.
+export { nextStoredName }

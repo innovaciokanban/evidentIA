@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, apiUpload, apiUrl, ApiError } from './api'
-import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, GoogleDriveStatus, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketAssignmentApproval, TicketDriveReference, TicketEvidence, TicketHistoryEvent, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
+import type { ActionItem, ActionItemStatus, ActionPlan, ActionPlanStatus, AIAnalysis, AIFinding, AppNotification, CheckyCategory, CheckyFindingBasis, CheckyMessage, CheckySession, CheckySuggestionStatus, Company, CrossOrigin, CrossType, CrossWeightingCriteria, CrossWeightingCriterion, DashboardData, Diagnostic, DiagnosticStatus, DiagnosticStrategy, GoogleDriveStatus, Level, Recommendation, RecommendationStatus, RiskApproval, Role, StrategicCross, StrategyBand, StrategySource, StrategyWeighting, StrategyWeightingResponse, SWOTItem, SWOTType, Ticket, TicketAssignmentApproval, TicketEvidence, TicketHistoryEvent, TicketPriority, TicketStatus, User, WeightableStrategySource, WeightingLevel } from './types'
 import { Badge } from './components/ui/Badge'
 import { KPICard } from './components/ui/KPICard'
 import { EmptyState } from './components/ui/EmptyState'
@@ -17,7 +17,6 @@ import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, 
 import type { CrossStrategyBlock, CrossStrategyEntry } from './checky-crosses'
 import { STRATEGY_TASKS_EMPTY, STRATEGY_TASKS_LABEL, globalStrategyTaskProgress, strategyTaskProgress, strategyTaskProgressLabel, strategyTaskViews, strategyTasksCountLabel } from './strategy-tasks'
 import { parseNotificationLink } from './notification-links'
-import { canManageGoogleDrive, drivePickerViewConfig, googleDrivePaths, googleDriveScopeLabel } from './google-drive'
 import { WorkflowIcon } from './components/processes/ProcessIcons'
 import { TicketHistorySection } from './components/tickets/TicketHistorySection'
 import { ticketEventMeta } from './components/tickets/ticket-history-meta'
@@ -25,6 +24,7 @@ import { StrategicObjectivesSection } from './components/strategic/StrategicObje
 import { diagnosticFlow, type FlowStep, type StrategicScreen } from './diagnostic-flow'
 import { calendarRelativeDate, formatCalendarDate, isCalendarDateBeforeToday } from './calendar-dates'
 import { userOptionLabel } from './user-status'
+import { canManageGoogleDrive, googleDrivePaths, googleDriveScopeLabel } from './google-drive'
 import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
@@ -38,45 +38,6 @@ type CompaniesIntent = { kind: 'create-company' } | { kind: 'create-diagnostic' 
 type DetailIntent = { kind: 'create-diagnostic' } | { kind: 'open-first-diagnostic' } | { kind: 'open-diagnostic'; diagnosticId: string }
 
 type TicketDraft = { title: string; description: string; priority: TicketPriority; status: TicketStatus; assignedToId: string; dueDate: string }
-
-type PickerDocument = { id?: string; name?: string; mimeType?: string }
-type PickerResponse = { action?: string; docs?: PickerDocument[] }
-type PickerDocsView = { setMimeTypes: (mimeTypes: string) => PickerDocsView; setIncludeFolders: (include: boolean) => PickerDocsView; setMode: (mode: string) => PickerDocsView; setParent: (folderId: string) => PickerDocsView; setSelectFolderEnabled: (enabled: boolean) => PickerDocsView }
-type PickerBuilder = { addView: (view: PickerDocsView) => PickerBuilder; setOAuthToken: (token: string) => PickerBuilder; setDeveloperKey: (key: string) => PickerBuilder; setAppId: (id: string) => PickerBuilder; setCallback: (callback: (data: PickerResponse) => void) => PickerBuilder; build: () => { setVisible: (visible: boolean) => void } }
-type PickerApi = { PickerBuilder: new () => PickerBuilder; DocsView: new (viewId: string) => PickerDocsView; ViewId: { DOCS: string }; Action: { PICKED: string } }
-
-declare global {
-  interface Window {
-    gapi?: { load: (name: string, callback: () => void) => void }
-    google?: { picker?: PickerApi }
-  }
-}
-
-let pickerApiPromise: Promise<void> | null = null
-const loadPickerApi = (): Promise<void> => {
-  if (window.google?.picker) return Promise.resolve()
-  if (pickerApiPromise) return pickerApiPromise
-  pickerApiPromise = new Promise<void>((resolve, reject) => {
-    const loadPicker = () => {
-      if (!window.gapi) { reject(new Error('Google Picker no está disponible')); return }
-      window.gapi.load('picker', () => window.google?.picker ? resolve() : reject(new Error('Google Picker no pudo cargarse')))
-    }
-    const existing = document.getElementById('google-picker-api') as HTMLScriptElement | null
-    if (existing) { loadPicker(); return }
-    const script = document.createElement('script')
-    script.id = 'google-picker-api'
-    script.src = 'https://apis.google.com/js/api.js'
-    script.async = true
-    script.defer = true
-    script.onload = loadPicker
-    script.onerror = () => reject(new Error('No se pudo cargar Google Picker'))
-    document.head.appendChild(script)
-  }).catch((error) => {
-    pickerApiPromise = null
-    throw error
-  })
-  return pickerApiPromise
-}
 
 type CompanyDraft = { name: string; identification: string; industry: string; description: string; adminEnabled: boolean; adminName: string; adminEmail: string; adminPassword: string }
 
@@ -975,6 +936,8 @@ function CompanyForm({ draft, setDraft, isEdit, saving, onSubmit, onClose }: { d
 function CompanyGoogleDriveSection({ companyId, user }: { companyId: string; user: User }) {
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null)
   useEffect(() => { setPortalTarget(document.querySelector('.detail-drawer')) }, [companyId])
+  // Retired integration: historical backend data is preserved, but no new Drive UI is exposed.
+  if (portalTarget) return null
   if (!portalTarget) return null
   return createPortal(<CompanyGoogleDriveContent companyId={companyId} user={user} />, portalTarget)
 }
@@ -2031,9 +1994,6 @@ export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRi
   const [evidenceError, setEvidenceError] = useState('')
   const [uploading, setUploading] = useState(false)
   const evidenceInput = useRef<HTMLInputElement>(null)
-  const [driveReferences, setDriveReferences] = useState<TicketDriveReference[]>([])
-  const [driveLoading, setDriveLoading] = useState(true)
-  const [driveOpening, setDriveOpening] = useState(false)
   const [history, setHistory] = useState<TicketHistoryEvent[]>([])
   const [historyTotal, setHistoryTotal] = useState(0)
   const [historyPage, setHistoryPage] = useState(1)
@@ -2058,21 +2018,6 @@ export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRi
     const timer = window.setTimeout(() => { void loadEvidence() }, 0)
     return () => window.clearTimeout(timer)
   }, [loadEvidence])
-  const loadDriveReferences = useCallback(async () => {
-    setDriveLoading(true)
-    try {
-      const result = await api<{ references: TicketDriveReference[] }>(`/tickets/${ticket.id}/drive-evidence`)
-      setDriveReferences(result.references)
-    } catch (requestError) {
-      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No pudimos cargar las referencias de Drive.')
-    } finally {
-      setDriveLoading(false)
-    }
-  }, [ticket.id])
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void loadDriveReferences() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadDriveReferences])
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true); setHistoryError(''); setHistoryPage(1)
     try {
@@ -2133,62 +2078,6 @@ export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRi
       setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo eliminar la evidencia.')
     }
   }
-  async function openDrivePicker() {
-    if (driveOpening) return
-    setDriveOpening(true)
-    setEvidenceError('')
-    try {
-      const config = await api<{ accessToken: string; developerKey: string; appId: string; rootFolderId: string; companyFolderId: string }>(`/tickets/${ticket.id}/google-drive/picker-config`)
-      await loadPickerApi()
-      const picker = window.google?.picker
-      if (!picker) throw new Error('Google Picker no está disponible')
-      const viewConfig = drivePickerViewConfig(config)
-      const view = new picker.DocsView(picker.ViewId.DOCS)
-        .setParent(viewConfig.parentFolderId)
-        .setMimeTypes(viewConfig.mimeTypes)
-        .setIncludeFolders(viewConfig.includeFolders)
-        .setSelectFolderEnabled(viewConfig.selectFolderEnabled)
-        .setMode(viewConfig.mode)
-      const pickerDialog = new picker.PickerBuilder()
-        .addView(view)
-        .setOAuthToken(config.accessToken)
-        .setDeveloperKey(config.developerKey)
-        .setAppId(config.appId)
-        .setCallback((data) => {
-          if (data.action !== picker.Action.PICKED) return
-          const selected = data.docs?.[0]?.id
-          if (!selected) {
-            setEvidenceError('Google Picker no devolvió un archivo válido.')
-            return
-          }
-          void (async () => {
-            try {
-              await api(`/tickets/${ticket.id}/drive-evidence`, { method: 'POST', body: JSON.stringify({ driveFileId: selected }) })
-              await loadDriveReferences()
-            } catch (requestError) {
-              setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo asociar el archivo de Drive.')
-            }
-          })()
-        })
-        .build()
-      pickerDialog.setVisible(true)
-    } catch (requestError) {
-      setEvidenceError(requestError instanceof ApiError ? requestError.message : requestError instanceof Error ? requestError.message : 'No se pudo abrir Google Picker.')
-    } finally {
-      setDriveOpening(false)
-    }
-  }
-  async function removeDriveReference(reference: TicketDriveReference) {
-    const confirmed = await askConfirm({ title: 'Retirar referencia', message: `Se retirará «${reference.filename}» del ticket. El archivo original permanecerá en Google Drive.`, confirmLabel: 'Retirar' })
-    if (!confirmed) return
-    setEvidenceError('')
-    try {
-      await api(`/tickets/${ticket.id}/drive-evidence/${reference.id}`, { method: 'DELETE' })
-      setDriveReferences((current) => current.filter((item) => item.id !== reference.id))
-    } catch (requestError) {
-      setEvidenceError(requestError instanceof ApiError ? requestError.message : 'No se pudo retirar la referencia de Drive.')
-    }
-  }
   return (
     <div className="drawer-backdrop centered-backdrop ticket-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><aside className="drawer detail-drawer ticket-detail-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-detail-title" onMouseDown={(event) => event.stopPropagation()}>
       <div className="drawer-heading"><div><p className="eyebrow">DETALLE DEL TICKET</p><h2 id="ticket-detail-title">{ticket.title}</h2><small>#{ticket.id.slice(-6).toUpperCase()}</small></div><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar detalle del ticket">×</button></div>
@@ -2223,9 +2112,6 @@ export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRi
            <button type="button" className="button secondary small-button" disabled={uploading} onClick={() => evidenceInput.current?.click()}>
              {uploading ? 'Subiendo...' : '+ Adjuntar PDF'}
            </button>
-           <button type="button" className="button secondary small-button" disabled={driveOpening || driveLoading} onClick={() => void openDrivePicker()}>
-             {driveOpening ? 'Abriendo Drive...' : '+ Seleccionar de Google Drive'}
-           </button>
            <span className="ticket-evidence-hint">Solo PDF · máximo 10 MB</span>
          </div>
         {evidenceError && <p className="form-error ticket-evidence-error" role="alert">{evidenceError}</p>}
@@ -2250,25 +2136,6 @@ export function TicketDetail({ ticket, user, onEdit, onDelete, onClose, onOpenRi
                 ))}
                </ul>
              )}
-       {driveLoading
-         ? <div className="inline-loading"><span className="loader" />Cargando referencias de Drive...</div>
-         : driveReferences.length > 0 && (
-           <ul className="ticket-evidence-list ticket-drive-reference-list" aria-label="Referencias de Google Drive">
-             {driveReferences.map((item) => (
-               <li key={item.id} className="ticket-evidence-item ticket-drive-reference-item">
-                 <span className="ticket-evidence-kind ticket-drive-kind">DRIVE</span>
-                 <div className="ticket-evidence-info">
-                   <strong title={item.filename}>{item.filename}</strong>
-                   <small>{item.size === null ? 'Tamaño no disponible' : fileSize(item.size)} · {item.createdBy.name} · {relativeDate(item.createdAt)}</small>
-                 </div>
-                 <span className="ticket-evidence-actions">
-                   {item.driveUrl && <a className="text-button" href={item.driveUrl} target="_blank" rel="noreferrer">Abrir</a>}
-                   <button type="button" className="text-button ticket-evidence-remove" onClick={() => void removeDriveReference(item)}>Retirar</button>
-                 </span>
-               </li>
-             ))}
-           </ul>
-         )}
        </section>
       <TicketHistorySection
         heading={{ eyebrow: 'TRAZABILIDAD', title: 'HISTORIAL DEL TICKET' }}

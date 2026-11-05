@@ -477,6 +477,7 @@ model TicketEvidenceFile {
   ticketId     String
   filename     String
   storedName   String   @unique
+  storageProvider EvidenceStorageProvider @default(LOCAL)
   mimeType     String
   size         Int
   uploadedById String
@@ -1613,6 +1614,7 @@ model AuditEvidenceFile {
 enum EvidenceStorageProvider {
   LOCAL
   GOOGLE_DRIVE
+  R2
 }
 
 enum EvidenceStorageState {

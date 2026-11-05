@@ -19,9 +19,9 @@ import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitizatio
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
 import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
 import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
-import { EvidenceValidationError, nextStoredName, readEvidenceFile, removeEvidenceFiles, validateEvidenceUpload, writeEvidenceFile } from './evidence-storage.js'
+import { EvidenceValidationError, validateEvidenceUpload } from './evidence-storage.js'
 import { createEvidenceStorage, createLocalEvidenceStorage, type EvidenceStorage } from './evidence-provider.js'
-import { assertEvidenceStorageOperationShape, EvidenceOperationService } from './evidence-operations.js'
+import { nextEvidenceObjectKey } from './evidence-keys.js'
 import { GoogleDriveError, GoogleDriveGateway } from './google-drive.js'
 import { createOAuthState, createPkcePair, decryptOAuthSecret, encryptOAuthSecret, hashOAuthState } from './oauth-crypto.js'
 import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMultipartFormData, readRequestBuffer, sanitizeUploadFilename } from './multipart.js'
@@ -2031,11 +2031,12 @@ const findingAuditChanges = (previous: { title: string; description: string; typ
   return rows.filter((row) => row.previousValue !== row.newValue)
 }
 
-const auditEvidenceAuditChanges = (previous: { name: string; description: string; url: string } | null, next: { name?: string; description?: string; url?: string }): RiskAuditChange[] => {
+const auditEvidenceAuditChanges = (previous: { name: string; description: string; url: string; findingId: string | null } | null, next: { name?: string; description?: string; url?: string; findingId?: string | null }): RiskAuditChange[] => {
   const rows: Array<{ field: string; label: string; previousValue: ProcessChangeValue; newValue: ProcessChangeValue }> = [
     { field: 'name', label: 'Nombre de la evidencia', previousValue: previous?.name ?? null, newValue: next.name !== undefined ? next.name : previous?.name ?? null },
     { field: 'description', label: 'Descripción de la evidencia', previousValue: previous?.description ?? null, newValue: next.description !== undefined ? next.description : previous?.description ?? null },
     { field: 'url', label: 'Enlace de la evidencia', previousValue: previous?.url ?? null, newValue: next.url !== undefined ? next.url : previous?.url ?? null },
+    { field: 'findingId', label: 'Hallazgo asociado', previousValue: previous?.findingId ?? null, newValue: next.findingId !== undefined ? next.findingId : previous?.findingId ?? null },
   ]
   return rows.filter((row) => row.previousValue !== row.newValue)
 }
@@ -2463,9 +2464,18 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many login attempts' } })
   const aiAnalysisLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many AI analysis requests' } })
   const checkyLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many Checky consultation requests' } })
-  const evidenceOperations = new EvidenceOperationService(db, evidenceStorage)
   const localEvidenceStorage = createLocalEvidenceStorage()
-  evidenceOperations.startWorker()
+
+  // Google Drive is retired for new traffic. Historical rows remain in PostgreSQL and are not
+  // deleted by this change; callers must use the R2/local PDF evidence endpoints instead.
+  app.use('/api', (request, response, next) => {
+    const path = request.path
+    if (path.includes('google-drive') || path.includes('drive-evidence')) {
+      response.status(410).json({ error: 'Google Drive integration has been retired', reason: 'GOOGLE_DRIVE_RETIRED' })
+      return
+    }
+    next()
+  })
 
   const manageableCompany = async (request: Request, companyId: string) => {
     const company = await db.company.findUnique({ where: { id: companyId }, select: { id: true } })
@@ -3459,7 +3469,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       },
       orderBy: { updatedAt: 'desc' },
     })
-    response.json({
+response.json({
       actionPlans: plans.map((plan) => ({
         id: plan.id,
         title: plan.title,
@@ -5004,6 +5014,20 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       where: { required: true, result: 'PENDING', checklist: { auditId } },
     })
 
+  /** Ítems NON_CONFORM sin al menos un hallazgo NONCONFORMITY de la misma auditoría. */
+  const pendingChecklistFindingLinks = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
+    const [items, findings] = await Promise.all([
+      client.auditChecklistItem.findMany({ where: { result: 'NON_CONFORM', checklist: { auditId } }, select: { id: true } }),
+      client.auditFinding.findMany({ where: { auditId, type: 'NONCONFORMITY' }, select: { itemId: true } }),
+    ])
+    const linkedItemIds = new Set(findings.map((finding) => finding.itemId).filter((itemId): itemId is string => Boolean(itemId)))
+    return items.filter((item) => !linkedItemIds.has(item.id)).length
+  }
+
+  /** Estados de archivos de evidencia que no permiten cerrar la auditoría. */
+  const pendingAuditEvidenceFiles = (client: Prisma.TransactionClient | PrismaClient, auditId: string, storageState: 'PENDING' | 'FAILED' | 'DELETE_PENDING') =>
+    client.auditEvidenceFile.count({ where: { auditId, storageState } })
+
   /**
    * Acciones correctivas obligatorias sin estado final. Mientras existan, el hallazgo no puede
    * resolverse: la verificación siempre se apoya en acciones terminadas (COMPLETED o CANCELLED),
@@ -5361,25 +5385,31 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     // 'blocked' in result no estrecha la unión y typeof result.blocked queda con undefined.
     type AuditStatusChangeResult =
       | null
-      | { blocked: 'CHECKLIST_PENDING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING'; pending: number }
+      | { blocked: 'CHECKLIST_PENDING' | 'CHECKLIST_FINDING_MISSING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING' | 'EVIDENCE_PENDING' | 'EVIDENCE_FAILED' | 'EVIDENCE_DELETE_PENDING'; pending: number }
       | { invalidTransition: true }
       | { audit: AuditWithInclude }
     const result = await db.$transaction(async (tx): Promise<AuditStatusChangeResult> => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
       if (!canTransitionAudit(locked.status, parsed.data.status)) return { invalidTransition: true }
-      // Gate de cierre: cerrar exige que ningún ítem obligatorio siga en PENDING, que no queden
-      // acciones correctivas obligatorias sin estado final y que las no conformidades resueltas
-      // tengan verificación de eficacia. Los recuentos ocurren DESPUÉS de bloquear la fila de la
-      // auditoría, y toda escritura de ítems, acciones y hallazgos también pasa por ese bloqueo,
-      // así que no se cuela una creación concurrente.
+      // Gate de cierre: todos los recuentos ocurren DESPUÉS de bloquear la fila de la auditoría.
+      // Las escrituras de ítems, hallazgos, acciones y archivos pasan por ese mismo lock, así que
+      // no se cuela una creación o eliminación concurrente mientras se decide el cierre.
       if (parsed.data.status === AuditStatus.CLOSED) {
         const pending = await pendingRequiredItems(tx, existing.id)
         if (pending > 0) return { blocked: 'CHECKLIST_PENDING' as const, pending }
+        const missingFindings = await pendingChecklistFindingLinks(tx, existing.id)
+        if (missingFindings > 0) return { blocked: 'CHECKLIST_FINDING_MISSING' as const, pending: missingFindings }
         const openActions = await pendingAuditRequiredActions(tx, existing.id)
         if (openActions > 0) return { blocked: 'ACTIONS_PENDING' as const, pending: openActions }
         const pendingEfficacy = await pendingAuditEfficacyVerifications(tx, existing.id)
         if (pendingEfficacy > 0) return { blocked: 'EFFICACY_PENDING' as const, pending: pendingEfficacy }
+        const pendingEvidence = await pendingAuditEvidenceFiles(tx, existing.id, 'PENDING')
+        if (pendingEvidence > 0) return { blocked: 'EVIDENCE_PENDING' as const, pending: pendingEvidence }
+        const failedEvidence = await pendingAuditEvidenceFiles(tx, existing.id, 'FAILED')
+        if (failedEvidence > 0) return { blocked: 'EVIDENCE_FAILED' as const, pending: failedEvidence }
+        const deletingEvidence = await pendingAuditEvidenceFiles(tx, existing.id, 'DELETE_PENDING')
+        if (deletingEvidence > 0) return { blocked: 'EVIDENCE_DELETE_PENDING' as const, pending: deletingEvidence }
       }
       const updateData = { ...data }
       if (parsed.data.status === AuditStatus.IN_PROGRESS) {
@@ -5414,8 +5444,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if ('blocked' in result) {
       const blockedMessages: Record<typeof result.blocked, string> = {
         CHECKLIST_PENDING: `The audit cannot be closed while ${result.pending} required checklist item(s) are still pending`,
+        CHECKLIST_FINDING_MISSING: `The audit cannot be closed while ${result.pending} nonconform checklist item(s) have no linked finding`,
         ACTIONS_PENDING: `The audit cannot be closed while ${result.pending} required corrective action(s) are still open`,
         EFFICACY_PENDING: `The audit cannot be closed while ${result.pending} nonconformity(ies) still require an efficacy verification`,
+        EVIDENCE_PENDING: `The audit cannot be closed while ${result.pending} evidence file(s) are pending storage synchronization`,
+        EVIDENCE_FAILED: `The audit cannot be closed while ${result.pending} evidence file(s) have a failed storage operation`,
+        EVIDENCE_DELETE_PENDING: `The audit cannot be closed while ${result.pending} evidence file deletion(s) are pending`,
       }
       response.status(409).json({
         error: blockedMessages[result.blocked],
@@ -5489,8 +5523,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     if (existing.storageDeletionRequestedAt) {
-      const operation = await db.evidenceStorageOperation.findUnique({ where: { idempotencyKey: `audit-delete:${existing.id}` }, select: { id: true, status: true } })
-      response.status(202).json({ auditId: existing.id, operationId: operation?.id ?? null, operationStatus: operation?.status ?? 'PENDING' })
+      response.status(409).json({ error: 'This audit has a legacy storage deletion pending; it must be resolved before the audit can be removed', reason: 'LEGACY_STORAGE_OPERATION_PENDING' })
       return
     }
     if (isTerminalAuditStatus(existing.status)) {
@@ -5506,40 +5539,23 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     }
     // La auditoría permanece viva mientras el outbox elimina sus evidencias. Esto permite recuperar
     // una operación pendiente incluso si la auditoría pasa después a un estado terminal.
-    const deletion = await db.$transaction(async (tx): Promise<{ operationId: string; pending: true } | { blocked: true; evidenceFileId: string } | false | null | { deleted: true; storedNames: string[] }> => {
+    const deletion = await db.$transaction(async (tx): Promise<{ blocked: true; evidenceFileId: string } | { unavailable: true; evidenceFileId: string } | false | null | { deleted: true; files: Array<{ storedName: string | null; storageProvider: 'LOCAL' | 'R2' | 'GOOGLE_DRIVE' }> }> => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
       const lockedFinding = await tx.auditFinding.findFirst({ where: { auditId: existing.id }, select: { id: true } })
       if (lockedFinding) return false
-      const files = await tx.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { id: true, filename: true, storedName: true, storageProvider: true, driveConnectionId: true } })
+      const files = await tx.auditEvidenceFile.findMany({ where: { auditId: existing.id }, select: { id: true, storedName: true, storageProvider: true } })
       if (files.some((file) => file.storageProvider === 'GOOGLE_DRIVE')) {
-        const legacyDriveFile = files.find((file) => file.storageProvider === 'GOOGLE_DRIVE' && !file.driveConnectionId)
-        if (legacyDriveFile) return { blocked: true, evidenceFileId: legacyDriveFile.id }
-        await tx.audit.update({ where: { id: existing.id }, data: { storageDeletionRequestedAt: new Date() } })
-        for (const file of files) {
-          await tx.auditEvidenceFile.update({ where: { id: file.id }, data: { storageState: 'DELETE_PENDING' } })
-          assertEvidenceStorageOperationShape({ operationType: 'FILE_DELETE', auditId: existing.id, evidenceFileId: file.id, connectionId: file.driveConnectionId, storageProvider: file.storageProvider })
-          await tx.evidenceStorageOperation.upsert({
-            where: { idempotencyKey: `file-delete:${file.id}` },
-            create: { companyId: process.companyId, auditId: existing.id, evidenceFileId: file.id, connectionId: file.driveConnectionId, operationType: 'FILE_DELETE', idempotencyKey: `file-delete:${file.id}` },
-            update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
-          })
-        }
-        assertEvidenceStorageOperationShape({ operationType: 'AUDIT_DELETE', auditId: existing.id })
-        const operation = await tx.evidenceStorageOperation.upsert({
-          where: { idempotencyKey: `audit-delete:${existing.id}` },
-          create: { companyId: process.companyId, auditId: existing.id, operationType: 'AUDIT_DELETE', idempotencyKey: `audit-delete:${existing.id}` },
-          update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
-          select: { id: true },
-        })
-        await auditEventWrite(tx, { auditId: existing.id, eventType: 'EVIDENCE_FILE_DELETE_PENDING', summary: 'Eliminación de auditoría pendiente de almacenamiento', actor: auditActorOf(request), metadata: { operationId: operation.id, evidenceCount: files.length } })
-        return { operationId: operation.id, pending: true }
+        const legacyDriveFile = files.find((file) => file.storageProvider === 'GOOGLE_DRIVE')!
+        return { blocked: true, evidenceFileId: legacyDriveFile.id }
       }
+      const unavailableR2File = files.find((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')
+      if (unavailableR2File) return { unavailable: true, evidenceFileId: unavailableR2File.id }
       await tx.auditEvidenceFile.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvidence.deleteMany({ where: { auditId: existing.id } })
       await tx.auditEvent.deleteMany({ where: { auditId: existing.id } })
       await tx.audit.delete({ where: { id: existing.id } })
-      return { deleted: true, storedNames: files.map((file) => file.storedName).filter((storedName): storedName is string => Boolean(storedName)) }
+      return { deleted: true, files }
     })
     if (deletion === null) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
@@ -5550,17 +5566,16 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     if ('blocked' in deletion) {
-      response.status(409).json({ error: 'A legacy Google Drive evidence has no recoverable company connection', reason: 'DRIVE_CONNECTION_REQUIRED', evidenceFileId: deletion.evidenceFileId })
+      response.status(409).json({ error: 'A legacy Google Drive evidence is preserved and cannot be deleted by the retired provider', reason: 'DRIVE_EVIDENCE_PRESERVED', evidenceFileId: deletion.evidenceFileId })
       return
     }
-    if ('pending' in deletion) {
-      await evidenceOperations.runOperation(deletion.operationId)
-      const operation = await db.evidenceStorageOperation.findUnique({ where: { id: deletion.operationId }, select: { status: true } })
-      response.status(202).json({ auditId: existing.id, operationId: deletion.operationId, operationStatus: operation?.status ?? 'PENDING' })
+    if ('unavailable' in deletion) {
+      response.status(503).json({ error: 'El proveedor R2 de esta evidencia no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED', evidenceFileId: deletion.evidenceFileId })
       return
     }
-    for (const storedName of deletion.storedNames) {
-      await localEvidenceStorage.remove({ storedName }).catch((error) => console.error('[evidence] no se pudo borrar el staging local tras eliminar la auditoría', { auditId: existing.id, storedName, error }))
+    for (const file of deletion.files) {
+      const provider = file.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+      await provider.remove({ storedName: file.storedName }).catch((error) => console.error('[evidence] no se pudo borrar el archivo tras eliminar la auditoría', { auditId: existing.id, storedName: file.storedName, provider: file.storageProvider, error }))
     }
     response.status(204).send()
   })
@@ -5798,9 +5813,32 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const actor = auditActorOf(request)
-    const finding = await db.$transaction(async (tx) => {
+    type FindingUpdateResult =
+      | null
+      | { conflict: true }
+      | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+      | { finding: AuditFindingWithInclude }
+    const result = await db.$transaction(async (tx): Promise<FindingUpdateResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.id }, include: auditFindingInclude })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED) return { conflict: true }
+      const nextType = data.type ?? lockedFinding.type
+      const nextItemId = data.itemId !== undefined ? data.itemId : lockedFinding.itemId
+      if (lockedFinding.type === 'NONCONFORMITY' && lockedFinding.itemId && (nextType !== 'NONCONFORMITY' || nextItemId !== lockedFinding.itemId)) {
+        const linkedItem = await tx.auditChecklistItem.findFirst({
+          where: { id: lockedFinding.itemId, result: 'NON_CONFORM', checklist: { auditId: audit.id } },
+          select: { id: true },
+        })
+        if (linkedItem) {
+          const siblingFindings = await tx.auditFinding.findMany({
+            where: { auditId: audit.id, type: 'NONCONFORMITY' },
+            select: { id: true, itemId: true },
+          })
+          const remaining = siblingFindings.filter((finding) => finding.itemId === lockedFinding.itemId && finding.id !== lockedFinding.id)
+          if (remaining.length === 0) return { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+        }
+      }
       if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Finding responsible')
       const updated = await tx.auditFinding.update({ where: { id: existing.id }, data, include: auditFindingInclude })
       await auditEventWrite(tx, {
@@ -5811,13 +5849,21 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
         changes,
         metadata: { findingId: updated.id },
       })
-      return updated
+      return { finding: updated }
     })
-    if (!finding) {
+    if (!result) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.json({ finding: auditFindingView(finding) })
+    if ('conflict' in result) {
+      response.status(409).json({ error: 'The finding changed before this update was applied; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'The last valid nonconformity finding for a NON_CONFORM checklist item cannot be unlinked or retyped', reason: result.blocked })
+      return
+    }
+    response.json({ finding: auditFindingView(result.finding) })
   })
   app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, updateAuditFindingHandler)
   app.patch('/api/audits/:auditId/findings/:findingId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditFindingHandler))
@@ -5975,7 +6021,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Audit not found' })
       return
     }
-    const existing = await db.auditFinding.findUnique({ where: { id: parsedIds.data.findingId }, select: { id: true, title: true, auditId: true } })
+    const existing = await db.auditFinding.findUnique({ where: { id: parsedIds.data.findingId }, select: { id: true, title: true, auditId: true, itemId: true, type: true } })
     if (!existing || existing.auditId !== audit.id) {
       response.status(404).json({ error: 'Finding not found' })
       return
@@ -5998,9 +6044,24 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const actor = auditActorOf(request)
-    const deleted = await db.$transaction(async (tx) => {
+    type DeleteFindingResult = false | true | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+    const deleted = await db.$transaction(async (tx): Promise<DeleteFindingResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
+      if (existing.type === 'NONCONFORMITY' && existing.itemId) {
+        const linkedItem = await tx.auditChecklistItem.findFirst({
+          where: { id: existing.itemId, result: 'NON_CONFORM', checklist: { auditId: audit.id } },
+          select: { id: true },
+        })
+        if (linkedItem) {
+          const siblingFindings = await tx.auditFinding.findMany({
+            where: { auditId: audit.id, type: 'NONCONFORMITY' },
+            select: { id: true, itemId: true },
+          })
+          const remaining = siblingFindings.filter((finding) => finding.itemId === existing.itemId && finding.id !== existing.id)
+          if (remaining.length === 0) return { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+        }
+      }
       // Las evidencias ancladas al hallazgo sobreviven con findingId en null (SET NULL en el
       // esquema): la evidencia documental no se pierde al retirar el hallazgo.
       await tx.auditEvidence.updateMany({ where: { findingId: existing.id }, data: { findingId: null } })
@@ -6017,6 +6078,10 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     })
     if (!deleted) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if (typeof deleted === 'object' && deleted !== null && 'blocked' in deleted) {
+      response.status(409).json({ error: 'The last valid nonconformity finding for a NON_CONFORM checklist item cannot be deleted', reason: deleted.blocked })
       return
     }
     response.status(204).send()
@@ -6176,6 +6241,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
       ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
       ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
+      ...(parsed.data.findingId !== undefined ? { findingId: parsed.data.findingId } : {}),
     })
     if (changes.length === 0) {
       response.json({ evidence: auditEvidenceView(existing) })
@@ -6309,8 +6375,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
             openRequiredActions: openActions,
           },
         }
-      }),
-    })
+  }),
+})
+
   }))
 
   // Detalle completo de una auditoría (checklists, hallazgos con acciones, evidencias en disco y
@@ -6726,66 +6793,90 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'Checklist responses can only be recorded while the audit is in progress', reason: 'AUDIT_NOT_IN_PROGRESS' })
       return
     }
-    if (parsed.data.result === AuditChecklistResult.NON_CONFORM && parsed.data.result !== existing.result) {
-      const linkedFinding = await db.auditFinding.findFirst({
-        where: { auditId: audit.id, itemId: existing.id, type: 'NONCONFORMITY' },
-        select: { id: true },
-      })
-      if (!linkedFinding) {
-        response.status(409).json({ error: 'A nonconformity finding linked to this checklist item is required before selecting NON_CONFORM', reason: 'NON_CONFORMITY_FINDING_REQUIRED' })
-        return
-      }
-    }
-    const data: Prisma.AuditChecklistItemUncheckedUpdateInput = {}
-    const changes: RiskAuditChange[] = []
-    if (parsed.data.description !== undefined && parsed.data.description !== existing.description) {
-      data.description = parsed.data.description
-      changes.push({ field: 'description', label: 'Descripción', previousValue: existing.description, newValue: parsed.data.description })
-    }
-    if (parsed.data.criteria !== undefined && parsed.data.criteria !== existing.criteria) {
-      data.criteria = parsed.data.criteria
-      changes.push({ field: 'criteria', label: 'Criterio', previousValue: existing.criteria, newValue: parsed.data.criteria })
-    }
-    if (parsed.data.result !== undefined && parsed.data.result !== existing.result) {
-      data.result = parsed.data.result
-      changes.push({ field: 'result', label: 'Resultado', previousValue: existing.result, newValue: parsed.data.result })
-    }
-    if (parsed.data.observations !== undefined && parsed.data.observations !== existing.observations) {
-      data.observations = parsed.data.observations || null
-      changes.push({ field: 'observations', label: 'Observaciones', previousValue: existing.observations, newValue: data.observations as string | null })
-    }
-    if (parsed.data.required !== undefined && parsed.data.required !== existing.required) {
-      data.required = parsed.data.required
-      changes.push({ field: 'required', label: 'Obligatorio', previousValue: String(existing.required), newValue: String(parsed.data.required) })
-    }
-    if (parsed.data.position !== undefined && parsed.data.position !== existing.position) {
-      data.position = parsed.data.position
-      changes.push({ field: 'position', label: 'Posición', previousValue: String(existing.position), newValue: String(parsed.data.position) })
-    }
-    if (changes.length === 0) {
-      response.json({ item: checklistItemView(existing) })
-      return
-    }
     const actor = auditActorOf(request)
-    const item = await db.$transaction(async (tx) => {
+    type ChecklistItemUpdateResult =
+      | null
+      | { conflict: true }
+      | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' | 'FINDING_REVIEW_REQUIRED' }
+      | { item: AuditChecklistItemRow }
+    const result = await db.$transaction(async (tx): Promise<ChecklistItemUpdateResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
-      const updated = await tx.auditChecklistItem.update({ where: { id: existing.id }, data })
+      const lockedItem = await tx.auditChecklistItem.findFirst({
+        where: { id: existing.id, checklistId: parsedIds.data.checklistId, checklist: { auditId: audit.id } },
+      })
+      if (!lockedItem) return { conflict: true }
+      const nextResult = parsed.data.result ?? lockedItem.result
+      const resultChanged = parsed.data.result !== undefined && parsed.data.result !== lockedItem.result
+      const linkedFinding = await tx.auditFinding.findFirst({
+        where: { auditId: audit.id, itemId: lockedItem.id, type: 'NONCONFORMITY' },
+        select: { id: true },
+      })
+      if (nextResult === AuditChecklistResult.NON_CONFORM && !linkedFinding) {
+        return { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+      }
+      if (lockedItem.result === AuditChecklistResult.NON_CONFORM && (nextResult === AuditChecklistResult.CONFORM || nextResult === AuditChecklistResult.NOT_APPLICABLE)) {
+        if (!linkedFinding) return { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+        if (parsed.data.findingReviewConfirmed !== true) return { blocked: 'FINDING_REVIEW_REQUIRED' }
+      }
+      const data: Prisma.AuditChecklistItemUncheckedUpdateInput = {}
+      const changes: RiskAuditChange[] = []
+      if (parsed.data.description !== undefined && parsed.data.description !== lockedItem.description) {
+        data.description = parsed.data.description
+        changes.push({ field: 'description', label: 'Descripción', previousValue: lockedItem.description, newValue: parsed.data.description })
+      }
+      if (parsed.data.criteria !== undefined && parsed.data.criteria !== lockedItem.criteria) {
+        data.criteria = parsed.data.criteria
+        changes.push({ field: 'criteria', label: 'Criterio', previousValue: lockedItem.criteria, newValue: parsed.data.criteria })
+      }
+      if (parsed.data.result !== undefined && parsed.data.result !== lockedItem.result) {
+        data.result = parsed.data.result
+        changes.push({ field: 'result', label: 'Resultado', previousValue: lockedItem.result, newValue: parsed.data.result })
+        if (lockedItem.result === AuditChecklistResult.NON_CONFORM && (parsed.data.result === AuditChecklistResult.CONFORM || parsed.data.result === AuditChecklistResult.NOT_APPLICABLE)) {
+          changes.push({ field: 'findingReview', label: 'Revisión del hallazgo asociado', previousValue: 'Pendiente', newValue: 'Confirmada' })
+        }
+      }
+      if (parsed.data.observations !== undefined && parsed.data.observations !== lockedItem.observations) {
+        data.observations = parsed.data.observations || null
+        changes.push({ field: 'observations', label: 'Observaciones', previousValue: lockedItem.observations, newValue: data.observations as string | null })
+      }
+      if (parsed.data.required !== undefined && parsed.data.required !== lockedItem.required) {
+        data.required = parsed.data.required
+        changes.push({ field: 'required', label: 'Obligatorio', previousValue: String(lockedItem.required), newValue: String(parsed.data.required) })
+      }
+      if (parsed.data.position !== undefined && parsed.data.position !== lockedItem.position) {
+        data.position = parsed.data.position
+        changes.push({ field: 'position', label: 'Posición', previousValue: String(lockedItem.position), newValue: String(parsed.data.position) })
+      }
+      if (changes.length === 0) return { item: checklistItemView(lockedItem) }
+      const updated = await tx.auditChecklistItem.update({ where: { id: lockedItem.id }, data })
       await auditEventWrite(tx, {
         auditId: audit.id,
         eventType: 'CHECKLIST_ITEM_UPDATED',
         summary: `Ítem «${updated.description.slice(0, 80)}» actualizado`,
         actor,
         changes,
-        metadata: { checklistId: existing.checklistId, itemId: updated.id },
+        metadata: { checklistId: lockedItem.checklistId, itemId: updated.id, ...(resultChanged && lockedItem.result === AuditChecklistResult.NON_CONFORM ? { findingReviewConfirmed: true } : {}) },
       })
-      return updated
+      return { item: updated }
     })
-    if (!item) {
+    if (!result) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.json({ item: checklistItemView(item) })
+    if ('conflict' in result) {
+      response.status(409).json({ error: 'The checklist item changed before this response was applied; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      const blockedMessages = {
+        NON_CONFORMITY_FINDING_REQUIRED: 'A valid nonconformity finding linked to this checklist item is required',
+        FINDING_REVIEW_REQUIRED: 'Review the linked finding and confirm the review before changing this item result',
+      } as const
+      response.status(409).json({ error: blockedMessages[result.blocked], reason: result.blocked })
+      return
+    }
+    response.json({ item: result.item })
   })
   app.patch('/api/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, withAuditProcessParam(updateAuditChecklistItemHandler))
   app.patch('/api/processes/:processId/audits/:auditId/checklists/:checklistId/items/:itemId', authMiddleware, userWriteGuard, updateAuditChecklistItemHandler)
@@ -6914,63 +7005,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
-    if (evidenceStorage.kind === 'GOOGLE_DRIVE') {
-      const connection = await activeDriveConnection(audit.process.companyId)
-      if (!connection) {
-        response.status(409).json({ error: 'La empresa no tiene una conexión Google Drive activa' })
-        return
-      }
-      const stagedName = nextStoredName()
-      await writeEvidenceFile(stagedName, file.data)
-      try {
-        const created = await db.$transaction(async (tx) => {
-          const locked = await lockAuditForWrite(tx, audit.id)
-          if (!locked) return null
-          const saved = await tx.auditEvidenceFile.create({
-            data: {
-              auditId: audit.id,
-              findingId: anchors.findingId,
-              actionId: anchors.actionId,
-              itemId: anchors.itemId,
-              filename: upload.filename,
-              storedName: null,
-              stagedName,
-              mimeType: upload.mimeType,
-              size: upload.size,
-              uploadedById: request.user!.id,
-              storageProvider: 'GOOGLE_DRIVE',
-              storageState: 'PENDING',
-              driveConnectionId: connection.id,
-            },
-            include: auditEvidenceFileInclude,
-          })
-          assertEvidenceStorageOperationShape({ operationType: 'UPLOAD', auditId: audit.id, evidenceFileId: saved.id, connectionId: connection.id })
-          const operation = await tx.evidenceStorageOperation.create({
-            data: { companyId: audit.process.companyId, auditId: audit.id, evidenceFileId: saved.id, connectionId: connection.id, operationType: 'UPLOAD', idempotencyKey: `upload:${saved.id}` },
-            select: { id: true },
-          })
-          await auditEventWrite(tx, { auditId: audit.id, eventType: 'EVIDENCE_FILE_CREATED', summary: `Evidencia «${saved.filename}» registrada`, actor: auditActorOf(request), metadata: { evidenceFileId: saved.id, operationId: operation.id, storageState: 'PENDING' } })
-          return { saved, operationId: operation.id }
-        })
-        if (!created) {
-          await removeEvidenceFiles([stagedName])
-          response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
-          return
-        }
-        await evidenceOperations.runOperation(created.operationId)
-        const current = await db.auditEvidenceFile.findFirst({ where: { id: created.saved.id }, include: auditEvidenceFileInclude })
-        if (current?.storageState === 'READY') {
-          response.status(201).json({ file: auditEvidenceFileView(current) })
-          return
-        }
-        response.status(202).json({ operationId: created.operationId, file: current ? auditEvidenceFileView(current) : null })
-      } catch (error) {
-        await removeEvidenceFiles([stagedName]).catch(() => undefined)
-        throw error
-      }
-      return
-    }
-    const stored = await evidenceStorage.upload({ filename: upload.filename, mimeType: upload.mimeType, data: file.data })
+    const stored = await evidenceStorage.upload({
+      filename: upload.filename,
+      mimeType: upload.mimeType,
+      data: file.data,
+      objectKey: evidenceStorage.kind === 'R2' ? nextEvidenceObjectKey({ companyId: audit.process.companyId, module: 'audits', resourceId: audit.id }) : undefined,
+    })
     try {
       const actor = auditActorOf(request)
       const created = await db.$transaction(async (tx) => {
@@ -7070,14 +7110,14 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
-    if (record.storageProvider === 'GOOGLE_DRIVE' && evidenceStorage.kind !== 'GOOGLE_DRIVE') {
+    if (record.storageProvider === 'GOOGLE_DRIVE' || (record.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) {
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
     let data: Buffer
     try {
       const provider = record.storageProvider === 'LOCAL' ? localEvidenceStorage : evidenceStorage
-      data = await provider.read({ storedName: record.storedName, driveFileId: record.driveFileId, connection: record.driveConnection })
+      data = await provider.read({ storedName: record.storedName })
     } catch (error) {
       const remoteStatus = typeof error === 'object' && error !== null && 'response' in error
         ? (error as { response?: { status?: number } }).response?.status
@@ -7111,45 +7151,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    if (existing.storageProvider === 'GOOGLE_DRIVE' && evidenceStorage.kind !== 'GOOGLE_DRIVE') {
+    if (existing.storageProvider === 'GOOGLE_DRIVE' || (existing.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) {
       response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
       return
     }
     const actor = auditActorOf(request)
-    const reference = { storedName: existing.storedName, driveFileId: existing.driveFileId }
-    if (existing.storageProvider === 'GOOGLE_DRIVE') {
-      if (!existing.driveConnectionId) {
-        response.status(503).json({ error: 'La evidencia Drive no tiene conexión asociada' })
-        return
-      }
-      const pending = await db.$transaction(async (tx): Promise<string | false> => {
-        const locked = await lockAuditForWrite(tx, audit.id)
-        if (!locked) return false
-        await tx.auditEvidenceFile.update({ where: { id: existing.id }, data: { storageState: 'DELETE_PENDING', storageError: null } })
-        assertEvidenceStorageOperationShape({ operationType: 'FILE_DELETE', auditId: audit.id, evidenceFileId: existing.id, connectionId: existing.driveConnectionId, storageProvider: existing.storageProvider })
-        const operation = await tx.evidenceStorageOperation.upsert({
-          where: { idempotencyKey: `file-delete:${existing.id}` },
-          create: { companyId: audit.process.companyId, auditId: audit.id, evidenceFileId: existing.id, connectionId: existing.driveConnectionId, operationType: 'FILE_DELETE', idempotencyKey: `file-delete:${existing.id}` },
-          update: { status: 'PENDING', nextAttemptAt: null, leaseOwner: null, leaseUntil: null },
-          select: { id: true },
-        })
-        await auditEventWrite(tx, { auditId: audit.id, eventType: 'EVIDENCE_FILE_DELETE_PENDING', summary: `Evidencia «${existing.filename}» pendiente de eliminación`, actor, metadata: { evidenceFileId: existing.id } })
-        return operation.id
-      })
-      if (pending === false) {
-        response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
-        return
-      }
-      const operationId = pending
-      const operationResult = await evidenceOperations.runOperation(operationId)
-      const current = await db.auditEvidenceFile.findFirst({ where: { id: existing.id }, include: auditEvidenceFileInclude })
-      if (!current) {
-        response.status(204).send()
-        return
-      }
-      response.status(202).json({ operationId, operationStatus: operationResult ?? 'PENDING', file: auditEvidenceFileView(current) })
-      return
-    }
+    const reference = { storedName: existing.storedName }
     const deleted = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
@@ -7173,7 +7180,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       return
     }
     try {
-      await localEvidenceStorage.remove(reference)
+      const provider = existing.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+      await provider.remove(reference)
     } catch (error) {
       console.error('[evidence] archivo no borrado tras eliminar la evidencia de auditoría', { auditId: audit.id, reference, error })
     }
@@ -9198,10 +9206,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // sus filas de evidencia) y solo después se toca el disco. Un archivo que no se pueda borrar
     // queda huérfano y se registra, nunca al revés: no se borra nada del disco sin haber borrado
     // la fila que lo referenciaba.
-    const evidenceStoredNames = await db.$transaction(async (tx) => {
+    const evidenceFiles = await db.$transaction(async (tx) => {
       const linked = await tx.ticket.findUnique({ where: { actionItemId: existing.id }, select: { id: true } })
-      const evidenceFiles = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { storedName: true } }) : []
-      const storedNames = evidenceFiles.map((evidenceFile) => evidenceFile.storedName)
+      const files = linked ? await tx.ticketEvidenceFile.findMany({ where: { ticketId: linked.id }, select: { storedName: true, storageProvider: true } }) : []
+      if (files.some((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) return null
       if (linked) {
         await cancelPendingTicketAssignmentApprovals(tx, {
           ticketId: linked.id,
@@ -9211,13 +9219,15 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         await tx.ticket.delete({ where: { id: linked.id } })
       }
       await tx.actionItem.delete({ where: { id: existing.id } })
-      return storedNames
+      return files
     })
-    if (evidenceStoredNames.length > 0) {
-      const { failed } = await removeEvidenceFiles(evidenceStoredNames)
-      if (failed.length > 0) {
-        console.error('[evidence] no se pudieron borrar archivos tras eliminar la actividad', { actionItemId: existing.id, failed })
-      }
+    if (evidenceFiles === null) {
+      response.status(503).json({ error: 'El proveedor R2 de la evidencia del ticket no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED' })
+      return
+    }
+    for (const evidenceFile of evidenceFiles) {
+      const provider = evidenceFile.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+      await provider.remove({ storedName: evidenceFile.storedName }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar la actividad', { actionItemId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
     }
     response.status(204).send()
   }))
@@ -9581,8 +9591,17 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // Toda la validación (extensión, MIME declarado, firma %PDF y tamaño) ocurre ANTES de tocar
     // disco: si algo falla, no queda ni fila ni archivo.
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
-    const storedName = nextStoredName()
-    await writeEvidenceFile(storedName, file.data)
+    const companyId = ticket.createdBy.companyId ?? ticket.assignedTo?.companyId
+    if (!companyId) {
+      response.status(409).json({ error: 'El ticket no tiene una empresa asociada para almacenar la evidencia' })
+      return
+    }
+    const stored = await evidenceStorage.upload({
+      filename: upload.filename,
+      mimeType: upload.mimeType,
+      data: file.data,
+      objectKey: evidenceStorage.kind === 'R2' ? nextEvidenceObjectKey({ companyId, module: 'tickets', resourceId: ticket.id }) : undefined,
+    })
     let created: Prisma.TicketEvidenceFileGetPayload<{ include: typeof evidenceInclude }>
     try {
       created = await db.$transaction(async (tx) => {
@@ -9590,7 +9609,8 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
           data: {
             ticketId: ticket.id,
             filename: upload.filename,
-            storedName,
+            storedName: stored.storedName!,
+            storageProvider: evidenceStorage.kind,
             mimeType: upload.mimeType,
             size: upload.size,
             uploadedById: request.user!.id,
@@ -9611,11 +9631,7 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         return evidence
       })
     } catch (error) {
-      // Se escribió el archivo y falló la fila: se retira el bytes para no dejar basura en disco.
-      const { failed } = await removeEvidenceFiles([storedName])
-      if (failed.length > 0) {
-        console.error('[evidence] no se pudo retirar el archivo tras fallar la escritura de la fila', { ticketId: ticket.id, storedName, failed })
-      }
+      await evidenceStorage.remove(stored).catch((cleanupError) => console.error('[evidence] no se pudo retirar el archivo tras fallar la escritura de la fila', { ticketId: ticket.id, stored, cleanupError }))
       throw error
     }
     response.status(201).json({ evidence: evidenceView(created) })
@@ -9642,9 +9658,14 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
+    if (record.storageProvider === 'R2' && evidenceStorage.kind !== 'R2') {
+      response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
+      return
+    }
     let data: Buffer
     try {
-      data = await readEvidenceFile(record.storedName)
+      const provider = record.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+      data = await provider.read({ storedName: record.storedName })
     } catch (error) {
       // Fila sin archivo detrás (limpieza incompleta): se informa como no disponible, no como 500.
       if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -9673,12 +9694,16 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       response.status(403).json({ error: 'You can only operate evidence for activities assigned to you' })
       return
     }
-    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, filename: true, storedName: true } })
+    const record = await db.ticketEvidenceFile.findFirst({ where: { id: String(request.params.evidenceId), ticketId: ticket.id }, select: { id: true, filename: true, storedName: true, storageProvider: true } })
     if (!record) {
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
-    // Base de datos primero y disco después: si el unlink falla queda un archivo huérfano (que se
+    if (record.storageProvider === 'R2' && evidenceStorage.kind !== 'R2') {
+      response.status(503).json({ error: 'El proveedor de almacenamiento de esta evidencia no está configurado en el servidor' })
+      return
+    }
+    // Base de datos primero y almacenamiento después: si la limpieza falla queda un objeto huérfano (que se
     // registra), nunca una fila que promete un archivo ya borrado.
     await db.$transaction(async (tx) => {
       await tx.ticketEvidenceFile.delete({ where: { id: record.id } })
@@ -9691,10 +9716,8 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
         metadata: { evidenceId: record.id },
       })
     })
-    const { failed } = await removeEvidenceFiles([record.storedName])
-    if (failed.length > 0) {
-      console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: record.storedName, failed })
-    }
+    const provider = record.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+    await provider.remove({ storedName: record.storedName }).catch((error) => console.error('[evidence] archivo no borrado tras eliminar la evidencia', { ticketId: ticket.id, storedName: record.storedName, provider: record.storageProvider, error }))
     response.status(204).send()
   }))
 
@@ -9830,7 +9853,11 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     // sus evidencias) y SOLO entonces se borran los archivos. Un archivo que no salga se registra
     // como huérfano; nunca se borra primero el disco, porque si la escritura fallara quedarían filas
     // de evidencia apuntando a un archivo ya borrado.
-    const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true } })
+    const evidenceFiles = await db.ticketEvidenceFile.findMany({ where: { ticketId: existing.id }, select: { storedName: true, storageProvider: true } })
+    if (evidenceFiles.some((file) => file.storageProvider === 'R2' && evidenceStorage.kind !== 'R2')) {
+      response.status(503).json({ error: 'El proveedor R2 de la evidencia del ticket no está configurado en el servidor', reason: 'R2_PROVIDER_REQUIRED' })
+      return
+    }
     await db.$transaction(async (tx) => {
       await cancelPendingTicketAssignmentApprovals(tx, {
         ticketId: existing.id,
@@ -9848,11 +9875,9 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
       })
       await tx.ticket.delete({ where: { id: existing.id } })
     })
-    if (evidenceFiles.length > 0) {
-      const { failed } = await removeEvidenceFiles(evidenceFiles.map((evidenceFile) => evidenceFile.storedName))
-      if (failed.length > 0) {
-        console.error('[evidence] no se pudieron borrar archivos tras eliminar el ticket', { ticketId: existing.id, failed })
-      }
+    for (const evidenceFile of evidenceFiles) {
+      const provider = evidenceFile.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
+      await provider.remove({ storedName: evidenceFile.storedName }).catch((error) => console.error('[evidence] no se pudo borrar una evidencia tras eliminar el ticket', { ticketId: existing.id, storedName: evidenceFile.storedName, provider: evidenceFile.storageProvider, error }))
     }
     response.status(204).send()
   }))

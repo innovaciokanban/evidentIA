@@ -136,6 +136,9 @@ export const auditEventLabels: Record<AuditEventType, string> = {
   CHECKLIST_ITEM_DELETED: 'Ítem eliminado',
   EVIDENCE_FILE_CREATED: 'PDF adjuntado',
   EVIDENCE_FILE_DELETED: 'PDF eliminado',
+  EVIDENCE_FILE_STORAGE_READY: 'PDF disponible',
+  EVIDENCE_FILE_STORAGE_FAILED: 'Error de almacenamiento del PDF',
+  EVIDENCE_FILE_DELETE_PENDING: 'Eliminación de PDF pendiente',
   ACTION_CREATED: 'Acción correctiva creada',
   ACTION_UPDATED: 'Acción correctiva actualizada',
   ACTION_STATUS_CHANGED: 'Estado de la acción',
@@ -241,13 +244,17 @@ export const emptyActionDraft: ActionDraft = {
 export type ChecklistDraft = { name: string }
 export const emptyChecklistDraft: ChecklistDraft = { name: '' }
 
+export type ChecklistItemOrigin = 'MANUAL' | 'CHECKY'
 export type ChecklistItemDraft = {
   description: string
   criteria: string
+  source: string
+  dimension: AuditChecklistAIDimension | ''
+  origin: ChecklistItemOrigin
   required: boolean
 }
 
-export const emptyChecklistItemDraft: ChecklistItemDraft = { description: '', criteria: '', required: true }
+export const emptyChecklistItemDraft: ChecklistItemDraft = { description: '', criteria: '', source: '', dimension: '', origin: 'MANUAL', required: true }
 
 export type AuditChecklistAIDimension = 'COMPLIANCE' | 'IMPLEMENTATION' | 'EFFECTIVENESS'
 export type AuditChecklistAIProposal = {
@@ -336,7 +343,7 @@ export const formatBytes = (size: number): string => {
 export type AuditWorkspaceSection = 'resumen' | 'checklist' | 'hallazgos' | 'evidencias' | 'acciones' | 'historial'
 
 export type AuditCloseBlocker = {
-  reason: 'CHECKLIST_PENDING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING'
+  reason: 'CHECKLIST_PENDING' | 'CHECKLIST_FINDING_MISSING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING' | 'EVIDENCE_PENDING' | 'EVIDENCE_FAILED' | 'EVIDENCE_DELETE_PENDING'
   count: number
   message: string
   /** Sección del espacio de trabajo donde se resuelve el bloqueo. */
@@ -344,6 +351,19 @@ export type AuditCloseBlocker = {
 }
 
 const isFinalActionStatus = (status: AuditCorrectiveActionStatus): boolean => status === 'COMPLETED' || status === 'CANCELLED'
+
+export type AuditEvidenceStorageSummary = {
+  READY: number
+  PENDING: number
+  FAILED: number
+  DELETE_PENDING: number
+}
+
+export const auditEvidenceStorageSummary = (audit: Audit): AuditEvidenceStorageSummary => {
+  const summary: AuditEvidenceStorageSummary = { READY: 0, PENDING: 0, FAILED: 0, DELETE_PENDING: 0 }
+  for (const file of audit.evidenceFiles ?? []) summary[file.storageState] += 1
+  return summary
+}
 
 /**
  * Condiciones de cierre calculadas en el cliente para el cierre guiado. Es el MISMO criterio que
@@ -354,6 +374,10 @@ export const auditCloseBlockers = (audit: Audit): AuditCloseBlocker[] => {
   const blockers: AuditCloseBlocker[] = []
   const items = (audit.checklists ?? []).flatMap((checklist) => checklist.items)
   const actions = (audit.findings ?? []).flatMap((finding) => finding.actions ?? [])
+  const missingFindingLinks = items.filter((item) =>
+    item.result === 'NON_CONFORM'
+    && !(audit.findings ?? []).some((finding) => finding.auditId === audit.id && finding.type === 'NONCONFORMITY' && finding.itemId === item.id),
+  ).length
   const requiredPending = items.filter((item) => item.required && item.result === 'PENDING').length
   if (requiredPending > 0) {
     blockers.push({
@@ -361,6 +385,14 @@ export const auditCloseBlockers = (audit: Audit): AuditCloseBlocker[] => {
       count: requiredPending,
       message: `${requiredPending} criterio(s) obligatorio(s) sin evaluar`,
       section: 'checklist',
+    })
+  }
+  if (missingFindingLinks > 0) {
+    blockers.push({
+      reason: 'CHECKLIST_FINDING_MISSING',
+      count: missingFindingLinks,
+      message: `${missingFindingLinks} no conformidad(es) sin hallazgo válido vinculado`,
+      section: 'hallazgos',
     })
   }
   const openRequiredActions = actions.filter((action) => action.required && !isFinalActionStatus(action.status)).length
@@ -381,6 +413,31 @@ export const auditCloseBlockers = (audit: Audit): AuditCloseBlocker[] => {
       section: 'hallazgos',
     })
   }
+  const evidenceStorage = auditEvidenceStorageSummary(audit)
+  if (evidenceStorage.PENDING > 0) {
+    blockers.push({
+      reason: 'EVIDENCE_PENDING',
+      count: evidenceStorage.PENDING,
+      message: `${evidenceStorage.PENDING} archivo(s) de evidencia pendientes de sincronización`,
+      section: 'evidencias',
+    })
+  }
+  if (evidenceStorage.FAILED > 0) {
+    blockers.push({
+      reason: 'EVIDENCE_FAILED',
+      count: evidenceStorage.FAILED,
+      message: `${evidenceStorage.FAILED} archivo(s) de evidencia con sincronización fallida`,
+      section: 'evidencias',
+    })
+  }
+  if (evidenceStorage.DELETE_PENDING > 0) {
+    blockers.push({
+      reason: 'EVIDENCE_DELETE_PENDING',
+      count: evidenceStorage.DELETE_PENDING,
+      message: `${evidenceStorage.DELETE_PENDING} eliminación(es) de evidencia pendientes`,
+      section: 'evidencias',
+    })
+  }
   return blockers
 }
 
@@ -395,6 +452,8 @@ export type AuditExecutionSummary = {
   itemsTotal: number
   itemsEvaluated: number
   itemsPending: number
+  itemsRequiredTotal: number
+  itemsRequiredEvaluated: number
   itemsRequiredPending: number
   conform: number
   nonConform: number
@@ -415,11 +474,14 @@ export const auditExecutionSummary = (audit: Audit, today = new Date()): AuditEx
   const items = (audit.checklists ?? []).flatMap((checklist) => checklist.items)
   const findings = audit.findings ?? []
   const actions = findings.flatMap((finding) => finding.actions ?? [])
+  const requiredItems = items.filter((item) => item.required)
   return {
     itemsTotal: items.length,
     itemsEvaluated: items.filter((item) => item.result !== 'PENDING').length,
     itemsPending: items.filter((item) => item.result === 'PENDING').length,
-    itemsRequiredPending: items.filter((item) => item.required && item.result === 'PENDING').length,
+    itemsRequiredTotal: requiredItems.length,
+    itemsRequiredEvaluated: requiredItems.filter((item) => item.result !== 'PENDING').length,
+    itemsRequiredPending: requiredItems.filter((item) => item.result === 'PENDING').length,
     conform: items.filter((item) => item.result === 'CONFORM').length,
     nonConform: items.filter((item) => item.result === 'NON_CONFORM').length,
     notApplicable: items.filter((item) => item.result === 'NOT_APPLICABLE').length,
@@ -462,4 +524,18 @@ export const evidenceFileRelationLabel = (file: AuditEvidenceFile, audit: Audit)
     return `Criterio: ${item ? item.description.slice(0, 60) : '—'}`
   }
   return 'Auditoría'
+}
+
+export const evidenceStorageStateLabels: Record<AuditEvidenceFile['storageState'], string> = {
+  PENDING: 'Procesamiento pendiente',
+  READY: 'Disponible',
+  DELETE_PENDING: 'Eliminación pendiente',
+  FAILED: 'Procesamiento fallido',
+}
+
+export const evidenceStorageStateMessages: Record<AuditEvidenceFile['storageState'], string> = {
+  PENDING: 'El PDF está registrado y pendiente de procesamiento.',
+  READY: 'El PDF está disponible para descarga.',
+  DELETE_PENDING: 'La eliminación del PDF está pendiente de procesamiento.',
+  FAILED: 'El procesamiento del PDF falló. Revisa la operación de almacenamiento.',
 }

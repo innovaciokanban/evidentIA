@@ -9,17 +9,20 @@ import type {
   AuditChecklistItem,
   AuditCorrectiveAction,
   AuditEvent,
+  AuditEvidenceFile,
   AuditFinding,
   AuditFindingStatus,
   AuditStatus,
+  EvidenceStorageOperation,
   Process,
+  ProcessChangeValue,
 } from '../../types'
-import { LoadingState } from '../ui/LoadingState'
 import { askConfirm } from '../ui/useConfirm'
 import {
   actionPriorityLabels,
   actionStatusLabels,
   actionTransitions,
+  auditEvidenceStorageSummary,
   auditCloseBlockers,
   auditChecklistAIContext,
   auditChecklistAIDimensionLabels,
@@ -33,10 +36,11 @@ import {
   emptyActionDraft,
   emptyChecklistDraft,
   emptyChecklistItemDraft,
-  emptyEvidenceDraft,
   emptyFindingDraft,
   eventLabel,
   evidenceFileRelationLabel,
+  evidenceStorageStateLabels,
+  evidenceStorageStateMessages,
   findingSeverityLabels,
   findingStatusLabels,
   findingTransitions,
@@ -47,10 +51,11 @@ import {
   pendingEfficacyFindings,
   type ActionDraft,
   type AuditChecklistAIProposal,
+  type AuditChecklistAIDimension,
   type AuditWorkspaceSection,
   type ChecklistDraft,
   type ChecklistItemDraft,
-  type EvidenceDraft,
+  type ChecklistItemOrigin,
   type FindingDraft,
   type QualityUser,
 } from './quality.model'
@@ -60,7 +65,88 @@ const shortDateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium
 
 const formatMaybeDate = (value: string | null | undefined) => (value ? shortDateFormatter.format(new Date(value)) : '—')
 
+const auditHistoryGlyph = (eventType: AuditEvent['eventType']): string => {
+  if (eventType.includes('DELETED')) return '−'
+  if (eventType.includes('STATUS')) return '↕'
+  if (eventType.includes('PROGRESS')) return '↗'
+  if (eventType.includes('EVIDENCE') || eventType.includes('CHECKLIST')) return '▣'
+  if (eventType.includes('CREATED')) return '+'
+  return '✎'
+}
+
+const auditHistoryCategory = (eventType: AuditEvent['eventType']): string => {
+  if (eventType.includes('FINDING')) return 'Hallazgo'
+  if (eventType.includes('ACTION')) return 'Acción'
+  if (eventType.includes('EVIDENCE')) return 'Evidencia'
+  if (eventType.includes('CHECKLIST')) return 'Checklist'
+  return 'Auditoría'
+}
+
+const auditHistoryTechnicalLabels: Record<string, string> = {
+  OPEN: 'Abierto',
+  IN_PROGRESS: 'En curso',
+  PENDING: 'Pendiente',
+  NON_CONFORM: 'No conforme',
+  CONFORM: 'Conforme',
+  NOT_APPLICABLE: 'No aplica',
+  COMPLETED: 'Completado',
+  CANCELLED: 'Cancelado',
+  PLANNED: 'Planificada',
+  CLOSED: 'Cerrada',
+  RESOLVED: 'Resuelto',
+  VERIFIED: 'Verificado',
+  READY: 'Disponible',
+  FAILED: 'Fallido',
+  DELETE_PENDING: 'Eliminación pendiente',
+  RETRYABLE: 'Reintento programado',
+  CRITICAL: 'Crítica',
+  HIGH: 'Alta',
+  MEDIUM: 'Media',
+  LOW: 'Baja',
+  MAJOR: 'Mayor',
+  MINOR: 'Menor',
+  NONCONFORMITY: 'No conformidad',
+  OBSERVATION: 'Observación',
+  OPPORTUNITY: 'Oportunidad',
+  DRAFT: 'Borrador',
+  IN_REVIEW: 'En revisión',
+  APPROVED: 'Aprobado',
+  OBSOLETE: 'Obsoleto',
+  SUPERUSER: 'Superusuario',
+  COMPANY_ADMIN: 'Administrador',
+  COMPANY_USER: 'Usuario de empresa',
+}
+
+const auditHistoryValue = (value: ProcessChangeValue): string => {
+  if (value === null || value === '') return 'Sin valor'
+  if (typeof value === 'boolean') return value ? 'Sí' : 'No'
+  return auditHistoryTechnicalLabels[String(value)] ?? String(value)
+}
+
+const auditHistoryPresentation = (event: AuditEvent): { title: string; detail: string } => {
+  const title = eventLabel(event)
+  const quoted = event.summary.match(/«([^»]+)»/)
+  if (!quoted || quoted.index === undefined) return { title, detail: event.summary === title ? '' : event.summary }
+  const suffix = event.summary.slice(quoted.index + quoted[0].length).trim()
+  const genericSuffixes = new Set(['creado', 'creada', 'actualizado', 'actualizada', 'eliminado', 'eliminada', 'registrada', 'adjuntada', 'añadido', 'añadida'])
+  return { title, detail: [quoted[1], suffix && !genericSuffixes.has(suffix) ? suffix : ''].filter(Boolean).join(' · ') }
+}
+
 type AuditChecklistAIProcessFilter = 'ALL' | Process['type']
+type EvidenceAnchor = { findingId?: string; actionId?: string; itemId?: string }
+type EvidenceOperationResponse = { operationId?: string; operationStatus?: EvidenceStorageOperation['status']; file?: AuditEvidenceFile | null }
+
+const storageOperationStatusLabels: Record<EvidenceStorageOperation['status'], string> = {
+  PENDING: 'Pendiente',
+  IN_PROGRESS: 'En curso',
+  SUCCEEDED: 'Completada',
+  RETRYABLE: 'Reintento programado',
+  FAILED: 'Fallida',
+  CANCELLED: 'Cancelada',
+}
+
+const isTerminalStorageOperation = (status: EvidenceStorageOperation['status']): boolean =>
+  status === 'SUCCEEDED' || status === 'FAILED' || status === 'CANCELLED'
 
 
 function findErrorMessage(requestError: unknown, fallback: string): string {
@@ -73,13 +159,48 @@ function closeErrorMessage(requestError: unknown): string {
   if (requestError instanceof ApiError) {
     const friendly: Record<string, string> = {
       CHECKLIST_PENDING: 'Quedan criterios obligatorios sin evaluar en el checklist.',
+      CHECKLIST_FINDING_MISSING: 'Hay no conformidades del checklist sin un hallazgo válido vinculado.',
       ACTIONS_PENDING: 'Quedan acciones correctivas obligatorias pendientes.',
       EFFICACY_PENDING: 'Quedan no conformidades sin verificación de eficacia.',
+      EVIDENCE_PENDING: 'Hay archivos de evidencia pendientes de procesamiento.',
+      EVIDENCE_FAILED: 'Hay archivos de evidencia con una operación de almacenamiento fallida.',
+      EVIDENCE_DELETE_PENDING: 'Hay eliminaciones de evidencia pendientes de sincronización.',
     }
     const mapped = requestError.reason ? friendly[requestError.reason] : undefined
     return mapped ?? requestError.message
   }
   return 'No se pudo cerrar la auditoría.'
+}
+
+function checklistItemContext(criteria: string): { verification: string; source: string; dimension: string; origin: ChecklistItemOrigin } {
+  const lines = criteria.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const valueFor = (prefix: string) => lines.find((line) => line.toLowerCase().startsWith(prefix.toLowerCase()))?.slice(prefix.length).trim() || null
+  const expectedEvidence = valueFor('Evidencia esperada:')
+  const source = valueFor('Fuente:')
+  const dimension = valueFor('Dimensión:')
+  const origin = valueFor('Origen:')
+  const contentLines = lines.filter((line) => !['evidencia esperada:', 'fuente:', 'dimensión:', 'origen:'].some((prefix) => line.toLowerCase().startsWith(prefix)))
+  return {
+    verification: (expectedEvidence ?? contentLines.join('\n')) || criteria,
+    source: source ?? 'No especificada',
+    dimension: dimension ?? 'No especificada',
+    origin: origin?.toLowerCase() === 'checky' || Boolean(expectedEvidence) ? 'CHECKY' : 'MANUAL',
+  }
+}
+
+function checklistDimensionValue(label: string): AuditChecklistAIDimension | '' {
+  const match = (Object.entries(auditChecklistAIDimensionLabels) as Array<[AuditChecklistAIDimension, string]>)
+    .find(([, value]) => value.toLowerCase() === label.toLowerCase())
+  return match?.[0] ?? ''
+}
+
+function checklistCriteriaFromDraft(draft: ChecklistItemDraft): string {
+  return [
+    draft.criteria.trim(),
+    draft.source.trim() ? `Fuente: ${draft.source.trim()}` : '',
+    draft.dimension ? `Dimensión: ${auditChecklistAIDimensionLabels[draft.dimension]}` : '',
+    `Origen: ${draft.origin === 'CHECKY' ? 'Checky' : 'Manual'}`,
+  ].filter(Boolean).join('\n')
 }
 
 const sectionTabs: Array<{ id: AuditWorkspaceSection; label: string }> = [
@@ -89,8 +210,17 @@ const sectionTabs: Array<{ id: AuditWorkspaceSection; label: string }> = [
   { id: 'historial', label: 'Historial' },
 ]
 
+const sectionLabels: Record<AuditWorkspaceSection, string> = {
+  resumen: 'Resumen',
+  checklist: 'Checklist',
+  hallazgos: 'Hallazgos',
+  evidencias: 'Evidencias',
+  acciones: 'Acciones correctivas',
+  historial: 'Historial',
+}
+
 function visibleSection(section: AuditWorkspaceSection): AuditWorkspaceSection {
-  return section === 'evidencias' || section === 'acciones' ? 'resumen' : section
+  return section
 }
 
 /**
@@ -116,9 +246,12 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const [history, setHistory] = useState<AuditEvent[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(true)
+  const [historyError, setHistoryError] = useState('')
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '' })
   const [itemDraft, setItemDraft] = useState<ChecklistItemDraft>(emptyChecklistItemDraft)
   const [itemFor, setItemFor] = useState<{ checklistId: string; item: AuditChecklistItem | null } | null>(null)
+  const [itemError, setItemError] = useState('')
   const [aiProposals, setAIProposals] = useState<AuditChecklistAIProposal[]>([])
   const [aiChecklistId, setAIChecklistId] = useState('')
   const [aiGenerating, setAIGenerating] = useState(false)
@@ -127,16 +260,18 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const [aiProcessFilter, setAIProcessFilter] = useState<AuditChecklistAIProcessFilter>('ALL')
   const [aiDimensionFilter, setAIDimensionFilter] = useState<AuditChecklistAIProposal['dimension'] | 'ALL'>('ALL')
   const [aiExpandedProposalIds, setAIExpandedProposalIds] = useState<Set<string>>(new Set())
+  const [responseEditorFor, setResponseEditorFor] = useState<string | null>(null)
   const [observationsFor, setObservationsFor] = useState<{ checklistId: string; itemId: string } | null>(null)
   const [observationsDraft, setObservationsDraft] = useState('')
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
+  const [highlightActionId, setHighlightActionId] = useState<string | null>(null)
   const [findingDraft, setFindingDraft] = useState<FindingDraft>(emptyFindingDraft)
   const [findingFor, setFindingFor] = useState<{ finding: AuditFinding | null } | null>(null)
   const [pendingNonConformity, setPendingNonConformity] = useState<{ checklistId: string; itemId: string; observations: string } | null>(null)
   const [actionDraft, setActionDraft] = useState<ActionDraft>(emptyActionDraft)
   const [actionFor, setActionFor] = useState<{ findingId: string; action: AuditCorrectiveAction | null } | null>(null)
-  const [evidenceDraft, setEvidenceDraft] = useState<EvidenceDraft>(emptyEvidenceDraft)
-  const [evidenceFor, setEvidenceFor] = useState<boolean>(false)
+  const [evidenceFilter, setEvidenceFilter] = useState<EvidenceAnchor | null>(null)
+  const [evidenceOperations, setEvidenceOperations] = useState<Record<string, EvidenceStorageOperation>>({})
   const [uploadFor, setUploadFor] = useState<{ findingId?: string; actionId?: string; itemId?: string } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
@@ -160,6 +295,9 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setAIProcessFilter('ALL')
     setAIDimensionFilter('ALL')
     setAIExpandedProposalIds(new Set())
+    setResponseEditorFor(null)
+    setEvidenceFilter(null)
+    setEvidenceOperations({})
     historyAuditId.current = initial.id
     setClosing(false)
     setCloseSummary('')
@@ -188,6 +326,12 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [highlightItemId, activeSection])
 
+  useEffect(() => {
+    if (!highlightActionId || activeSection !== 'acciones') return
+    const element = document.getElementById(`quality-action-${highlightActionId}`)
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [highlightActionId, activeSection])
+
   const activeCompanyUsers = users.filter((person) => (!person.companyId || person.companyId === audit.companyId) && person.isActive !== false)
   const findingUsers = activeUserOptions(activeCompanyUsers, findingFor?.finding?.responsible ? [findingFor.finding.responsible] : [])
   const actionUsers = activeUserOptions(activeCompanyUsers, actionFor?.action?.responsible ? [actionFor.action.responsible] : [])
@@ -196,6 +340,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   const results = auditExecutionSummary(audit)
   const closeBlockers = auditCloseBlockers(audit)
+  const evidenceStorage = auditEvidenceStorageSummary(audit)
   const pendingEfficacy = pendingEfficacyFindings(audit)
   const terminal = isTerminalAudit(audit)
   const readonly = terminal || !canWrite
@@ -205,7 +350,21 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const checklistPending = results.itemsRequiredPending
   const checklistPercent = checklistTotal > 0 ? Math.min(100, Math.round((checklistCompleted / checklistTotal) * 100)) : 0
   const evidenceFiles = audit.evidenceFiles ?? []
-  const evidenceCount = audit.evidences.length + evidenceFiles.length
+  const evidenceCount = evidenceFiles.length
+  const hasEvidenceFilter = Boolean(evidenceFilter && Object.values(evidenceFilter).some(Boolean))
+  const filteredEvidenceFiles = hasEvidenceFilter
+    ? evidenceFiles.filter((file) => (
+      (evidenceFilter?.findingId && file.findingId === evidenceFilter.findingId)
+      || (evidenceFilter?.actionId && file.actionId === evidenceFilter.actionId)
+      || (evidenceFilter?.itemId && file.itemId === evidenceFilter.itemId)
+    ))
+    : evidenceFiles
+  const visibleEvidenceCount = filteredEvidenceFiles.length
+  const activeStorageOperations = Object.values(evidenceOperations).filter((operation) => !isTerminalStorageOperation(operation.status) || operation.status === 'FAILED')
+  const closeWarnings = [
+    results.itemsPending - results.itemsRequiredPending > 0 ? `${results.itemsPending - results.itemsRequiredPending} pregunta(s) no obligatoria(s) siguen pendientes; no bloquean el cierre.` : '',
+    results.findingsOpen > 0 ? `${results.findingsOpen} hallazgo(s) siguen abiertos; el cierre no exige que todos estén verificados.` : '',
+  ].filter(Boolean)
   const openActions = results.actionsRequiredOpen
   const overdueActions = results.actionsOverdue
   const allActions = audit.findings
@@ -229,6 +388,37 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     const nextSection = visibleSection(section)
     setActiveSection(nextSection)
     if (nextSection === 'historial' && !historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit) void loadHistory()
+  }
+
+  function goToActions() {
+    const firstPendingAction = allActions.find(({ action }) => action.required && action.status !== 'COMPLETED' && action.status !== 'CANCELLED')
+    setHighlightActionId(firstPendingAction?.action.id ?? null)
+    selectSection('acciones')
+  }
+
+  function goToCloseBlocker(section: AuditWorkspaceSection) {
+    if (section === 'acciones') goToActions()
+    else selectSection(section)
+  }
+
+  function selectEvidenceContext(anchor: EvidenceAnchor | null = null) {
+    setEvidenceFilter(anchor)
+    selectSection('evidencias')
+  }
+
+  function evidenceCountFor(anchor: EvidenceAnchor): number {
+    return evidenceFiles.filter((file) => (
+        (anchor.findingId && file.findingId === anchor.findingId)
+        || (anchor.actionId && file.actionId === anchor.actionId)
+        || (anchor.itemId && file.itemId === anchor.itemId)
+    )).length
+  }
+
+  function evidenceContextLabel(anchor: EvidenceAnchor): string {
+    if (anchor.findingId) return `Hallazgo: ${audit.findings.find((finding) => finding.id === anchor.findingId)?.title ?? '—'}`
+    if (anchor.actionId) return `Acción: ${audit.findings.flatMap((finding) => finding.actions ?? []).find((action) => action.id === anchor.actionId)?.title ?? '—'}`
+    if (anchor.itemId) return `Criterio: ${(audit.checklists ?? []).flatMap((checklist) => checklist.items).find((item) => item.id === anchor.itemId)?.description ?? '—'}`
+    return 'Auditoría'
   }
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -309,15 +499,19 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   async function loadHistory() {
     setHistoryLoading(true)
+    setHistoryError('')
     const requestedAuditId = audit.id
     try {
       const result = await api<{ events: AuditEvent[] }>(`/audits/${audit.id}/history?pageSize=50`)
       if (historyAuditId.current === requestedAuditId) {
         setHistory(result.events)
         setHistoryLoaded(true)
+        setHistoryError('')
       }
     } catch (requestError) {
-      onError(findErrorMessage(requestError, 'No pudimos cargar el historial.'))
+      const message = findErrorMessage(requestError, 'No pudimos cargar el historial.')
+      setHistoryError(message)
+      onError(message)
     } finally {
       if (historyAuditId.current === requestedAuditId) setHistoryLoading(false)
     }
@@ -458,22 +652,64 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     }
   }
 
+  function openNewChecklistItem(checklistId: string) {
+    setItemError('')
+    setItemDraft(emptyChecklistItemDraft)
+    setItemFor({ checklistId, item: null })
+  }
+
+  function openEditChecklistItem(checklistId: string, item: AuditChecklistItem) {
+    const context = checklistItemContext(item.criteria)
+    setItemError('')
+    setItemDraft({
+      description: item.description,
+      criteria: context.verification,
+      source: context.source === 'No especificada' ? '' : context.source,
+      dimension: checklistDimensionValue(context.dimension),
+      origin: context.origin,
+      required: item.required,
+    })
+    setItemFor({ checklistId, item })
+  }
+
   async function saveItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!itemFor || busy) return
+    const description = itemDraft.description.trim()
+    const criteria = itemDraft.criteria.trim()
+    if (!description) {
+      setItemError('Escribe la pregunta de verificación.')
+      return
+    }
+    if (!criteria) {
+      setItemError('Escribe el criterio de verificación.')
+      return
+    }
+    const duplicate = (audit.checklists ?? [])
+      .flatMap((checklist) => checklist.items)
+      .some((item) => item.id !== itemFor.item?.id && item.description.trim().toLowerCase() === description.toLowerCase())
+    if (duplicate) {
+      setItemError('Ya existe una pregunta con ese texto en esta auditoría.')
+      return
+    }
+    setItemError('')
     setBusy(true)
     try {
+      const payload = { description, criteria: checklistCriteriaFromDraft({ ...itemDraft, description, criteria }), required: itemDraft.required }
       if (itemFor.item) {
-        await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items/${itemFor.item.id}`, { method: 'PATCH', body: JSON.stringify(itemDraft) })
+        await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items/${itemFor.item.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       } else {
-        await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items`, { method: 'POST', body: JSON.stringify(itemDraft) })
+        await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items`, { method: 'POST', body: JSON.stringify(payload) })
       }
       setItemFor(null)
       setItemDraft(emptyChecklistItemDraft)
+      setItemError('')
       await reload()
-      onNotice('Ítem guardado.')
+      onNotice(itemFor.item ? 'Pregunta actualizada.' : 'Pregunta manual guardada.')
     } catch (requestError) {
-      onError(findErrorMessage(requestError, 'No se pudo guardar el ítem.'))
+      const message = findErrorMessage(requestError, 'No se pudo guardar la pregunta.')
+      setItemError(message)
+      onError(message)
     } finally {
       setBusy(false)
     }
@@ -481,17 +717,32 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   async function updateItemResult(checklistId: string, item: AuditChecklistItem, result: typeof checklistResults[number], observations: string) {
     if (checklistResponseReadonly) return
+    let findingReviewConfirmed = false
+    if (item.result === 'NON_CONFORM' && (result === 'CONFORM' || result === 'NOT_APPLICABLE')) {
+      const confirmed = await askConfirm({
+        title: 'Revisar hallazgo asociado',
+        message: 'La respuesta cambiará, pero el hallazgo se conservará. Confirma que revisaste su situación y seguimiento.',
+        confirmLabel: 'Confirmar revisión',
+      })
+      if (!confirmed) return
+      findingReviewConfirmed = true
+    }
     if (result === 'NON_CONFORM' && item.result !== 'NON_CONFORM') {
       const existingFinding = audit.findings.find((finding) => finding.itemId === item.id && finding.type === 'NONCONFORMITY')
       if (!existingFinding) {
         setPendingNonConformity({ checklistId, itemId: item.id, observations })
+        setResponseEditorFor(null)
         startFinding(item.id)
         return
       }
     }
     setBusy(true)
     try {
-      await api(`/audits/${audit.id}/checklists/${checklistId}/items/${item.id}`, { method: 'PATCH', body: JSON.stringify({ result, observations: observations || null }) })
+      await api(`/audits/${audit.id}/checklists/${checklistId}/items/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ result, observations: observations || null, ...(findingReviewConfirmed ? { findingReviewConfirmed: true } : {}) }),
+      })
+      setResponseEditorFor(null)
       await reload()
     } catch (requestError) {
       onError(findErrorMessage(requestError, 'No se pudo actualizar el ítem.'))
@@ -687,43 +938,19 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     }
   }
 
-  async function saveEvidence(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy) return
-    setBusy(true)
-    try {
-      await api(`/audits/${audit.id}/evidences`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name: evidenceDraft.name,
-          description: evidenceDraft.description,
-          url: evidenceDraft.url,
-          findingId: evidenceDraft.findingId || null,
-        }),
-      })
-      setEvidenceFor(false)
-      setEvidenceDraft(emptyEvidenceDraft)
-      await reload()
-      onNotice('Evidencia registrada.')
-    } catch (requestError) {
-      onError(findErrorMessage(requestError, 'No se pudo registrar la evidencia.'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function removeEvidence(evidenceId: string) {
-    const confirmed = await askConfirm({ title: 'Eliminar evidencia', message: 'Se eliminará el enlace de evidencia.', confirmLabel: 'Eliminar' })
-    if (!confirmed) return
-    setBusy(true)
-    try {
-      await api(`/audits/${audit.id}/evidences/${evidenceId}`, { method: 'DELETE' })
-      await reload()
-      onNotice('Evidencia eliminada.')
-    } catch (requestError) {
-      onError(findErrorMessage(requestError, 'No se pudo eliminar la evidencia.'))
-    } finally {
-      setBusy(false)
+  async function watchEvidenceOperation(operationId: string) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const result = await api<{ operation: EvidenceStorageOperation }>(`/audits/${audit.id}/evidence-operations/${operationId}`)
+        setEvidenceOperations((current) => ({ ...current, [operationId]: result.operation }))
+        if (isTerminalStorageOperation(result.operation.status)) {
+          await reload()
+          return
+        }
+      } catch {
+        return
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
     }
   }
 
@@ -739,10 +966,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setUploading(true)
     setUploadProgress(0)
     try {
-      await apiUpload(`/audits/${audit.id}/evidence-files`, file, uploadFor, setUploadProgress)
+      const result = await apiUpload<EvidenceOperationResponse>(`/audits/${audit.id}/evidence-files`, file, uploadFor, setUploadProgress)
+      if (result.operationId) void watchEvidenceOperation(result.operationId)
       setUploadFor(null)
       await reload()
-      onNotice('PDF adjuntado correctamente.')
+      onNotice(result.operationId ? 'PDF registrado; se está procesando.' : 'PDF adjuntado correctamente.')
     } catch (requestError) {
       onError(findErrorMessage(requestError, 'No se pudo subir el PDF.'))
     } finally {
@@ -756,9 +984,10 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     if (!confirmed) return
     setBusy(true)
     try {
-      await api(`/audits/${audit.id}/evidence-files/${fileId}`, { method: 'DELETE' })
+      const result = await api<EvidenceOperationResponse | undefined>(`/audits/${audit.id}/evidence-files/${fileId}`, { method: 'DELETE' })
+      if (result?.operationId) void watchEvidenceOperation(result.operationId)
       await reload()
-      onNotice('Archivo eliminado.')
+      onNotice(result?.operationId ? 'Eliminación registrada; se está procesando.' : 'Archivo eliminado.')
     } catch (requestError) {
       onError(findErrorMessage(requestError, 'No se pudo eliminar el archivo.'))
     } finally {
@@ -795,7 +1024,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
         <div className="quality-detail-stat"><span className="quality-stat-mark blue">◷</span><span><small>Estado actual</small><strong>{auditStatusLabels[audit.status]}</strong></span></div>
         <div className="quality-detail-stat"><span className="quality-stat-mark amber">□</span><span><small>Checklist</small><strong>{checklistCompleted}/{checklistTotal || '—'} evaluados</strong></span></div>
         <div className="quality-detail-stat"><span className="quality-stat-mark red">!</span><span><small>Hallazgos abiertos</small><strong>{results.findingsOpen}</strong></span></div>
-        <div className="quality-detail-stat"><span className="quality-stat-mark purple">↗</span><span><small>Evidencias</small><strong>{evidenceCount} registradas</strong></span></div>
+        <div className="quality-detail-stat"><span className="quality-stat-mark purple">↗</span><span><small>Evidencias</small><strong>{evidenceCount} registradas</strong><button type="button" className="text-button" onClick={() => selectEvidenceContext()}>Ver evidencias</button></span></div>
       </div>
 
       <div className="quality-workspace-tabs" role="tablist" aria-label="Secciones de la auditoría" onKeyDown={handleTabKeyDown}>
@@ -859,7 +1088,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             <section id="quality-status" className="panel quality-status-bar">
               <p className="detail-label">ESTADO</p>
               <div className="quality-status-bar-content">
-                <div><strong>{auditStatusLabels[audit.status]}</strong><span className="muted"> Usa las transiciones para avanzar el ciclo de revisión · {openActions} acciones obligatorias abiertas.</span></div>
+               <div><strong>{auditStatusLabels[audit.status]}</strong><span className="muted"> Usa las transiciones para avanzar el ciclo de revisión · {openActions} acciones obligatorias abiertas.</span></div>
                 <div className="quality-status-actions">
                   {auditTransitions[audit.status].map((transition) => (
                     <button
@@ -889,13 +1118,18 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               <p className="detail-label">CIERRE DE AUDITORÍA</p>
               <h3 id="quality-close-title">Resumen de resultados</h3>
               <div className="quality-close-stats">
-                <div><small>Criterios evaluados</small><strong>{checklistCompleted}/{checklistTotal}</strong><span>{results.itemsPending} pendientes</span></div>
-                <div><small>Conformidades</small><strong>{results.conform}</strong><span>criterios conformes</span></div>
-                <div><small>No conformidades</small><strong>{results.nonConform}</strong><span>criterios no conformes</span></div>
-                <div><small>Hallazgos</small><strong>{results.findingsTotal}</strong><span>{results.findingsOpen} abiertos</span></div>
-                <div><small>Acciones pendientes</small><strong>{results.actionsOpen}</strong><span>{overdueActions} vencidas</span></div>
-                <div><small>Requisitos pendientes</small><strong>{closeBlockers.length}</strong><span>para poder cerrar</span></div>
-              </div>
+                 <div><small>Criterios evaluados</small><strong>{checklistCompleted}/{checklistTotal}</strong><span>{results.itemsPending} pendientes totales · {results.itemsRequiredPending} obligatorios</span></div>
+                 <div><small>Preguntas obligatorias</small><strong>{results.itemsRequiredEvaluated}/{results.itemsRequiredTotal}</strong><span>{results.itemsRequiredPending} pendientes que bloquean</span></div>
+                 <div><small>Conformidades</small><strong>{results.conform}</strong><span>criterios conformes</span></div>
+                 <div><small>No conformidades</small><strong>{results.nonConform}</strong><span>criterios no conformes</span></div>
+                 <div><small>Hallazgos</small><strong>{results.findingsTotal}</strong><span>{results.findingsOpen} abiertos</span></div>
+                 <div><small>Acciones pendientes</small><strong>{results.actionsOpen}</strong><span>{overdueActions} vencidas</span></div>
+                 <div><small>Archivos READY</small><strong>{evidenceStorage.READY}</strong><span>disponibles</span></div>
+                 <div><small>Archivos PENDING</small><strong>{evidenceStorage.PENDING}</strong><span>sincronización pendiente</span></div>
+                 <div><small>Archivos FAILED</small><strong>{evidenceStorage.FAILED}</strong><span>requieren revisión</span></div>
+                 <div><small>DELETE_PENDING</small><strong>{evidenceStorage.DELETE_PENDING}</strong><span>eliminación pendiente</span></div>
+                 <div><small>Requisitos pendientes</small><strong>{closeBlockers.length}</strong><span>para poder cerrar</span></div>
+               </div>
               {closeBlockers.length > 0 ? (
                 <ul className="quality-close-blockers">
                   {closeBlockers.map((blocker) => (
@@ -903,13 +1137,19 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       <span aria-hidden="true">✕</span>
                       <div>
                         <strong>{blocker.message}</strong>
-                        <button type="button" className="text-button" onClick={() => selectSection(blocker.section)}>Resolver en {sectionTabs.find((tab) => tab.id === blocker.section)?.label ?? 'Resumen'}</button>
+                         <button type="button" className="text-button" onClick={() => goToCloseBlocker(blocker.section)}>Resolver en {sectionLabels[blocker.section]}</button>
                       </div>
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p className="quality-close-ok" role="status">Condiciones de cierre cumplidas: criterios obligatorios evaluados, acciones finalizadas y eficacia verificada.</p>
+              )}
+              {closeWarnings.length > 0 && (
+                <div className="quality-close-warnings" role="status">
+                  <strong>Advertencias que no bloquean el cierre</strong>
+                  <ul>{closeWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                </div>
               )}
               {pendingEfficacy.length > 0 && (
                 <p className="muted">Las no conformidades resueltas sin eficacia se muestran en Hallazgos.</p>
@@ -954,7 +1194,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               )}
               {!readonly && (
                 <button type="button" className="button secondary" onClick={() => void generateChecklistWithAI()} disabled={busy || aiGenerating}>
-                  {aiGenerating ? 'Generando preguntas…' : 'Generar preguntas con IA-Checky'}
+                  {aiGenerating ? 'Preparando sugerencias…' : 'Sugerir con IA-Checky'}
                 </button>
               )}
             </div>
@@ -1094,8 +1334,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                   <div className="quality-checklist-header">
                     <h3>{checklist.name}</h3>
                     {!readonly && (
-                      <div>
-                        <button type="button" className="text-button" onClick={() => setItemFor({ checklistId: checklist.id, item: null })}>+ Ítem</button>
+                      <div className="quality-checklist-actions">
+                        <button type="button" className="button secondary small-button" onClick={() => openNewChecklistItem(checklist.id)}>Nueva pregunta</button>
                         <button type="button" className="text-button danger" onClick={() => void removeChecklist(checklist)}>Eliminar</button>
                       </div>
                     )}
@@ -1104,55 +1344,81 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                     <p className="muted">Sin ítems.</p>
                   ) : (
                     <div className="quality-items">
-                      <div className="quality-item-row quality-item-head"><span>Ítem</span><span>Criterio</span><span>Resultado</span><span>Observaciones</span><span /></div>
                       {checklist.items.map((item) => {
-                        const rowClasses = [
-                          'quality-item-row',
+                        const context = checklistItemContext(item.criteria)
+                        const editingResponse = responseEditorFor === item.id
+                        const cardClasses = [
+                          'quality-item-card',
                           item.result === 'NON_CONFORM' ? 'is-non-conform' : '',
                           item.required && item.result === 'PENDING' ? 'is-required-pending' : '',
                           highlightItemId === item.id ? 'is-highlight' : '',
                         ].filter(Boolean).join(' ')
                         return (
-                          <div key={item.id} id={`quality-item-${item.id}`} className={rowClasses}>
-                            <span>{item.required ? '★ ' : ''}{item.description}</span>
-                            <span className="muted">{item.criteria}</span>
-                            <span>
-                               {checklistResponseReadonly ? checklistResultLabels[item.result] : (
-                                 <select value={item.result} onChange={(event) => void updateItemResult(checklist.id, item, event.target.value as typeof checklistResults[number], item.observations ?? '')} aria-label={`Resultado de ${item.description.slice(0, 40)}`}>
-                                  {checklistResults.map((result) => <option key={result} value={result}>{checklistResultLabels[result]}</option>)}
-                                </select>
-                              )}
-                            </span>
-                            <span className="muted quality-item-observations">
+                          <article key={item.id} id={`quality-item-${item.id}`} className={cardClasses}>
+                            <div className="quality-item-card-header">
+                              <div className="quality-item-question">
+                                <span className="quality-item-number" aria-hidden="true">{String(item.position).padStart(2, '0')}</span>
+                                <div>
+                                  <div className="quality-item-kicker"><span>Pregunta de verificación</span><span className={`quality-item-origin-badge ${context.origin.toLowerCase()}`}>{context.origin}</span>{item.required && <span className="quality-required-badge">Obligatorio</span>}</div>
+                                  <h4>{item.description}</h4>
+                                </div>
+                              </div>
+                              <div className="quality-item-response">
+                                <span className="quality-item-label">Respuesta seleccionada</span>
+                                {editingResponse ? (
+                                  <select className="quality-item-result-select" value={item.result} onChange={(event) => void updateItemResult(checklist.id, item, event.target.value as typeof checklistResults[number], item.observations ?? '')} aria-label={`Resultado de ${item.description.slice(0, 40)}`}>
+                                    {checklistResults.map((result) => <option key={result} value={result}>{checklistResultLabels[result]}</option>)}
+                                  </select>
+                                ) : (
+                                  <span className={`quality-result-badge ${item.result.toLowerCase()}`}>{checklistResultLabels[item.result]}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="quality-item-context" aria-label="Contexto de verificación">
+                              <div><span>Criterio de verificación</span><p>{context.verification}</p></div>
+                              <div><span>Fuente documental</span><p>{context.source}</p></div>
+                              <div><span>Dimensión</span><p>{context.dimension}</p></div>
+                            </div>
+                            <div className="quality-item-observation-block">
+                              <div className="quality-item-observation-heading">
+                                <span className="quality-item-label">Observación</span>
+                                {!checklistResponseReadonly && !observationsFor && (
+                                  <button type="button" className="quality-item-subtle-button" onClick={() => { setObservationsFor({ checklistId: checklist.id, itemId: item.id }); setObservationsDraft(item.observations ?? '') }}>
+                                    {item.observations ? 'Editar observación' : 'Añadir observación'}
+                                  </button>
+                                )}
+                              </div>
                               {observationsFor?.itemId === item.id ? (
                                 <span className="quality-observations-editor">
                                   <textarea value={observationsDraft} onChange={(event) => setObservationsDraft(event.target.value)} maxLength={2000} rows={2} placeholder="Observaciones del criterio…" aria-label="Observaciones" />
-                                  <span>
-                                    <button type="button" className="text-button" disabled={busy} onClick={() => void saveObservations()}>Guardar</button>
-                                    <button type="button" className="text-button" onClick={() => { setObservationsFor(null); setObservationsDraft('') }}>Cancelar</button>
+                                  <span className="quality-observations-editor-actions">
+                                    <button type="button" className="button secondary small-button" disabled={busy} onClick={() => void saveObservations()}>Guardar observación</button>
+                                    <button type="button" className="quality-item-subtle-button" onClick={() => { setObservationsFor(null); setObservationsDraft('') }}>Cancelar</button>
                                   </span>
                                 </span>
                               ) : (
-                                <>
-                                  {item.observations ?? '—'}
-                                   {!checklistResponseReadonly && (
-                                     <button type="button" className="text-button quality-observations-trigger" onClick={() => { setObservationsFor({ checklistId: checklist.id, itemId: item.id }); setObservationsDraft(item.observations ?? '') }}>
-                                      {item.observations ? 'Editar' : 'Añadir'}
-                                    </button>
-                                  )}
-                                </>
+                                <p>{item.observations || 'Sin observación registrada.'}</p>
                               )}
-                            </span>
-                            <span>
+                            </div>
+                            <div className="quality-item-actions" aria-label="Acciones de la pregunta">
+                              {!checklistResponseReadonly && (
+                                <button type="button" className="button secondary small-button quality-item-action" onClick={() => setResponseEditorFor((current) => current === item.id ? null : item.id)}>
+                                  <span className="quality-item-action-icon" aria-hidden="true">↻</span>{editingResponse ? 'Cerrar edición' : 'Editar respuesta'}
+                                </button>
+                              )}
                               {!readonly && (
                                 <>
-                                  <button type="button" className="text-button" onClick={() => { setItemFor({ checklistId: checklist.id, item }); setItemDraft({ description: item.description, criteria: item.criteria, required: item.required }) }}>Editar</button>
-                                  <button type="button" className="text-button" onClick={() => startFinding(item.id)}>+ Hallazgo</button>
-                                  <button type="button" className="text-button danger" onClick={() => void removeItem(checklist.id, item)}>×</button>
+                                  <button type="button" className="button secondary small-button quality-item-action" onClick={() => openEditChecklistItem(checklist.id, item)}>
+                                    <span className="quality-item-action-icon" aria-hidden="true">✎</span>Editar pregunta
+                                  </button>
+                                  <button type="button" className="button primary small-button quality-item-action" onClick={() => startFinding(item.id)}>
+                                    <span className="quality-item-action-icon" aria-hidden="true">△</span>Gestionar hallazgo
+                                  </button>
+                                  <button type="button" className="quality-item-delete" aria-label={`Eliminar pregunta ${item.description.slice(0, 40)}`} onClick={() => void removeItem(checklist.id, item)}>×</button>
                                 </>
                               )}
-                            </span>
-                          </div>
+                            </div>
+                          </article>
                         )
                       })}
                     </div>
@@ -1163,24 +1429,46 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
           </section>
 
           {itemFor && (
-            <section className="panel quality-inline-panel">
-              <p className="detail-label">{itemFor.item ? 'EDITAR ÍTEM' : 'NUEVO ÍTEM'}</p>
-              <form onSubmit={saveItem} className="procedure-form">
-                <label className="procedure-field-wide">Descripción
-                  <input value={itemDraft.description} onChange={(event) => setItemDraft((current) => ({ ...current, description: event.target.value }))} minLength={1} maxLength={2000} required />
+            <div className="drawer-backdrop centered-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setItemFor(null); setItemError('') } }}>
+              <form className="drawer centered-modal company-modal checklist-item-modal" onSubmit={saveItem} noValidate role="dialog" aria-modal="true" aria-labelledby="checklist-item-modal-title" aria-describedby={itemError ? 'checklist-item-error' : undefined}>
+                <div className="company-modal-header">
+                  <div className="company-modal-icon checklist-item-modal-icon">?</div>
+                  <div className="company-modal-title">
+                    <p className="eyebrow">{itemFor.item ? 'EDITAR PREGUNTA' : 'NUEVA PREGUNTA'}</p>
+                    <h2 id="checklist-item-modal-title">{itemFor.item ? 'Editar pregunta de verificación' : 'Crear pregunta manual'}</h2>
+                    <p className="company-modal-subtitle">Redacta una pregunta clara para esta lista. La respuesta quedará disponible cuando la auditoría esté en curso.</p>
+                  </div>
+                  <button type="button" className="icon-button" aria-label="Cerrar" onClick={() => { setItemFor(null); setItemError('') }}>×</button>
+                </div>
+                {itemError && <p id="checklist-item-error" className="form-error" role="alert">{itemError}</p>}
+                <label>Pregunta de verificación
+                  <textarea value={itemDraft.description} onChange={(event) => { setItemError(''); setItemDraft((current) => ({ ...current, description: event.target.value })) }} placeholder="¿Qué debe comprobar el auditor?" minLength={1} maxLength={2000} rows={3} required autoFocus />
                 </label>
-                <label className="procedure-field-wide">Criterio
-                  <input value={itemDraft.criteria} onChange={(event) => setItemDraft((current) => ({ ...current, criteria: event.target.value }))} minLength={1} maxLength={2000} required />
+                <label>Criterio de verificación
+                  <textarea value={itemDraft.criteria} onChange={(event) => { setItemError(''); setItemDraft((current) => ({ ...current, criteria: event.target.value })) }} placeholder="Describe qué debe cumplirse o revisarse." minLength={1} maxLength={2000} rows={3} required />
                 </label>
-                <label>Obligatorio
-                  <input type="checkbox" checked={itemDraft.required} onChange={(event) => setItemDraft((current) => ({ ...current, required: event.target.checked }))} />
-                </label>
-                <div className="procedure-form-actions procedure-field-wide">
-                  <button type="submit" className="button primary" disabled={busy}>Guardar</button>
-                  <button type="button" className="button secondary" onClick={() => setItemFor(null)}>Cancelar</button>
+                <div className="form-grid checklist-item-context-fields">
+                  <label>Fuente documental <span className="field-optional">Opcional</span>
+                    <input value={itemDraft.source} onChange={(event) => setItemDraft((current) => ({ ...current, source: event.target.value }))} placeholder="Manual, procedimiento o registro" maxLength={240} />
+                  </label>
+                  <label>Dimensión <span className="field-optional">Opcional</span>
+                    <select value={itemDraft.dimension} onChange={(event) => setItemDraft((current) => ({ ...current, dimension: event.target.value as ChecklistItemDraft['dimension'] }))}>
+                      <option value="">Sin especificar</option>
+                      {(Object.entries(auditChecklistAIDimensionLabels) as Array<[AuditChecklistAIDimension, string]>).map(([dimension, label]) => <option key={dimension} value={dimension}>{label}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="checklist-item-origin-note">
+                  <span className="checklist-item-origin-mark" aria-hidden="true">{itemDraft.origin === 'CHECKY' ? '✦' : '✎'}</span>
+                  <span><strong>Origen: {itemDraft.origin === 'CHECKY' ? 'CHECKY' : 'MANUAL'}</strong><small>{itemDraft.origin === 'CHECKY' ? 'Se conserva el origen de la sugerencia asistida.' : 'Pregunta redactada por el equipo auditor.'}</small></span>
+                </div>
+                <label className="checklist-item-required-toggle"><input type="checkbox" checked={itemDraft.required} onChange={(event) => setItemDraft((current) => ({ ...current, required: event.target.checked }))} /><span><strong>Pregunta obligatoria</strong><small>Bloquea el cierre hasta que tenga una respuesta.</small></span></label>
+                <div className="drawer-actions">
+                  <button type="button" className="button secondary" onClick={() => { setItemFor(null); setItemError('') }}>Cancelar</button>
+                  <button type="submit" className="button primary" disabled={busy}>{busy ? 'Guardando…' : itemFor.item ? 'Guardar cambios' : 'Crear pregunta'}</button>
                 </div>
               </form>
-            </section>
+            </div>
           )}
         </div>
       )}
@@ -1204,53 +1492,78 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               <p className="muted">Sin hallazgos registrados.</p>
             ) : (
               audit.findings.map((finding) => (
-                <article key={finding.id} className="quality-finding quality-finding-card">
-                  <div className="quality-finding-header">
-                    <div>
-                      <h3>{finding.title}</h3>
-                      <p className="quality-finding-badges">
-                        <span className={`quality-finding-type ${finding.type.toLowerCase()}`}>{findingTypeLabels[finding.type]}</span>
-                        <span className="muted">{findingSeverityLabels[finding.severity]} · {findingStatusLabels[finding.status]}</span>
-                      </p>
-                      {finding.item && (
-                        <p className="muted">Criterio de origen: {finding.item.description.slice(0, 80)}
-                          {' '}
-                          <button type="button" className="text-button" onClick={() => goToChecklistItem(finding.item!.id)}>Ver criterio</button>
-                        </p>
-                      )}
-                      {finding.process && <p className="muted">Proceso: {finding.process.code} · {finding.process.name}</p>}
-                      {finding.procedure && <p className="muted">Procedimiento: {finding.procedure.code} · {finding.procedure.name}</p>}
+                <article key={finding.id} className={`quality-finding quality-finding-card quality-finding-${finding.type.toLowerCase()} quality-finding-${finding.status.toLowerCase()}`}>
+                  <div className="quality-finding-card-main">
+                    <header className="quality-finding-header">
+                      <div className="quality-finding-title-block">
+                        <span className="quality-finding-kicker">Hallazgo</span>
+                        <h3>{finding.title}</h3>
+                        <div className="quality-finding-badges" aria-label="Clasificación del hallazgo">
+                          <span className={`quality-finding-type ${finding.type.toLowerCase()} quality-finding-badge type`}>{findingTypeLabels[finding.type]}</span>
+                          <span className={`quality-finding-badge severity ${finding.severity.toLowerCase()}`}>{findingSeverityLabels[finding.severity]}</span>
+                          <span className={`quality-finding-badge status ${finding.status.toLowerCase()}`}>{findingStatusLabels[finding.status]}</span>
+                        </div>
+                      </div>
                       {!readonly && (
-                        <p className="muted">
-                          {(finding.actions ?? []).length > 0
-                            ? `${(finding.actions ?? []).length} acción(es) · ${(finding.actions ?? []).filter((action) => action.status !== 'COMPLETED' && action.status !== 'CANCELLED').length} abierta(s)`
-                            : 'Sin acciones correctivas.'}
-                          {' '}
-                          <button type="button" className="text-button" onClick={() => selectSection('acciones')}>Ver acciones</button>
-                        </p>
+                        <div className="quality-finding-header-actions">
+                          <div className="quality-finding-transitions">
+                            {findingTransitions[finding.status].map((transition) => (
+                              <button key={transition.to} type="button" className={`button small-button ${transition.to === 'RESOLVED' || transition.to === 'VERIFIED' ? 'primary' : 'secondary'}`} disabled={busy} onClick={() => void changeFindingStatus(finding, transition.to)}>{transition.label}</button>
+                            ))}
+                          </div>
+                          <details className="quality-finding-menu">
+                            <summary className="quality-finding-menu-trigger" aria-label={`Más acciones para ${finding.title}`}><span aria-hidden="true">•••</span><span>Más</span></summary>
+                            <div className="quality-finding-menu-panel">
+                              <button type="button" onClick={() => { setFindingFor({ finding }); setFindingDraft(draftFromFinding(finding)) }}>Editar</button>
+                              <button type="button" onClick={() => startAction(finding.id)}>+ Acción</button>
+                              {finding.status !== 'VERIFIED' && <button type="button" className="danger" onClick={() => void removeFinding(finding)}>Eliminar</button>}
+                            </div>
+                          </details>
+                        </div>
+                      )}
+                    </header>
+
+                    <div className="quality-finding-body">
+                      <p className="quality-finding-description">{finding.description}</p>
+                      {finding.resolution && <p className="quality-finding-note"><strong>Resolución</strong>{finding.resolution}</p>}
+                      {finding.efficacyVerification && <p className="quality-finding-note"><strong>Verificación de eficacia</strong>{finding.efficacyVerification}</p>}
+                      {finding.type === 'NONCONFORMITY' && finding.status === 'RESOLVED' && (!finding.efficacyVerification || finding.efficacyVerification.trim().length < 3) && !readonly && (
+                        <button type="button" className="text-button quality-finding-efficacy-link" onClick={() => { setFindingFor({ finding }); setFindingDraft(draftFromFinding(finding)) }}>Registrar verificación de eficacia</button>
                       )}
                     </div>
-                    <div>
-                      {!readonly && findingTransitions[finding.status].map((transition) => (
-                        <button key={transition.to} type="button" className="text-button" disabled={busy} onClick={() => void changeFindingStatus(finding, transition.to)}>{transition.label}</button>
-                      ))}
-                      {!readonly && (
-                        <>
-                          <button type="button" className="text-button" onClick={() => { setFindingFor({ finding }); setFindingDraft(draftFromFinding(finding)) }}>Editar</button>
-                          <button type="button" className="text-button" onClick={() => startAction(finding.id)}>+ Acción</button>
-                          {finding.status !== 'VERIFIED' && (
-                            <button type="button" className="text-button danger" onClick={() => void removeFinding(finding)}>Eliminar</button>
-                          )}
-                        </>
-                      )}
-                    </div>
+
+                    <section className="quality-finding-origin" aria-label="Origen y seguimiento">
+                      <div className="quality-finding-origin-heading"><span>Origen y seguimiento</span><span className="quality-finding-origin-rule" aria-hidden="true" /></div>
+                      <div className="quality-finding-origin-grid">
+                        <div>
+                          <span>Criterio</span>
+                          {finding.item ? <p title={finding.item.description}>{finding.item.description}</p> : <p className="is-empty">Sin criterio vinculado</p>}
+                          {finding.item && <button type="button" className="text-button" onClick={() => goToChecklistItem(finding.item!.id)}>Ver criterio</button>}
+                        </div>
+                        <div>
+                          <span>Proceso</span>
+                          <p className={finding.process ? '' : 'is-empty'}>{finding.process ? `${finding.process.code} · ${finding.process.name}` : 'No vinculado'}</p>
+                        </div>
+                        <div>
+                          <span>Procedimiento</span>
+                          <p className={finding.procedure ? '' : 'is-empty'}>{finding.procedure ? `${finding.procedure.code} · ${finding.procedure.name}` : 'No vinculado'}</p>
+                        </div>
+                      </div>
+                    </section>
+
+                    <footer className="quality-finding-footer">
+                      <div className="quality-finding-links">
+                        <button type="button" className="quality-finding-link" onClick={() => selectEvidenceContext({ findingId: finding.id })}>
+                          <span className="quality-finding-link-icon" aria-hidden="true">▧</span>
+                          <span>{evidenceCountFor({ findingId: finding.id }) > 0 ? `Evidencias (${evidenceCountFor({ findingId: finding.id })})` : 'Añadir evidencia'}</span>
+                        </button>
+                        <button type="button" className="quality-finding-link" onClick={goToActions}>
+                          <span className="quality-finding-link-icon" aria-hidden="true">↗</span>
+                          <span>{(finding.actions ?? []).length > 0 ? `${(finding.actions ?? []).length} acción(es) · ${(finding.actions ?? []).filter((action) => action.status !== 'COMPLETED' && action.status !== 'CANCELLED').length} abierta(s)` : 'Sin acciones correctivas'}</span>
+                        </button>
+                      </div>
+                    </footer>
                   </div>
-                  <p>{finding.description}</p>
-                  {finding.resolution && <p className="muted">Resolución: {finding.resolution}</p>}
-                  {finding.efficacyVerification && <p className="muted">Verificación de eficacia: {finding.efficacyVerification}</p>}
-                  {finding.type === 'NONCONFORMITY' && finding.status === 'RESOLVED' && (!finding.efficacyVerification || finding.efficacyVerification.trim().length < 3) && !readonly && (
-                    <button type="button" className="text-button" onClick={() => { setFindingFor({ finding }); setFindingDraft(draftFromFinding(finding)) }}>Registrar verificación de eficacia</button>
-                  )}
                 </article>
               ))
             )}
@@ -1335,54 +1648,78 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
           <section id="quality-evidence" className="panel quality-evidence">
             <div className="panel-heading">
               <div>
-                <p className="detail-label">EVIDENCIAS</p>
-                <h2>Enlaces y archivos PDF</h2>
+                <p className="detail-label">ARCHIVOS DE EVIDENCIA</p>
+                <h2>PDFs adjuntos</h2>
+                <p className="quality-evidence-context">
+                  {hasEvidenceFilter ? <><span>Hallazgo asociado</span> {evidenceContextLabel(evidenceFilter!)}</> : `${evidenceCount} PDF(s) adjunto(s)`}
+                </p>
               </div>
-              {!readonly && (
-                <div>
-                  <button type="button" className="button secondary" onClick={() => setEvidenceFor(true)}>+ Enlace</button>
-                  <button type="button" className="button secondary" onClick={() => setUploadFor({})}>+ PDF</button>
-                </div>
-              )}
+              <div>
+                {!readonly && (
+                  <button type="button" className="button primary quality-evidence-add-button" onClick={() => setUploadFor(hasEvidenceFilter ? evidenceFilter : {})}>
+                    <span aria-hidden="true">+</span> Añadir PDF
+                  </button>
+                )}
+              </div>
             </div>
-            {audit.evidences.length === 0 && evidenceFiles.length === 0 ? (
-              <p className="muted">Sin evidencias todavía.</p>
-            ) : (
-              <>
-                <ul className="quality-evidence-list">
-                  {audit.evidences.map((evidence) => (
-                    <li key={evidence.id} className="quality-evidence-card">
-                      <header>
-                        <a href={evidence.url} target="_blank" rel="noreferrer">{evidence.name}</a>
-                        {!readonly && <button type="button" className="text-button danger" onClick={() => void removeEvidence(evidence.id)}>×</button>}
-                      </header>
-                      <p>{evidence.description}</p>
-                      <p className="muted">
-                        Enlace · {evidence.findingId ? `Hallazgo: ${audit.findings.find((finding) => finding.id === evidence.findingId)?.title ?? '—'}` : 'Auditoría'} · {formatMaybeDate(evidence.createdAt)}
-                      </p>
-                    </li>
-                  ))}
-                  {evidenceFiles.map((file) => (
-                    <li key={file.id} className="quality-evidence-card">
-                      <header>
-                        <a href={apiUrl(`/audits/${audit.id}/evidence-files/${file.id}`)}>{file.filename}</a>
-                        {!readonly && <button type="button" className="text-button danger" onClick={() => void removeFile(file.id)}>×</button>}
-                      </header>
-                      <p className="muted">{formatBytes(file.size)} · {file.uploadedBy?.name ?? '—'} · {formatMaybeDate(file.createdAt)}</p>
-                      <p className="muted">{evidenceFileRelationLabel(file, audit)}</p>
-                      {file.storageState !== 'READY' && <p className="muted">Estado de almacenamiento: {file.storageState === 'DELETE_PENDING' ? 'eliminación pendiente' : 'requiere revisión'}</p>}
-                    </li>
+            {activeStorageOperations.length > 0 && (
+              <div className="notice" role="status">
+                <strong>Operaciones de almacenamiento</strong>
+                <ul>
+                  {activeStorageOperations.map((operation) => (
+                    <li key={operation.id}>Operación {operation.operationType === 'UPLOAD' ? 'de carga' : 'de eliminación'}: {storageOperationStatusLabels[operation.status]}{operation.lastErrorCode ? ` · ${operation.lastErrorCode}` : ''}</li>
                   ))}
                 </ul>
-              </>
+              </div>
+            )}
+            {visibleEvidenceCount === 0 ? (
+              <div className="quality-evidence-empty" role="status">
+                <span className="quality-evidence-empty-icon" aria-hidden="true">▧</span>
+                <strong>Aún no hay evidencias adjuntas</strong>
+                <p>Adjunta un PDF para documentar los resultados de esta auditoría.</p>
+              </div>
+            ) : (
+              <ul className="quality-evidence-list">
+                {filteredEvidenceFiles.map((file) => (
+                  <li key={file.id} className="quality-evidence-card">
+                    <div className="quality-evidence-card-header">
+                      <div className="quality-evidence-file-heading">
+                        <span className="quality-evidence-pdf-mark" aria-hidden="true">PDF</span>
+                        <div className="quality-evidence-file-info">
+                          <a className="quality-evidence-file-name" href={apiUrl(`/audits/${audit.id}/evidence-files/${file.id}`)} download={file.filename}>{file.filename}</a>
+                          <p>{formatBytes(file.size)} · {file.uploadedBy?.name ?? '—'} · {formatMaybeDate(file.createdAt)}</p>
+                        </div>
+                      </div>
+                      <span className={`quality-evidence-status quality-evidence-status-${file.storageState.toLowerCase()}`}>
+                        {evidenceStorageStateLabels[file.storageState]}
+                      </span>
+                    </div>
+                    <div className="quality-evidence-relation">
+                      <span>Hallazgo asociado</span>
+                      <strong>{evidenceFileRelationLabel(file, audit)}</strong>
+                    </div>
+                    {file.storageState !== 'READY' && (
+                      <p className={`quality-evidence-storage quality-evidence-storage-${file.storageState.toLowerCase()}`}>
+                        {evidenceStorageStateMessages[file.storageState]}
+                      </p>
+                    )}
+                    <div className="quality-evidence-card-actions">
+                      <a className="button secondary small-button" href={apiUrl(`/audits/${audit.id}/evidence-files/${file.id}`)} download={file.filename}>Descargar</a>
+                      {!readonly && <button type="button" className="button secondary small-button quality-evidence-delete" onClick={() => void removeFile(file.id)}>Eliminar</button>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
             {uploadFor && !readonly && (
               <form onSubmit={uploadFile} className="quality-inline-form">
-                <label>Adjuntar PDF
+                <label>Archivo PDF
                   <input type="file" name="file" accept="application/pdf,.pdf" required />
                 </label>
                 <label>Anclar a
-                  <select onChange={(event) => {
+                  <select
+                    value={uploadFor.findingId ? `finding:${uploadFor.findingId}` : uploadFor.actionId ? `action:${uploadFor.actionId}` : uploadFor.itemId ? `item:${uploadFor.itemId}` : ''}
+                    onChange={(event) => {
                     const value = event.target.value
                     if (value.startsWith('finding:')) setUploadFor({ findingId: value.slice(8) })
                     else if (value.startsWith('action:')) setUploadFor({ actionId: value.slice(7) })
@@ -1402,38 +1739,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 {uploading && <span className="quality-upload-progress" role="status" aria-live="polite">
                   {uploadProgress === null ? 'Subiendo…' : `Subiendo… ${uploadProgress}%`}
                 </span>}
-                <button type="submit" className="button primary" disabled={uploading}>{uploading ? 'Subiendo…' : 'Subir'}</button>
+                <button type="submit" className="button primary" disabled={uploading}>{uploading ? 'Subiendo…' : 'Adjuntar PDF'}</button>
                 <button type="button" className="button secondary" onClick={() => setUploadFor(null)}>Cancelar</button>
               </form>
             )}
           </section>
-
-          {evidenceFor && !readonly && (
-            <section className="panel quality-inline-panel">
-              <p className="detail-label">NUEVO ENLACE DE EVIDENCIA</p>
-              <form onSubmit={saveEvidence} className="procedure-form">
-                <label>Nombre
-                  <input value={evidenceDraft.name} onChange={(event) => setEvidenceDraft((current) => ({ ...current, name: event.target.value }))} minLength={3} maxLength={160} required />
-                </label>
-                <label className="procedure-field-wide">Descripción
-                  <input value={evidenceDraft.description} onChange={(event) => setEvidenceDraft((current) => ({ ...current, description: event.target.value }))} minLength={3} maxLength={2000} required />
-                </label>
-                <label className="procedure-field-wide">URL
-                  <input type="url" value={evidenceDraft.url} onChange={(event) => setEvidenceDraft((current) => ({ ...current, url: event.target.value }))} required />
-                </label>
-                <label>Hallazgo asociado
-                  <select value={evidenceDraft.findingId} onChange={(event) => setEvidenceDraft((current) => ({ ...current, findingId: event.target.value }))}>
-                    <option value="">Auditoría (sin hallazgo)</option>
-                    {audit.findings.map((finding) => <option key={finding.id} value={finding.id}>{finding.title}</option>)}
-                  </select>
-                </label>
-                <div className="procedure-form-actions procedure-field-wide">
-                  <button type="submit" className="button primary" disabled={busy}>Guardar</button>
-                  <button type="button" className="button secondary" onClick={() => setEvidenceFor(false)}>Cancelar</button>
-                </div>
-              </form>
-            </section>
-          )}
         </div>
       )}
 
@@ -1444,25 +1754,34 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               <div>
                 <p className="detail-label">ACCIONES CORRECTIVAS</p>
                 <h2>Seguimiento de acciones</h2>
+                <p className="quality-actions-subtitle">Convierte cada hallazgo en un compromiso claro, asignado y verificable.</p>
               </div>
-              {!readonly && (
-                <button type="button" className="button secondary" disabled={audit.findings.length === 0} onClick={() => startAction(audit.findings[0].id)}>+ Acción</button>
+              {!readonly && audit.findings.length > 0 && allActions.length > 0 && (
+                <button type="button" className="button primary quality-new-action-button" onClick={() => startAction(audit.findings[0].id)}>Nueva acción</button>
               )}
             </div>
             {!readonly && audit.findings.length === 0 && <p className="muted">Registra un hallazgo primero para poder crear acciones correctivas.</p>}
             {overdueActions > 0 && <p className="quality-attention-note" role="status">{overdueActions} acción(es) vencida(s): revisa fechas límite y estados.</p>}
             {allActions.length === 0 ? (
-              <p className="muted">Sin acciones correctivas.</p>
+              <div className="quality-actions-empty" role="status">
+                <span className="quality-actions-empty-icon" aria-hidden="true">↗</span>
+                <strong>Aún no hay acciones correctivas</strong>
+                <p>{audit.findings.length > 0 ? 'Registra la primera acción para dar seguimiento a los hallazgos de esta auditoría.' : 'Cuando exista un hallazgo, podrás asignar y seguir una acción desde aquí.'}</p>
+                {!readonly && audit.findings.length > 0 && (
+                  <button type="button" className="button primary" onClick={() => startAction(audit.findings[0].id)}>Nueva acción</button>
+                )}
+              </div>
             ) : (
               <div className="quality-actions-list">
                 {allActions.map(({ action, finding }) => {
                   const overdue = isAuditActionOverdue(action)
                   return (
-                    <article key={action.id} className={`quality-action-card${overdue ? ' is-overdue' : ''}`}>
-                      <header>
-                        <div>
+                    <article id={`quality-action-${action.id}`} key={action.id} className={`quality-action-card${overdue ? ' is-overdue' : ''}`}>
+                      <header className="quality-action-card-header">
+                        <div className="quality-action-card-title">
+                          <span className="quality-action-kicker">Acción correctiva</span>
                           <strong>{action.title}</strong>
-                          <p className="muted">Hallazgo: {finding.title}</p>
+                          <p><span>Hallazgo asociado</span>{finding.title}</p>
                         </div>
                         <div className="quality-action-badges">
                           {overdue && <span className="quality-overdue-badge">Vencida</span>}
@@ -1471,13 +1790,14 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                           {action.required && <span className="quality-required-badge">Obligatoria</span>}
                         </div>
                       </header>
-                      <p>{action.description}</p>
-                      <p className="muted">
-                        Responsable: {action.responsible ? userOptionLabel(action.responsible) : 'Sin asignar'} · Vence: {formatMaybeDate(action.dueDate)}
-                        {action.completedAt ? ` · Completada ${formatMaybeDate(action.completedAt)}` : ''}
-                      </p>
+                      <p className="quality-action-description">{action.description}</p>
+                      <div className="quality-action-meta">
+                        <div><span>Responsable</span><strong>{action.responsible ? userOptionLabel(action.responsible) : 'Sin asignar'}</strong></div>
+                        <div><span>Fecha límite</span><strong>{formatMaybeDate(action.dueDate)}</strong></div>
+                        {action.completedAt && <div><span>Completada</span><strong>{formatMaybeDate(action.completedAt)}</strong></div>}
+                      </div>
                       {action.progress.length > 0 && (
-                        <ul className="quality-action-progress">
+                        <ul className="quality-action-progress" aria-label="Avances registrados">
                           {action.progress.map((entry) => (
                             <li key={entry.id}>{entry.note}{entry.percent !== null ? ` (${entry.percent}%)` : ''} <span className="muted">{formatMaybeDate(entry.createdAt)}</span></li>
                           ))}
@@ -1486,12 +1806,12 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       {!readonly && (
                         <div className="quality-action-controls">
                           {actionTransitions[action.status].map((transition) => (
-                            <button key={transition.to} type="button" className="text-button" disabled={busy} onClick={() => void applyActionStatus(action, transition.to)}>{transition.label}</button>
+                            <button key={transition.to} type="button" className="button secondary small-button" disabled={busy} onClick={() => void applyActionStatus(action, transition.to)}>{transition.label}</button>
                           ))}
                           {action.status !== 'COMPLETED' && action.status !== 'CANCELLED' && (
                             <>
-                              <button type="button" className="text-button" onClick={() => void addProgress(action)}>+ Avance</button>
-                              <button type="button" className="text-button" onClick={() => { setActionFor({ findingId: finding.id, action }); setActionDraft({ title: action.title, description: action.description, responsibleId: action.responsible?.id ?? '', priority: action.priority, required: action.required, dueDate: action.dueDate ? action.dueDate.slice(0, 10) : '' }) }}>Editar</button>
+                              <button type="button" className="button secondary small-button" onClick={() => void addProgress(action)}>+ Avance</button>
+                              <button type="button" className="button secondary small-button" onClick={() => { setActionFor({ findingId: finding.id, action }); setActionDraft({ title: action.title, description: action.description, responsibleId: action.responsible?.id ?? '', priority: action.priority, required: action.required, dueDate: action.dueDate ? action.dueDate.slice(0, 10) : '' }) }}>Editar</button>
                             </>
                           )}
                         </div>
@@ -1504,77 +1824,130 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
           </section>
 
           {actionFor && (
-            <section className="panel quality-inline-panel">
-              <p className="detail-label">{actionFor.action ? 'EDITAR ACCIÓN' : 'NUEVA ACCIÓN CORRECTIVA'}</p>
-              <form onSubmit={saveAction} className="procedure-form">
-                {!actionFor.action && (
-                  <label>Hallazgo asociado
-                    <select value={actionFor.findingId} onChange={(event) => setActionFor({ ...actionFor, findingId: event.target.value })}>
-                      {audit.findings.map((finding) => <option key={finding.id} value={finding.id}>{finding.title}</option>)}
-                    </select>
+            <div className="drawer-backdrop centered-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setActionFor(null) }}>
+              <form className="drawer centered-modal company-modal quality-action-modal" onSubmit={saveAction} role="dialog" aria-modal="true" aria-labelledby="quality-action-modal-title">
+                <div className="company-modal-header">
+                  <div className="company-modal-icon quality-action-modal-icon" aria-hidden="true">↗</div>
+                  <div className="company-modal-title">
+                    <p className="eyebrow">{actionFor.action ? 'EDITAR ACCIÓN' : 'NUEVA ACCIÓN'}</p>
+                    <h2 id="quality-action-modal-title">{actionFor.action ? 'Editar acción correctiva' : 'Crear acción correctiva'}</h2>
+                    <p className="company-modal-subtitle">Define el siguiente paso, quién lo ejecuta y cuándo debe estar listo.</p>
+                  </div>
+                  <button type="button" className="icon-button" aria-label="Cerrar" onClick={() => setActionFor(null)}>×</button>
+                </div>
+                <div className="quality-action-modal-body">
+                  <label className="quality-action-field-wide">Hallazgo asociado
+                    {actionFor.action ? (
+                      <div className="quality-action-associated" title={audit.findings.find((finding) => finding.id === actionFor.findingId)?.title}>
+                        <span aria-hidden="true">!</span>
+                        <strong>{audit.findings.find((finding) => finding.id === actionFor.findingId)?.title ?? 'Hallazgo no disponible'}</strong>
+                      </div>
+                    ) : (
+                      <select className="quality-action-finding-select" value={actionFor.findingId} onChange={(event) => setActionFor({ ...actionFor, findingId: event.target.value })}>
+                        {audit.findings.map((finding) => <option key={finding.id} value={finding.id}>{finding.title}</option>)}
+                      </select>
+                    )}
                   </label>
-                )}
-                <label className="procedure-field-wide">Título
-                  <input value={actionDraft.title} onChange={(event) => setActionDraft((current) => ({ ...current, title: event.target.value }))} minLength={3} maxLength={200} required />
-                </label>
-                <label className="procedure-field-wide">Descripción
-                  <textarea value={actionDraft.description} onChange={(event) => setActionDraft((current) => ({ ...current, description: event.target.value }))} minLength={1} maxLength={5000} required rows={3} />
-                </label>
-                <label>Responsable
-                  <select value={actionDraft.responsibleId} onChange={(event) => setActionDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
-                    <option value="">Sin asignar</option>
-                     {actionUsers.map((person) => <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>)}
-                  </select>
-                </label>
-                <label>Prioridad
-                  <select value={actionDraft.priority} onChange={(event) => setActionDraft((current) => ({ ...current, priority: event.target.value as ActionDraft['priority'] }))}>
-                    {(Object.keys(actionPriorityLabels) as Array<ActionDraft['priority']>).map((priority) => <option key={priority} value={priority}>{actionPriorityLabels[priority]}</option>)}
-                  </select>
-                </label>
-                <label>Obligatoria
-                  <input type="checkbox" checked={actionDraft.required} onChange={(event) => setActionDraft((current) => ({ ...current, required: event.target.checked }))} />
-                </label>
-                <label>Fecha límite
-                  <input type="date" value={actionDraft.dueDate} onChange={(event) => setActionDraft((current) => ({ ...current, dueDate: event.target.value }))} />
-                </label>
-                <div className="procedure-form-actions procedure-field-wide">
-                  <button type="submit" className="button primary" disabled={busy}>Guardar</button>
+                  <label className="quality-action-field-wide">Título
+                    <input value={actionDraft.title} onChange={(event) => setActionDraft((current) => ({ ...current, title: event.target.value }))} minLength={3} maxLength={200} required autoFocus />
+                  </label>
+                  <label className="quality-action-field-wide">Descripción
+                    <textarea value={actionDraft.description} onChange={(event) => setActionDraft((current) => ({ ...current, description: event.target.value }))} minLength={1} maxLength={5000} required rows={4} placeholder="Describe el resultado esperado y el trabajo necesario." />
+                  </label>
+                  <div className="quality-action-modal-grid">
+                    <label>Responsable
+                      <select value={actionDraft.responsibleId} onChange={(event) => setActionDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
+                        <option value="">Sin asignar</option>
+                        {actionUsers.map((person) => <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>)}
+                      </select>
+                    </label>
+                    <label>Prioridad
+                      <select value={actionDraft.priority} onChange={(event) => setActionDraft((current) => ({ ...current, priority: event.target.value as ActionDraft['priority'] }))}>
+                        {(Object.keys(actionPriorityLabels) as Array<ActionDraft['priority']>).map((priority) => <option key={priority} value={priority}>{actionPriorityLabels[priority]}</option>)}
+                      </select>
+                    </label>
+                    <label>Fecha límite
+                      <input type="date" value={actionDraft.dueDate} onChange={(event) => setActionDraft((current) => ({ ...current, dueDate: event.target.value }))} />
+                    </label>
+                  </div>
+                  <label className="quality-action-required-toggle">
+                    <input type="checkbox" checked={actionDraft.required} onChange={(event) => setActionDraft((current) => ({ ...current, required: event.target.checked }))} />
+                    <span><strong>Acción obligatoria</strong><small>Impide cerrar la auditoría hasta que esta acción esté completada o cancelada.</small></span>
+                  </label>
+                </div>
+                <div className="drawer-actions">
                   <button type="button" className="button secondary" onClick={() => setActionFor(null)}>Cancelar</button>
+                  <button type="submit" className="button primary" disabled={busy}>{busy ? 'Guardando…' : actionFor.action ? 'Guardar cambios' : 'Crear acción'}</button>
                 </div>
               </form>
-            </section>
+            </div>
           )}
         </div>
       )}
 
       {activeSection === 'historial' && (
         <div role="tabpanel" id="quality-panel-historial" aria-labelledby="quality-tab-historial" tabIndex={0} className="quality-tab-panel">
-          <section id="quality-history" className="panel quality-history">
-            <div className="panel-heading">
+          <section id="quality-history" className="panel risk-history-section" aria-label="Historial de la auditoría">
+            <div className="panel-heading risk-history-heading">
               <div>
-                <p className="detail-label">HISTORIAL</p>
-                <h2>Trazabilidad de la auditoría</h2>
+                <p className="detail-label">TRAZABILIDAD</p>
+                <h2>HISTORIAL DE LA AUDITORÍA</h2>
               </div>
-              {!historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit && (
-                <button type="button" className="button secondary" onClick={() => void loadHistory()}>Cargar historial</button>
+              <div className="risk-history-tools">
+                {!historyLoadingForCurrentAudit && historyLoadedForCurrentAudit && <span className="risk-history-count">{history.length} {history.length === 1 ? 'evento' : 'eventos'}</span>}
+                {!historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit && <button type="button" className="button secondary small-button" onClick={() => void loadHistory()}>Cargar historial</button>}
+                <button type="button" className="text-button" aria-expanded={historyOpen} aria-controls="quality-history-list" onClick={() => setHistoryOpen((current) => !current)}>
+                  {historyOpen ? 'Ocultar historial' : 'Ver historial'}
+                </button>
+              </div>
+            </div>
+            <div id="quality-history-list" hidden={!historyOpen}>
+              {historyError ? (
+                <div className="form-error page-alert" role="alert"><span>{historyError}</span><button type="button" className="button secondary small-button" onClick={() => void loadHistory()}>Reintentar</button></div>
+              ) : historyLoadingForCurrentAudit ? (
+                <div className="inline-loading"><span className="loader" />Cargando historial...</div>
+              ) : !historyLoadedForCurrentAudit ? (
+                <div className="risk-history-empty"><span className="history-empty-icon" aria-hidden="true">◷</span><p>El historial es de solo lectura y lo escribe el servidor.</p></div>
+              ) : history.length === 0 ? (
+                <div className="risk-history-empty"><span className="history-empty-icon" aria-hidden="true">◷</span><p>Todavía no hay eventos registrados para esta auditoría.</p></div>
+              ) : (
+                <div className="risk-history-list">
+                  {history.map((event) => {
+                    const comment = typeof event.metadata?.comment === 'string' ? event.metadata.comment : null
+                    const presentation = auditHistoryPresentation(event)
+                    return (
+                      <article key={event.id} className="risk-history-entry">
+                        <div className="risk-history-marker" aria-hidden="true"><span className="risk-history-glyph">{auditHistoryGlyph(event.eventType)}</span></div>
+                        <div className="risk-history-body">
+                          <header className="risk-history-header">
+                            <div>
+                              <span className={`risk-history-chip risk-history-chip-${event.eventType.toLowerCase()}`}>{auditHistoryCategory(event.eventType)}</span>
+                              <h3>{presentation.title}</h3>
+                              {presentation.detail && <p className="quality-history-detail">{presentation.detail}</p>}
+                            </div>
+                            <time dateTime={event.occurredAt}>{dateFormatter.format(new Date(event.occurredAt))}</time>
+                          </header>
+                          <p className="risk-history-actor">Registrado por: <strong>{event.actorName ?? event.actor?.name ?? 'Sistema'}</strong>{event.actorEmail && <span> · {event.actorEmail}</span>}</p>
+                          {event.changes.length > 0 && (
+                            <div className="history-change-list">
+                              {event.changes.map((change) => (
+                                <div className="history-change" key={`${event.id}-${change.field}`}>
+                                  <span>{change.label}</span>
+                                  <strong>{auditHistoryValue(change.previousValue)}</strong>
+                                  <b aria-hidden="true">→</b>
+                                  <strong>{auditHistoryValue(change.newValue)}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {comment && <p className="risk-history-comment">Motivo: «{comment}»</p>}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
               )}
             </div>
-            {historyLoadingForCurrentAudit ? (
-              <LoadingState text="Cargando historial…" />
-            ) : !historyLoadedForCurrentAudit ? (
-              <p className="muted">El historial es de solo lectura y lo escribe el servidor.</p>
-            ) : history.length === 0 ? (
-              <p className="muted">Sin eventos.</p>
-            ) : (
-              <ul className="quality-history-list">
-                {history.map((event) => (
-                  <li key={event.id}>
-                    <strong>{eventLabel(event)}</strong> — {event.summary}
-                    <span className="muted"> · {dateFormatter.format(new Date(event.occurredAt))}{event.actor ? ` · ${event.actor.name}` : ''}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
           </section>
         </div>
       )}

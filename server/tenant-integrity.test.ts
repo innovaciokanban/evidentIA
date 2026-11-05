@@ -38,10 +38,18 @@ describe('PostgreSQL tenant integrity', () => {
     }
 
     const migration = await readFile(new URL('../prisma/migrations/20261025000000_add_company_drive_oauth_operations/migration.sql', import.meta.url), 'utf8')
+    const r2Migration = await readFile(new URL('../prisma/migrations/20261104000000_add_r2_evidence_storage/migration.sql', import.meta.url), 'utf8')
     const triggerSql = migration
       .slice(migration.indexOf('CREATE FUNCTION "lock_evidentia_entities"(entity_keys TEXT[])'))
       .replaceAll('CREATE FUNCTION "', 'CREATE FUNCTION pg_temp."')
       .replaceAll('EXECUTE FUNCTION "', 'EXECUTE FUNCTION pg_temp."')
+      .replaceAll('PERFORM "lock_evidentia_entities"(', 'PERFORM pg_temp."lock_evidentia_entities"(')
+      .replaceAll('SET search_path = pg_catalog, public, pg_temp', 'SET search_path = pg_catalog, pg_temp, public')
+    const r2FunctionStart = r2Migration.indexOf('CREATE OR REPLACE FUNCTION "validate_audit_evidence_file_tenant"()')
+    const r2FunctionEnd = r2Migration.indexOf('$$;', r2FunctionStart) + 3
+    const r2TriggerSql = r2Migration
+      .slice(r2FunctionStart, r2FunctionEnd)
+      .replaceAll('CREATE OR REPLACE FUNCTION "', 'CREATE OR REPLACE FUNCTION pg_temp."')
       .replaceAll('PERFORM "lock_evidentia_entities"(', 'PERFORM pg_temp."lock_evidentia_entities"(')
       .replaceAll('SET search_path = pg_catalog, public, pg_temp', 'SET search_path = pg_catalog, pg_temp, public')
     const client = new Client({ connectionString: process.env.DATABASE_URL })
@@ -51,7 +59,7 @@ describe('PostgreSQL tenant integrity', () => {
       await client.query('BEGIN')
       began = true
       await client.query('SET LOCAL search_path TO pg_temp, public')
-      await client.query('CREATE TYPE "EvidenceStorageProvider" AS ENUM (\'LOCAL\', \'GOOGLE_DRIVE\')')
+      await client.query('CREATE TYPE "EvidenceStorageProvider" AS ENUM (\'LOCAL\', \'GOOGLE_DRIVE\', \'R2\')')
       await client.query('CREATE TYPE "EvidenceStorageOperationType" AS ENUM (\'UPLOAD\', \'FILE_DELETE\', \'AUDIT_DELETE\')')
       await client.query('CREATE TEMP TABLE "Company" ("id" text primary key)')
       await client.query('CREATE TEMP TABLE "Process" ("id" text primary key, "companyId" text not null)')
@@ -60,14 +68,17 @@ describe('PostgreSQL tenant integrity', () => {
       await client.query('CREATE TEMP TABLE "AuditEvidenceFile" ("id" text primary key, "auditId" text not null, "storageProvider" "EvidenceStorageProvider" not null, "driveConnectionId" text)')
       await client.query('CREATE TEMP TABLE "EvidenceStorageOperation" ("id" text primary key, "companyId" text not null, "auditId" text, "evidenceFileId" text, "connectionId" text, "operationType" "EvidenceStorageOperationType" not null)')
       await client.query(triggerSql)
+      await client.query(r2TriggerSql)
       await client.query('INSERT INTO "Company" VALUES (\'company-a\'), (\'company-b\')')
       await client.query('INSERT INTO "Process" VALUES (\'process-a\', \'company-a\'), (\'process-b\', \'company-b\')')
       await client.query('INSERT INTO "Audit" VALUES (\'audit-a\', \'process-a\'), (\'audit-b\', \'process-b\')')
       await client.query('INSERT INTO "CompanyGoogleDriveConnection" VALUES (\'connection-a\', \'company-a\'), (\'connection-b\', \'company-b\')')
       await client.query('INSERT INTO "AuditEvidenceFile" VALUES (\'local-a\', \'audit-a\', \'LOCAL\', NULL)')
+      await client.query('INSERT INTO "AuditEvidenceFile" VALUES (\'r2-a\', \'audit-a\', \'R2\', NULL)')
       await client.query('INSERT INTO "EvidenceStorageOperation" VALUES (\'local-op\', \'company-a\', \'audit-a\', \'local-a\', NULL, \'FILE_DELETE\')')
 
       await expectTenantViolation(client, 'INSERT INTO "AuditEvidenceFile" VALUES ($1, $2, $3, $4)', ['cross-evidence', 'audit-a', 'GOOGLE_DRIVE', 'connection-b'])
+      await expectTenantViolation(client, 'INSERT INTO "AuditEvidenceFile" VALUES ($1, $2, $3, $4)', ['r2-drive-connection', 'audit-a', 'R2', 'connection-b'])
       await expectTenantViolation(client, 'INSERT INTO "EvidenceStorageOperation" VALUES ($1, $2, $3, $4, $5, $6)', ['cross-audit-operation', 'company-a', 'audit-b', null, null, 'AUDIT_DELETE'])
       await expectTenantViolation(client, 'INSERT INTO "EvidenceStorageOperation" VALUES ($1, $2, $3, $4, $5, $6)', ['cross-connection-operation', 'company-a', 'audit-a', null, 'connection-b', 'AUDIT_DELETE'])
     } finally {

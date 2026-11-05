@@ -94,7 +94,7 @@ const audit = {
     },
   ],
   evidences: [{ id: 'evidence-1', name: 'Acta de la reunión', description: 'Acta firmada.', url: 'https://example.test/acta', findingId: 'finding-1', createdAt: '2026-03-04T00:00:00.000Z' }],
-  evidenceFiles: [{ id: 'file-1', filename: 'informe-calidad.pdf', originalName: 'informe.pdf', size: 2048, mimeType: 'application/pdf', findingId: 'finding-1', actionId: null, itemId: null, createdAt: '2026-03-06T00:00:00.000Z', uploadedBy: { id: 'user-1', name: 'Laura Gómez' } }],
+  evidenceFiles: [{ id: 'file-1', filename: 'informe-calidad.pdf', originalName: 'informe.pdf', size: 2048, mimeType: 'application/pdf', findingId: 'finding-1', actionId: null, itemId: null, storageProvider: 'LOCAL', storageState: 'READY', createdAt: '2026-03-06T00:00:00.000Z', uploadedBy: { id: 'user-1', name: 'Laura Gómez' } }],
   checklistProgress: { total: 2, completed: 1, requiredPending: 1 },
   indicators: null,
   createdAt: '2026-03-01T00:00:00.000Z',
@@ -150,7 +150,14 @@ describe('AuditDetailView rendering', () => {
     expect(markup).toContain('is-non-conform')
     expect(markup).toContain('is-required-pending')
     expect(markup).toContain('Falta anexo.')
-    expect(markup).toContain('+ Hallazgo')
+    expect(markup).toContain('Criterio de verificación')
+    expect(markup).toContain('Fuente documental')
+    expect(markup).toContain('Editar respuesta')
+    expect(markup).toContain('Gestionar hallazgo')
+    expect(markup).toContain('Nueva pregunta')
+    expect(markup).toContain('Sugerir con IA-Checky')
+    expect(markup).toContain('MANUAL')
+    expect(markup).not.toContain('>Evidencia<')
   })
 
   it('keeps planned checklist responses read-only while allowing preparation controls', () => {
@@ -164,8 +171,25 @@ describe('AuditDetailView rendering', () => {
   it('renders the Checky generation action only in the editable checklist', () => {
     const editable = render({ initialSection: 'checklist' })
     const readonly = render({ initialSection: 'checklist', canWrite: false })
-    expect(editable).toContain('Generar preguntas con IA-Checky')
-    expect(readonly).not.toContain('Generar preguntas con IA-Checky')
+    expect(editable).toContain('Sugerir con IA-Checky')
+    expect(readonly).not.toContain('Sugerir con IA-Checky')
+    expect(editable).toContain('Nueva pregunta')
+    expect(readonly).not.toContain('Nueva pregunta')
+  })
+
+  it('identifies Checky questions from the persisted checklist contract', () => {
+    const checkyAudit = {
+      ...audit,
+      checklists: [{
+        ...audit.checklists?.[0],
+        items: [{
+          ...audit.checklists?.[0].items[0],
+          criteria: 'Evidencia esperada: Registro firmado\nFuente: Procedimiento de control\nDimensión: Cumplimiento',
+        }],
+      }],
+    } as unknown as Audit
+    const markup = render({ audit: checkyAudit, initialSection: 'checklist' })
+    expect(markup).toContain('>CHECKY<')
   })
 
   it('renders findings with type badges, efficacy alert and link back to the criterion', () => {
@@ -181,17 +205,40 @@ describe('AuditDetailView rendering', () => {
 
   it('renders the audit history section', () => {
     const markup = render({ initialSection: 'historial' })
-    expect(markup).toContain('Trazabilidad de la auditoría')
+    expect(markup).toContain('risk-history-section')
+    expect(markup).toContain('HISTORIAL DE LA AUDITORÍA')
     expect(markup).toContain('Cargar historial')
   })
 
-  it('returns to the summary when a removed section is selected', () => {
+  it('keeps evidence and actions accessible contextually without adding primary tabs', () => {
     const actionsMarkup = render({ initialSection: 'acciones' })
     const evidenceMarkup = render({ initialSection: 'evidencias' })
-    expect(actionsMarkup).toContain('id="quality-panel-resumen"')
-    expect(actionsMarkup).not.toContain('id="quality-panel-acciones"')
-    expect(evidenceMarkup).toContain('id="quality-panel-resumen"')
-    expect(evidenceMarkup).not.toContain('id="quality-panel-evidencias"')
+    expect(actionsMarkup).toContain('id="quality-panel-acciones"')
+    expect(actionsMarkup).toContain('Seguimiento de acciones')
+    expect(actionsMarkup).toContain('Nueva acción')
+    expect(actionsMarkup).toContain('Hallazgo asociado')
+    expect(actionsMarkup).toContain('Responsable')
+    expect(actionsMarkup).toContain('Fecha límite')
+    expect(actionsMarkup).toContain('+ Avance')
+    expect(actionsMarkup).toContain('Editar')
+    expect(evidenceMarkup).toContain('id="quality-panel-evidencias"')
+    expect(evidenceMarkup).toContain('PDFs adjuntos')
+    expect(evidenceMarkup).toContain('Añadir PDF')
+    expect(evidenceMarkup).toContain('informe-calidad.pdf')
+    expect(evidenceMarkup).toContain('Hallazgo asociado')
+    expect(evidenceMarkup).toContain('Descargar')
+    expect(evidenceMarkup).toContain('Eliminar')
+    expect(evidenceMarkup).not.toContain('+ Enlace')
+    expect(evidenceMarkup).not.toContain('Ver todas')
+    expect(evidenceMarkup).not.toContain('Acta de la reunión')
+  })
+
+  it('renders the PDF evidence empty state without link actions', () => {
+    const markup = render({ audit: { ...audit, evidences: [], evidenceFiles: [] } as Audit, initialSection: 'evidencias' })
+    expect(markup).toContain('Aún no hay evidencias adjuntas')
+    expect(markup).toContain('Adjunta un PDF para documentar los resultados de esta auditoría.')
+    expect(markup).toContain('Añadir PDF')
+    expect(markup).not.toContain('+ Enlace')
   })
 
   it('hides write controls when the user cannot edit the audit', () => {

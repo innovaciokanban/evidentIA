@@ -419,6 +419,9 @@ export const auditChecklistItemUpdateSchema = z.object({
   criteria: auditText(2000).optional(),
   result: auditChecklistResultSchema.optional(),
   observations: z.string().trim().max(2000).nullable().optional(),
+  // Al abandonar NON_CONFORM el cliente debe confirmar que revisó el hallazgo asociado.
+  // La confirmación no cambia ni elimina el hallazgo.
+  findingReviewConfirmed: z.boolean().optional(),
   required: z.boolean().optional(),
   position: z.coerce.number().int().min(0).max(10000).optional(),
 }).refine(

@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 /**
  * Gate de evidencia de las actividades de mitigación: una actividad que pertenece a un plan de
  * mitigación de un riesgo (ActionPlan.riskId con valor) no puede marcarse como terminada sin
- * tener al menos un PDF local o una referencia PDF de Google Drive en el ticket que la representa.
+ * tener al menos un PDF en el ticket que la representa.
  *
  * Las reglas puras (¿cuándo aplica el gate?) viven aquí para poder probarlas sin base de datos ni
  * HTTP; la lectura del plan y del conteo de evidencias también, para que app.ts solo decida el

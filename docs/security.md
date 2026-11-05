@@ -75,7 +75,7 @@ Todo recurso por ID se valida contra el alcance del usuario antes de leer/escrib
 - `POST /api/auth/login` y `POST /api/auth/logout` requieren el mismo `Origin` aunque todavía no exista cookie, para evitar login CSRF y logout CSRF.
 - `Sec-Fetch-Site: cross-site` se rechaza como defensa adicional; Fetch Metadata no sustituye la validación de `Origin`.
 - Una petición solo con `Authorization: Bearer` no lleva credenciales de navegador automáticas y puede operar sin `Origin`. Si incluye cookie y Bearer, la cookie tiene prioridad en autenticación y se aplica CSRF.
-- El callback `GET /api/google-drive/oauth/callback` no usa la compuerta de métodos mutantes: es una navegación OAuth legítima y exige sesión, `state` de un solo uso, `sessionId` e iniciador coincidentes, expiración válida y PKCE.
+- Las rutas OAuth de Google Drive están retiradas y responden `410`; no se aceptan nuevos estados ni credenciales OAuth.
 - El frontend usa `credentials: include`; el navegador envía `Origin` automáticamente. No se añade ningún secreto CSRF al frontend.
 
 ## Cabeceras de seguridad
@@ -105,16 +105,14 @@ Aplicadas globalmente:
 
 - Subida en `multipart/form-data` leída a mano con tope de **11 MB por petición** (se corta y drena el resto) y **10 MB por archivo**.
 - Validación estricta **antes de tocar disco**: extensión `.pdf`, MIME `application/pdf`, firma `%PDF-` y tamaño > 0 (`server/evidence-storage.ts`); si algo falla no queda ni fila ni archivo.
-- **Sin path traversal**: el nombre en disco es `randomUUID().pdf`; el nombre original se sanea (solo `basename`, sin comillas ni caracteres de control, ≤150 caracteres) y la API solo expone ese nombre saneado.
-- **Fuera del árbol web**: los archivos viven en `EVIDENCE_UPLOAD_DIR` (default `var/evidence`, ignorado por git); en producción debe ser un volumen persistente.
-- **Drive privado**: cuando `EVIDENCE_STORAGE_PROVIDER=google-drive`, los nuevos PDF se guardan en la jerarquía privada raíz/empresa/auditoría. La API no acepta ids de carpeta desde el cliente, no crea permisos públicos y sirve el contenido mediante una ruta autenticada.
-- **OAuth por empresa**: cada empresa autoriza su propia cuenta Drive con el alcance mínimo `drive.file`; no existe una cuenta de servicio global ni delegación de dominio.
-- **Credenciales server-side**: el refresh token se cifra con `OAUTH_TOKEN_ENCRYPTION_KEY` antes de persistirse; nunca se envía al navegador ni forma parte de una respuesta HTTP. La conexión usada queda referenciada en cada evidencia para evitar cruces entre empresas.
+- **Sin path traversal**: en local el nombre es `randomUUID().pdf`; en R2 la clave se genera en `evidentia/<companyId>/<module>/<resourceId>/<uuid>.pdf`. El nombre original se sanea y nunca se usa como ruta.
+- **Almacenamiento privado**: `local` usa `EVIDENCE_UPLOAD_DIR`; `r2` usa un bucket privado con credenciales solo server-side. No se construyen URLs públicas de objetos.
+- **Aislamiento tenant**: las claves R2 incluyen empresa, módulo y recurso; la autorización sigue ocurriendo antes de cada lectura, descarga o eliminación.
 - **Autorización por ticket**: subir, listar, descargar y borrar exigen sesión + acceso al ticket (`canAccessTicket`); `plan-evidence` exige sesión + acceso al proceso y alcance del usuario sobre los tickets. El nombre en disco (`storedName`) jamás viaja en una respuesta.
-- **Referencias Drive de tickets**: Google Picker recibe únicamente un access token temporal de la conexión Drive de la empresa, nunca el refresh token. `setParent` solo orienta la interfaz: el servidor verifica la ascendencia real del archivo hasta la raíz efectiva (la de `GOOGLE_DRIVE_EVIDENCE_ROOT_FOLDER_ID` o, si con `drive.file` no es visible, la raíz creada en la conexión OAuth, validada por tenant) y la subcarpeta marcada para la empresa, además de validar que sea PDF. Un 403/404 solo invalida la cadena si aún no se han alcanzado la raíz y la subcarpeta requeridas; los motivos de rechazo se registran como etiquetas sin identificadores. Persiste solo metadatos y `driveFileId`; eliminar la referencia no elimina ni cambia el archivo en Drive.
 - Descarga con `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` y `Cache-Control: private, no-store`.
 - **Limpieza ordenada**: al subir se escribe el disco primero y se retira si falla la fila; al borrar se elimina la fila primero y después el archivo (un unlink fallido queda en `console.error`, nunca una fila que promete un archivo borrado). `DELETE /api/tickets/:id` elimina las evidencias en cascada.
-- **Gate de cierre**: cerrar una actividad cuyo plan está ligado a un riesgo sin PDF local ni referencia PDF de Drive responde `409` con `MITIGATION_EVIDENCE_REQUIRED` y revierte la transacción; las canceladas no exigen evidencia.
+- **Gate de cierre**: cerrar una actividad cuyo plan está ligado a un riesgo sin PDF responde `409` con `MITIGATION_EVIDENCE_REQUIRED` y revierte la transacción; las canceladas no exigen evidencia.
+- **Históricos Drive**: las filas históricas se conservan durante la retirada; no se ejecuta una migración destructiva ni se eliminan objetos remotos en esta fase.
 
 ## Secretos
 

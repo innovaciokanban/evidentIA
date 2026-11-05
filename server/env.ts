@@ -15,10 +15,14 @@ const envSchema = z
     TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
     OPENAI_API_KEY: z.string().min(1).optional(),
     OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
-    EVIDENCE_STORAGE_PROVIDER: z.enum(['local', 'google-drive']).default('local'),
+    EVIDENCE_STORAGE_PROVIDER: z.enum(['local', 'r2']).default('local'),
     // Directorio privado (fuera de la raíz pública y de Vite) donde se guardan los PDF de
     // evidencia de los tickets. En producción debe apuntar a un volumen persistente.
     EVIDENCE_UPLOAD_DIR: z.string().min(1).default('var/evidence'),
+    R2_ENDPOINT: z.string().url().refine((value) => value.startsWith('https://'), 'R2 endpoint must use HTTPS').optional(),
+    R2_BUCKET: z.string().min(1).optional(),
+    R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+    R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
     GOOGLE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
     GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
@@ -41,13 +45,11 @@ const envSchema = z
         context.addIssue({ code: 'custom', path: ['FRONTEND_URL'], message: 'FRONTEND_URL must be set explicitly in production' })
       }
     }
-    if (value.EVIDENCE_STORAGE_PROVIDER === 'google-drive') {
-      if (!value.GOOGLE_OAUTH_CLIENT_ID || !value.GOOGLE_OAUTH_CLIENT_SECRET || !value.GOOGLE_OAUTH_REDIRECT_URI) {
-        context.addIssue({ code: 'custom', path: ['GOOGLE_OAUTH_CLIENT_ID'], message: 'Google Drive requires the OAuth client configuration' })
-      }
-      if (!value.OAUTH_TOKEN_ENCRYPTION_KEY || Buffer.from(value.OAUTH_TOKEN_ENCRYPTION_KEY, 'base64').length !== 32) {
-        context.addIssue({ code: 'custom', path: ['OAUTH_TOKEN_ENCRYPTION_KEY'], message: 'OAUTH_TOKEN_ENCRYPTION_KEY must be a base64 encoded 32-byte key' })
-      }
+    if (value.EVIDENCE_STORAGE_PROVIDER === 'r2') {
+      if (!value.R2_ENDPOINT) context.addIssue({ code: 'custom', path: ['R2_ENDPOINT'], message: 'R2 requires an endpoint' })
+      if (!value.R2_BUCKET) context.addIssue({ code: 'custom', path: ['R2_BUCKET'], message: 'R2 requires a bucket' })
+      if (!value.R2_ACCESS_KEY_ID) context.addIssue({ code: 'custom', path: ['R2_ACCESS_KEY_ID'], message: 'R2 requires an access key' })
+      if (!value.R2_SECRET_ACCESS_KEY) context.addIssue({ code: 'custom', path: ['R2_SECRET_ACCESS_KEY'], message: 'R2 requires a secret key' })
     }
   })
 

@@ -755,10 +755,10 @@ describe('environment validation', () => {
     expect(result.success ? result.data.TRUST_PROXY_HOPS : -1).toBe(0)
   })
 
-  it('requires Drive credentials whenever the Drive evidence provider is selected', () => {
-    const result = envSchema.safeParse({ EVIDENCE_STORAGE_PROVIDER: 'google-drive' })
+  it('requires R2 credentials whenever the R2 evidence provider is selected', () => {
+    const result = envSchema.safeParse({ EVIDENCE_STORAGE_PROVIDER: 'r2' })
     expect(result.success).toBe(false)
-    expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['GOOGLE_OAUTH_CLIENT_ID', 'OAUTH_TOKEN_ENCRYPTION_KEY']))
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['R2_ENDPOINT', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']))
   })
 })
 
@@ -1321,18 +1321,18 @@ describe('tickets API', () => {
     expect((await foreignAgent.get(`/api/tickets/${created.body.ticket.id}/history`)).status).toBe(404)
   })
 
-  it('lists Drive references only for users who can access the ticket', async () => {
+  it('rejects retired Drive reference endpoints without touching historical data', async () => {
     const db = makeDb('COMPANY_USER')
     const agent = request.agent(createApp(db))
     await agent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
     const visible = await agent.get(`/api/tickets/${ticket.id}/drive-evidence`)
-    expect(visible.status).toBe(200)
-    expect(visible.body).toEqual({ references: [] })
+    expect(visible.status).toBe(410)
+    expect(visible.body.reason).toBe('GOOGLE_DRIVE_RETIRED')
 
     const foreignDb = makeDb('COMPANY_USER', member.id, null, otherCompanyId)
     const foreignAgent = request.agent(createApp(foreignDb))
     await foreignAgent.post('/api/auth/login').send({ email: member.email, password: 'Password123!' })
-    expect((await foreignAgent.get(`/api/tickets/${ticket.id}/drive-evidence`)).status).toBe(404)
+    expect((await foreignAgent.get(`/api/tickets/${ticket.id}/drive-evidence`)).status).toBe(410)
   })
 })
 

@@ -3,6 +3,7 @@ import type { Audit, AuditCorrectiveAction } from '../../types'
 import {
   actionStatusLabels,
   actionTransitions,
+  auditEvidenceStorageSummary,
   auditCloseBlockers,
   auditChecklistAIContext,
   auditExecutionSummary,
@@ -98,7 +99,7 @@ describe('quality.model', () => {
     expect(emptyAuditDraft).toMatchObject({ title: '', auditType: '', leadAuditorId: '', responsibleId: '', processIds: [], procedureIds: [] })
     expect(emptyFindingDraft).toMatchObject({ title: '', type: 'NONCONFORMITY', severity: 'MINOR', itemId: '', processId: '', procedureId: '' })
     expect(emptyActionDraft).toMatchObject({ title: '', priority: 'MEDIUM', required: true })
-    expect(emptyChecklistItemDraft).toMatchObject({ description: '', criteria: '', required: true })
+    expect(emptyChecklistItemDraft).toMatchObject({ description: '', criteria: '', source: '', dimension: '', origin: 'MANUAL', required: true })
     expect(formatBytes(2048)).toBe('2.0 KB')
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
     expect(eventLabel({ eventType: 'AUDIT_CREATED' } as never)).toContain('Auditoría')
@@ -230,6 +231,25 @@ describe('quality.model', () => {
     expect(auditCloseBlockers(clean)).toEqual([])
   })
 
+  it('blocks nonconform checklist items without a valid linked finding and pending evidence storage', () => {
+    const audit = auditWith({
+      checklists: [{ id: 'checklist-1', name: 'Lista', items: [item({ result: 'NON_CONFORM' })] }],
+      evidenceFiles: [
+        { id: 'file-ready', storageState: 'READY' },
+        { id: 'file-pending', storageState: 'PENDING' },
+        { id: 'file-failed', storageState: 'FAILED' },
+        { id: 'file-delete', storageState: 'DELETE_PENDING' },
+      ],
+    })
+    expect(auditCloseBlockers(audit)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'CHECKLIST_FINDING_MISSING', count: 1, section: 'hallazgos' }),
+      expect.objectContaining({ reason: 'EVIDENCE_PENDING', count: 1, section: 'evidencias' }),
+      expect.objectContaining({ reason: 'EVIDENCE_FAILED', count: 1, section: 'evidencias' }),
+      expect.objectContaining({ reason: 'EVIDENCE_DELETE_PENDING', count: 1, section: 'evidencias' }),
+    ]))
+    expect(auditEvidenceStorageSummary(audit)).toEqual({ READY: 1, PENDING: 1, FAILED: 1, DELETE_PENDING: 1 })
+  })
+
   it('summarizes execution progress for the workspace and close panel', () => {
     const today = new Date('2026-06-15T12:00:00.000Z')
     const audit = auditWith({
@@ -255,6 +275,8 @@ describe('quality.model', () => {
       itemsTotal: 5,
       itemsEvaluated: 3,
       itemsPending: 2,
+      itemsRequiredTotal: 3,
+      itemsRequiredEvaluated: 2,
       itemsRequiredPending: 1,
       conform: 1,
       nonConform: 1,

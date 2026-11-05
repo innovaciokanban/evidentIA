@@ -260,6 +260,7 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findMany: vi.fn(async () => []),
     },
     auditEvidenceFile: {
+      count: vi.fn(async () => 0),
       findMany: vi.fn(async () => []),
       findFirst: vi.fn(async () => null),
       deleteMany: vi.fn(async () => ({ count: 0 })),
