@@ -28,13 +28,12 @@ describe('EvaluationCard', () => {
     expect(markup).toContain('risk-level-word">Bajo</span>')
   })
 
-  it('alinea impacto y probabilidad dentro de la misma retícula con dos selectores', () => {
+  it('alinea probabilidad e impacto dentro de la misma retícula con dos selectores', () => {
     const markup = renderToStaticMarkup(
       <EvaluationCard title="RIESGO INHERENTE" variant="inherent" impact="3" probability="3" onImpact={noop} onProbability={noop} disabled={false} />,
     )
     const body = markup.slice(markup.indexOf('risk-evaluation-body'))
-    expect(body).toContain('Impacto<select')
-    expect(body).toContain('Probabilidad<select')
+    expect(body.indexOf('Probabilidad<select')).toBeLessThan(body.indexOf('Impacto<select'))
     expect(body.match(/<select/g)).toHaveLength(2)
     // Las opciones de la matriz no cambian: 5 impactos + 5 probabilidades con sus etiquetas.
     expect(body.match(/<option/g)).toHaveLength(10)

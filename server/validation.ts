@@ -751,9 +751,6 @@ export const strategyTasksCreateSchema = z.object({
   })).min(1).max(50),
 })
 
-export const crossTypeSchema = z.enum(['FO', 'DO', 'FA', 'DA'])
-export const crossOriginSchema = z.enum(['USER', 'AI', 'BOTH'])
-
 export const strategicObjectiveStatusSchema = z.enum(['DRAFT', 'APPROVED'])
 export const strategicObjectiveOriginSchema = z.enum(['MANUAL', 'CHECKY'])
 export const strategicObjectiveStrategySourceSchema = z.enum(['AI_ANALYSIS', 'CHECKY', 'STRATEGIC_CROSS'])
@@ -832,6 +829,9 @@ export const strategicObjectiveHistoryQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
   eventType: strategicObjectiveHistoryEventTypeSchema.optional(),
 })
+
+export const crossTypeSchema = z.enum(['FO', 'DO', 'FA', 'DA'])
+export const crossOriginSchema = z.enum(['USER', 'AI', 'BOTH'])
 
 export const crossCreateSchema = z.object({
   // Los factores DOFA son SWOTItem: solo nacen desde Prisma, nunca desde el seed, así que sus ids

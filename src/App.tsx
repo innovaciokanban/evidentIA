@@ -11,6 +11,7 @@ import { DiagnosticStatusChart } from './components/charts/DiagnosticStatusChart
 import { RecommendationChart } from './components/charts/RecommendationChart'
 import { ProcessesPage } from './components/processes/ProcessesPage'
 import { QualityPage } from './components/quality/QualityPage'
+import { LearningPage } from './components/learning/LearningPage'
 import { ApprovalsHub } from './components/approvals/ApprovalsHub'
 import { NotificationsBell } from './components/approvals/NotificationsBell'
 import { buildCrossStrategyEntries, crossStrategyGroupLabels, crossTypeForPair, isCompatibleCrossPair, isWeightableStrategySource } from './checky-crosses'
@@ -29,7 +30,7 @@ import logo from './assets/logokanban.png'
 import checkyImage from './assets/Aprobado por checky.png'
 import './App.css'
 
-type View = 'dashboard' | 'tickets' | 'approvals' | 'companies' | 'diagnostics' | 'processes' | 'quality' | 'swot' | 'recommendations' | 'action-plans' | 'users'
+type View = 'dashboard' | 'tickets' | 'approvals' | 'companies' | 'diagnostics' | 'processes' | 'quality' | 'learning' | 'swot' | 'recommendations' | 'action-plans' | 'users'
 
 type DiagStage = 'diagnostico' | 'dofa' | 'recomendaciones' | 'planes'
 
@@ -327,6 +328,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     diagnostics: 'Análisis estratégico',
     processes: 'Gestión por Procesos',
     quality: 'Aseguramiento de Calidad',
+    learning: 'E-Learning',
     swot: 'Matriz DOFA',
     recommendations: 'Recomendaciones',
     'action-plans': 'Planes de acción',
@@ -379,6 +381,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <button className={`nav-item ${view === 'quality' ? 'active' : ''}`} onClick={() => navigateToView('quality')}>
             <span className="nav-icon">☑</span> Aseguramiento de Calidad
           </button>
+          <button className={`nav-item ${view === 'learning' ? 'active' : ''}`} onClick={() => navigateToView('learning')}>
+            <span className="nav-icon">✦</span> E-Learning
+          </button>
           <p className="nav-heading">OPERACIÓN</p>
           <button className={`nav-item ${view === 'tickets' ? 'active' : ''}`} onClick={() => navigateToView('tickets')}>
             <span className="nav-icon">▤</span> Tickets
@@ -421,6 +426,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         {view === 'diagnostics' && <DiagnosticsPage user={user} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />}
         {view === 'processes' && <ProcessesPage user={user} riskIntent={riskIntent} onConsumeRiskIntent={consumeRiskIntent} onOpenApproval={openApproval} onOpenTicket={openTicket} onOpenCompanyDiagnostics={openCompanyDiagnostics} />}
         {view === 'quality' && <QualityPage user={user} />}
+        {view === 'learning' && <LearningPage user={user} />}
         {(view === 'companies' || view === 'swot' || view === 'recommendations' || view === 'action-plans') && (
           <Companies user={user} intent={companiesIntent} onConsumeIntent={consumeCompaniesIntent} diagnosticActive={diagnosticActive} onDiagnosticActiveChange={setDiagnosticActive} diagStage={diagStage} onDiagStageChange={setDiagStage} />
         )}

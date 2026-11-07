@@ -12,6 +12,20 @@ enum Role {
   COMPANY_USER
 }
 
+enum LearningCourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum LearningLessonType {
+  TEXT
+  VIDEO
+  AUDIO
+  DOCUMENT
+  IMAGE
+}
+
 enum UserStatusEventType {
   DEACTIVATED
   REACTIVATED
@@ -317,6 +331,12 @@ model User {
   createdStrategicObjectives    StrategicObjective[]       @relation("CreatedStrategicObjectives")
   strategicObjectiveLinks       StrategicObjectiveStrategy[] @relation("LinkedStrategicObjectiveStrategies")
   strategicObjectiveHistory     StrategicObjectiveHistory[] @relation("StrategicObjectiveHistoryActors")
+  createdLearningCourses        LearningCourse[]            @relation("LearningCourseCreators")
+  updatedLearningCourses        LearningCourse[]            @relation("LearningCourseUpdaters")
+  createdLearningVersions       LearningCourseVersion[]     @relation("LearningVersionCreators")
+  updatedLearningVersions       LearningCourseVersion[]     @relation("LearningVersionUpdaters")
+  learningEnrollments            LearningEnrollment[]        @relation("LearningEnrollmentUsers")
+  assignedLearningEnrollments    LearningEnrollment[]        @relation("LearningEnrollmentAssigners")
   googleDriveOAuthStates        GoogleDriveOAuthState[]
   statusEvents                  UserStatusEvent[]          @relation("UserStatusChanges")
   performedStatusEvents         UserStatusEvent[]          @relation("UserStatusActors")
@@ -533,6 +553,8 @@ model Company {
   ticketDriveReferences  TicketDriveReference[]
   googleDriveOAuthStates GoogleDriveOAuthState[]
   storageOperations      EvidenceStorageOperation[]
+  learningCourses        LearningCourse[]
+  learningEnrollments    LearningEnrollment[]
   createdAt              DateTime                       @default(now())
   updatedAt              DateTime                       @updatedAt
 
@@ -1723,4 +1745,101 @@ model EvidenceStorageOperation {
   @@index([leaseUntil])
   @@index([companyId, auditId])
   @@index([evidenceFileId])
+}
+
+model LearningCourse {
+  id          String              @id @default(cuid())
+  companyId   String
+  title       String
+  description String
+  category    String
+  status      LearningCourseStatus @default(DRAFT)
+  createdById String
+  updatedById String
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy   User                @relation("LearningCourseCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy   User                @relation("LearningCourseUpdaters", fields: [updatedById], references: [id], onDelete: Restrict)
+  enrollments LearningEnrollment[]
+  versions    LearningCourseVersion[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([companyId, status])
+  @@index([companyId, category])
+  @@index([updatedAt])
+}
+
+model LearningCourseVersion {
+  id            String              @id @default(cuid())
+  courseId      String
+  versionNumber Int
+  status        LearningCourseStatus @default(DRAFT)
+  changeSummary String?
+  publishedAt   DateTime?
+  createdById   String
+  updatedById   String
+  course        LearningCourse       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdBy     User                 @relation("LearningVersionCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy     User                 @relation("LearningVersionUpdaters", fields: [updatedById], references: [id], onDelete: Restrict)
+  enrollments    LearningEnrollment[]
+  modules       LearningModule[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@unique([courseId, versionNumber])
+  @@index([courseId, status])
+  @@index([status, publishedAt])
+}
+
+model LearningModule {
+  id          String              @id @default(cuid())
+  versionId   String
+  title       String
+  description String
+  position    Int                 @default(0)
+  version     LearningCourseVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  lessons     LearningLesson[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([versionId, position])
+}
+
+model LearningLesson {
+  id             String            @id @default(cuid())
+  moduleId       String
+  title          String
+  description    String
+  type           LearningLessonType @default(TEXT)
+  content        String?
+  durationMinutes Int?
+  position       Int               @default(0)
+  module         LearningModule    @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([moduleId, position])
+  @@index([type])
+}
+
+model LearningEnrollment {
+  id           String                @id @default(cuid())
+  companyId    String
+  courseId     String
+  versionId    String
+  userId       String
+  assignedById String
+  assignedAt   DateTime              @default(now())
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  company      Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  course       LearningCourse        @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  version      LearningCourseVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  user         User                  @relation("LearningEnrollmentUsers", fields: [userId], references: [id], onDelete: Restrict)
+  assignedBy   User                  @relation("LearningEnrollmentAssigners", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@unique([courseId, userId])
+  @@index([companyId, userId])
+  @@index([courseId, versionId])
+  @@index([userId, assignedAt])
 }

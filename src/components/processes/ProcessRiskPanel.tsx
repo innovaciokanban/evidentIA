@@ -126,8 +126,8 @@ export function EvaluationCard({ title, variant, impact, probability, onImpact, 
     <div className={`risk-evaluation-card is-${variant}`}>
       <div className="risk-evaluation-title"><span>{title}</span><LevelBadge level={level} score={score} /></div>
       <div className="risk-evaluation-body">
-        <label>Impacto<select value={impact} onChange={(event) => onImpact(event.target.value)} disabled={disabled}>{impactOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>Probabilidad<select value={probability} onChange={(event) => onProbability(event.target.value)} disabled={disabled}>{probabilityOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>Impacto<select value={impact} onChange={(event) => onImpact(event.target.value)} disabled={disabled}>{impactOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <div className="risk-calculated-level">
           <span>Nivel calculado</span>
           <strong className={`risk-level-text ${level.toLowerCase()}`} aria-live="polite">
