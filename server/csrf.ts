@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express'
 
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const ORIGIN_REQUIRED_PATHS = new Set(['/api/auth/login', '/api/auth/logout'])
-const ALLOWED_FETCH_SITES = new Set(['same-origin', 'same-site', 'none'])
+const ALLOWED_FETCH_SITES = new Set(['same-origin', 'same-site', 'cross-site', 'none'])
 
 type CsrfOptions = {
   trustedOrigins: ReadonlySet<string>

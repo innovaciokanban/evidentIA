@@ -61,10 +61,24 @@ describe('csrfProtection', () => {
     expect(result.next).not.toHaveBeenCalled()
   })
 
-  it('rejects cross-site Fetch Metadata even when Origin is trusted', () => {
+  it('allows cross-site Fetch Metadata when Origin is trusted', () => {
     const result = runGuard({ origin: trustedOrigin, fetchSite: 'cross-site' })
+    expect(result.next).toHaveBeenCalledOnce()
+    expect(result.response.status).not.toHaveBeenCalled()
+  })
+
+  it.each(['/api/auth/login', '/api/auth/logout', '/api/notifications/read-all'])('rejects cross-site %s with an incorrect Origin', (path) => {
+    const result = runGuard({ path, origin: 'https://evil.example', fetchSite: 'cross-site' })
     expect(result.response.status).toHaveBeenCalledWith(403)
     expect(result.next).not.toHaveBeenCalled()
+  })
+
+  it.each(['/api/auth/login', '/api/auth/logout', '/api/notifications/read-all'])('rejects cross-site %s with a missing or null Origin', (path) => {
+    for (const origin of [undefined, 'null']) {
+      const result = runGuard({ path, origin, fetchSite: 'cross-site' })
+      expect(result.response.status).toHaveBeenCalledWith(403)
+      expect(result.next).not.toHaveBeenCalled()
+    }
   })
 
   it('does not apply the unsafe-method guard to the OAuth callback GET', () => {
