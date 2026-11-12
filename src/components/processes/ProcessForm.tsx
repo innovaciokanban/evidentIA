@@ -110,7 +110,6 @@ export function ProcessForm({ draft, setDraft, users, historicalResponsible, com
             <button type="button" className="process-module-card interactive" onClick={onOpenKpis} disabled={!onOpenKpis}><span className="process-module-icon">◫</span><span><strong>KPI</strong><small>Indicadores del proceso</small></span><span className="process-module-arrow">→</span></button>
             <button type="button" className="process-module-card interactive" onClick={onOpenRisks} disabled={!onOpenRisks}><span className="process-module-icon">!</span><span><strong>Riesgos</strong><small>Identificación y control</small></span><span className="process-module-arrow">→</span></button>
             <button type="button" className="process-module-card interactive" onClick={onOpenChangeHistory} disabled={!onOpenChangeHistory}><span className="process-module-icon">↺</span><span><strong>Control de cambios</strong><small>Historial y trazabilidad</small></span><span className="process-module-arrow">→</span></button>
-            <button type="button" className="process-module-card" disabled title="Este módulo estará disponible próximamente."><span className="process-module-icon">◇</span><span><strong>Valor</strong><small>Entrega al cliente</small></span></button>
           </div>
         </section>
       )}

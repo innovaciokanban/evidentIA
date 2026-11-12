@@ -1647,7 +1647,7 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .characterization-copy-grid label { min-width: 0; }
 .characterization-copy-grid textarea { min-height: 132px; }
 .process-modules-section { padding-bottom: 24px; }
-.process-module-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.process-module-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .process-module-card { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 70px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--ink-secondary); text-align: left; }
 .process-module-card.interactive { cursor: pointer; transition: border-color var(--transition), background var(--transition), box-shadow var(--transition), transform var(--transition); }
 .process-module-card.interactive:hover, .process-module-card.interactive:focus-visible { border-color: var(--blue-border); background: var(--blue-light); box-shadow: var(--shadow-sm); transform: translateY(-1px); outline: none; }
