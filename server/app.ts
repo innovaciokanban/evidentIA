@@ -5,7 +5,7 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, StrategicObjectiveHistoryEventType, StrategicObjectiveOrigin, StrategicObjectiveStatus, StrategicObjectiveStrategySource, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, CheckySuggestionStatus, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, StrategicObjectiveHistoryEventType, StrategicObjectiveOrigin, StrategicObjectiveStatus, StrategicObjectiveStrategySource, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSessionForActiveUser, lockUserForUpdate, publicUser, requireRole, revokeUserSessions, setSessionCookie } from './auth.js'
@@ -17,6 +17,7 @@ import { indexStrategyWeightings, normalizeStrategyText, strategySourceRef, stra
 import { checkyEvidenceWithPair, filterCheckySuggestions, requiresCheckyCrossPair, resolveCheckyCrossPair, type CheckyCrossPair, type CheckyCrossRef } from './checky-cross.js'
 import { sanitizeTextWithSwotItems, type SwotTextItem } from './text-sanitization.js'
 import { riskLevelFor, riskScoreFor } from './risk-matrix.js'
+import { calendarDateToUtc } from './calendar-dates.js'
 import { mitigationCompletedNotification, mitigationNotificationRecipients, mitigationPlansCompleted, riskResidualSectionLink } from './mitigation-plan.js'
 import { assertMitigationEvidence, MitigationEvidenceRequiredError } from './mitigation-evidence.js'
 import { EvidenceValidationError, validateEvidenceUpload } from './evidence-storage.js'
@@ -29,8 +30,10 @@ import { TicketAssignmentApprovalError, cancelPendingTicketAssignmentApprovals, 
 import { createNotificationIfAbsent, lockNotificationRecipients } from './notifications.js'
 import { csrfProtection } from './csrf.js'
 import { registerLearningRoutes } from './learning/learning-routes.js'
-import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strategicObjectiveHistoryQuerySchema, strategicObjectiveStrategyLinkSchema, strategicObjectiveSuggestionRequestSchema, strategicObjectiveUpdateSchema } from './validation.js'
-import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
+import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strategicObjectiveHistoryQuerySchema, strategicObjectiveIndicatorSchema, strategicObjectiveStrategyLinkSchema, strategicObjectiveSuggestionAcceptanceSchema, strategicObjectiveSuggestionPayloadSchema, strategicObjectiveSuggestionRejectionSchema, strategicObjectiveSuggestionRequestSchema, strategicObjectiveSuggestionStrategyRefsSchema, strategicObjectiveSuggestionUpdateSchema, strategicObjectiveUpdateSchema } from './validation.js'
+import { strategicObjectiveSuggestionDedupeKey } from './strategic-objective-suggestions.js'
+import { embeddedKpiListSchema } from './validation.js'
+import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCatalogQuerySchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
 
@@ -56,6 +59,18 @@ class UserAssignmentError extends Error {
     super(message)
     this.status = status
     this.name = 'UserAssignmentError'
+  }
+}
+
+class StrategicObjectiveSuggestionAcceptanceError extends Error {
+  readonly status: 400 | 403 | 404 | 409
+  readonly details?: Record<string, unknown>
+
+  constructor(status: 400 | 403 | 404 | 409, message: string, details?: Record<string, unknown>) {
+    super(message)
+    this.status = status
+    this.details = details
+    this.name = 'StrategicObjectiveSuggestionAcceptanceError'
   }
 }
 
@@ -272,9 +287,40 @@ const actionItemView = (item: Prisma.ActionItemGetPayload<{ include: typeof acti
 const actionPlanInclude = { createdBy: { select: { id: true, name: true, email: true } }, items: { include: actionItemInclude, orderBy: { createdAt: 'asc' as const } } } as const
 const actionPlanView = (plan: Prisma.ActionPlanGetPayload<{ include: typeof actionPlanInclude }>) => plan
 
+const kpiInclude = {
+  process: { select: { id: true, companyId: true, name: true, code: true } },
+  reportResponsible: { select: { id: true, name: true, isActive: true } },
+  monitorResponsible: { select: { id: true, name: true, isActive: true } },
+} as const
+const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => ({
+  id: kpi.id,
+  processId: kpi.processId,
+  companyId: kpi.process.companyId,
+  name: kpi.name,
+  description: kpi.description,
+  frequency: kpi.frequency,
+  target: kpi.target,
+  formula: kpi.formula,
+  dataSource: kpi.dataSource,
+  unit: kpi.unit,
+  reportResponsible: kpi.reportResponsible,
+  monitorResponsible: kpi.monitorResponsible,
+  greenThreshold: kpi.greenThreshold,
+  yellowThreshold: kpi.yellowThreshold,
+  redThreshold: kpi.redThreshold,
+  createdAt: kpi.createdAt,
+  updatedAt: kpi.updatedAt,
+})
+
 const strategicObjectiveInclude = {
   createdBy: { select: { id: true, name: true, email: true } },
-  indicator: true,
+  indicators: {
+    include: {
+      reportResponsible: { select: { id: true, name: true, email: true, isActive: true } },
+      monitorResponsible: { select: { id: true, name: true, email: true, isActive: true } },
+    },
+    orderBy: { createdAt: 'asc' as const },
+  },
   strategyLinks: {
     include: { linkedBy: { select: { id: true, name: true, email: true } } },
     orderBy: { linkedAt: 'asc' as const },
@@ -294,10 +340,75 @@ const strategicObjectiveView = (objective: StrategicObjectiveWithInclude) => ({
   status: objective.status,
   origin: objective.origin,
   createdBy: objective.createdBy,
-  indicator: objective.indicator,
+  indicators: objective.indicators.map((indicator) => ({
+    id: indicator.id,
+    objectiveId: indicator.objectiveId,
+    name: indicator.name,
+    description: indicator.description,
+    frequency: indicator.frequency,
+    formula: indicator.formula,
+    dataSource: indicator.dataSource,
+    unit: indicator.unit,
+    reportResponsibleId: indicator.reportResponsibleId,
+    monitorResponsibleId: indicator.monitorResponsibleId,
+    reportResponsible: indicator.reportResponsible,
+    monitorResponsible: indicator.monitorResponsible,
+    greenThreshold: indicator.greenThreshold,
+    yellowThreshold: indicator.yellowThreshold,
+    redThreshold: indicator.redThreshold,
+    baselineValue: indicator.baselineValue,
+    targetValue: indicator.targetValue,
+    measurementMethod: indicator.measurementMethod,
+    deadline: indicator.deadline,
+    createdAt: indicator.createdAt,
+    updatedAt: indicator.updatedAt,
+  })),
+  // Keep the first item for older clients while new clients use the full list.
+  indicator: objective.indicators[0] ? {
+    id: objective.indicators[0].id,
+    objectiveId: objective.indicators[0].objectiveId,
+    name: objective.indicators[0].name,
+    description: objective.indicators[0].description,
+    frequency: objective.indicators[0].frequency,
+    formula: objective.indicators[0].formula,
+    dataSource: objective.indicators[0].dataSource,
+    unit: objective.indicators[0].unit,
+    reportResponsibleId: objective.indicators[0].reportResponsibleId,
+    monitorResponsibleId: objective.indicators[0].monitorResponsibleId,
+    reportResponsible: objective.indicators[0].reportResponsible,
+    monitorResponsible: objective.indicators[0].monitorResponsible,
+    greenThreshold: objective.indicators[0].greenThreshold,
+    yellowThreshold: objective.indicators[0].yellowThreshold,
+    redThreshold: objective.indicators[0].redThreshold,
+    baselineValue: objective.indicators[0].baselineValue,
+    targetValue: objective.indicators[0].targetValue,
+    measurementMethod: objective.indicators[0].measurementMethod,
+    deadline: objective.indicators[0].deadline,
+    createdAt: objective.indicators[0].createdAt,
+    updatedAt: objective.indicators[0].updatedAt,
+  } : null,
   strategies: objective.strategyLinks,
   createdAt: objective.createdAt,
   updatedAt: objective.updatedAt,
+})
+const strategicObjectiveSuggestionInclude = {
+  requestedBy: { select: { id: true, name: true, email: true } },
+} as const
+type StrategicObjectiveSuggestionWithInclude = Prisma.StrategicObjectiveSuggestionGetPayload<{ include: typeof strategicObjectiveSuggestionInclude }>
+const strategicObjectiveSuggestionView = (suggestion: StrategicObjectiveSuggestionWithInclude) => ({
+  id: suggestion.id,
+  diagnosticId: suggestion.diagnosticId,
+  requestedBy: suggestion.requestedBy,
+  originalPayload: suggestion.originalPayload,
+  editablePayload: suggestion.editablePayload,
+  strategyRefs: suggestion.strategyRefs,
+  dedupeKey: suggestion.dedupeKey,
+  status: suggestion.status,
+  decisionNote: suggestion.decisionNote,
+  acceptedObjectiveId: suggestion.acceptedObjectiveId,
+  decidedAt: suggestion.decidedAt,
+  createdAt: suggestion.createdAt,
+  updatedAt: suggestion.updatedAt,
 })
 const strategicObjectiveHistoryInclude = { actor: { select: { id: true, name: true } } } as const
 type StrategicObjectiveHistoryWithActor = Prisma.StrategicObjectiveHistoryGetPayload<{ include: typeof strategicObjectiveHistoryInclude }>
@@ -592,7 +703,7 @@ const canOperateTicketEvidence = (request: Request, ticket: {
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
 const canAccessCompany = (request: Request, company: { id: string }) => request.user?.role === Role.SUPERUSER || company.id === request.user?.companyId
 
-const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true, isActive: true } } } as const
+const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true, isActive: true } }, kpiLinks: { include: { kpi: { include: kpiInclude } }, orderBy: { linkedAt: 'asc' as const } } } as const
 const processView = (process: Prisma.ProcessGetPayload<{ include: typeof processInclude }>) => ({
   id: process.id,
   companyId: process.companyId,
@@ -612,6 +723,7 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   affectsAccounting: process.affectsAccounting,
   personalData: process.personalData,
   responsible: process.responsible,
+  kpis: Array.isArray(process.kpiLinks) ? process.kpiLinks.map((link) => kpiView(link.kpi)) : [],
   createdAt: process.createdAt,
   updatedAt: process.updatedAt,
 })
@@ -726,7 +838,7 @@ const updatedProcessChanges = (current: ProcessWithInclude, data: Prisma.Process
   }]
 })
 
-async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>) {
+async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor, companyId: string, data: Omit<Prisma.ProcessUncheckedCreateInput, 'code'>, operation?: (transaction: Prisma.TransactionClient, process: ProcessWithInclude) => Promise<void>) {
   return withProcessCodeLock(companyId, async () => {
     const create = async (transaction: Prisma.TransactionClient | PrismaClient) => {
       if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(transaction, data.responsibleId, companyId, 'Responsible')
@@ -741,7 +853,12 @@ async function createProcessWithCode(db: PrismaClient, actor: ProcessChangeActor
       }
       const existing = await transaction.process.findMany({ where: { companyId }, select: { code: true } })
       const code = nextProcessCode(data.type, existing.map((process) => process.code))
-      const process = await transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
+       const createdProcess = await transaction.process.create({ data: { ...data, companyId, code }, include: processInclude })
+       if (operation) await operation(transaction, createdProcess)
+       const process = operation
+         ? await transaction.process.findUnique({ where: { id: createdProcess.id }, include: processInclude })
+         : createdProcess
+       if (!process) throw new Error('Process not found after creation')
       await transaction.processChange.create({
         data: {
           processId: process.id,
@@ -795,34 +912,10 @@ export async function updateProcessWithVersion<T = undefined>(db: PrismaClient, 
 /** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
 const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
 
-const kpiInclude = {
-  process: { select: { id: true, companyId: true, name: true, code: true } },
-  reportResponsible: { select: { id: true, name: true, isActive: true } },
-  monitorResponsible: { select: { id: true, name: true, isActive: true } },
-} as const
-const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => ({
-  id: kpi.id,
-  processId: kpi.processId,
-  companyId: kpi.process.companyId,
-  name: kpi.name,
-  description: kpi.description,
-  frequency: kpi.frequency,
-  target: kpi.target,
-  formula: kpi.formula,
-  dataSource: kpi.dataSource,
-  unit: kpi.unit,
-  reportResponsible: kpi.reportResponsible,
-  monitorResponsible: kpi.monitorResponsible,
-  greenThreshold: kpi.greenThreshold,
-  yellowThreshold: kpi.yellowThreshold,
-  redThreshold: kpi.redThreshold,
-  createdAt: kpi.createdAt,
-  updatedAt: kpi.updatedAt,
-})
-
 const procedureInclude = {
   process: { select: { id: true, companyId: true, name: true, code: true } },
   responsible: { select: { id: true, name: true, isActive: true } },
+  kpis: { include: { kpi: { include: kpiInclude } }, orderBy: { linkedAt: 'asc' as const } },
 } as const
 type ProcedureWithInclude = Prisma.ProcedureGetPayload<{ include: typeof procedureInclude }>
 const procedureView = (procedure: ProcedureWithInclude) => ({
@@ -837,6 +930,7 @@ const procedureView = (procedure: ProcedureWithInclude) => ({
   responsible: procedure.responsible,
   status: procedure.status,
   version: procedure.version,
+  kpis: Array.isArray(procedure.kpis) ? procedure.kpis.map((link) => kpiView(link.kpi)) : [],
   createdAt: procedure.createdAt,
   updatedAt: procedure.updatedAt,
 })
@@ -2241,7 +2335,7 @@ const ticketDataFromActionItem = (item: { title: string; description: string; st
  * acceptedOnly se usa exclusivamente por Ponderación para recibir la lista de estrategias aceptadas
  * en Checky; el contexto de Checky conserva la consolidación completa.
  */
-const loadDiagnosticStrategies = async (db: PrismaClient, diagnosticId: string, acceptedOnly = false): Promise<StrategyForPrioritization[]> => {
+const loadDiagnosticStrategies = async (db: PrismaClient | Prisma.TransactionClient, diagnosticId: string, acceptedOnly = false): Promise<StrategyForPrioritization[]> => {
   const [analysis, crosses, acceptedSuggestions, storedWeightings, strategyTaskPlans] = await Promise.all([
     db.aIAnalysis.findUnique({ where: { diagnosticId }, select: { id: true, foStrategies: true, doStrategies: true, faStrategies: true, daStrategies: true } }),
     db.strategicCross.findMany({ where: { diagnosticId }, include: { ...crossInclude, weighting: true }, orderBy: { updatedAt: 'desc' } }),
@@ -2392,6 +2486,24 @@ const strategyBandToActionPriority: Record<string, Priority> = {
   LARGO_PLAZO: Priority.LOW,
 }
 
+type StrategicObjectiveIndicatorCandidate = {
+  name: string | null
+  description: string | null
+  frequency: string | null
+  formula: string | null
+  dataSource: string | null
+  unit: string | null
+  reportResponsibleId: string | null
+  monitorResponsibleId: string | null
+  greenThreshold: string | null
+  yellowThreshold: string | null
+  redThreshold: string | null
+  baselineValue: string | null
+  targetValue: string | null
+  measurementMethod: string | null
+  deadline: Date | null
+}
+
 type StrategicObjectiveCandidate = {
   title: string
   statement: string
@@ -2400,17 +2512,57 @@ type StrategicObjectiveCandidate = {
   achievableCriteria: string | null
   relevantCriteria: string | null
   timeBoundCriteria: string | null
-  indicator: {
-    name: string | null
-    unit: string | null
-    baselineValue: string | null
-    targetValue: string | null
-    measurementMethod: string | null
-    deadline: Date | null
-  } | null
+  indicators: StrategicObjectiveIndicatorCandidate[]
 }
 
-const strategicObjectiveMissingFields = (objective: StrategicObjectiveCandidate): string[] => {
+type StrategicObjectiveIndicatorInput = Partial<Omit<StrategicObjectiveIndicatorCandidate, 'deadline'>> & { deadline?: Date | string | null }
+
+const strategicObjectiveIndicatorValue = (indicator: StrategicObjectiveIndicatorInput | null | undefined): StrategicObjectiveIndicatorCandidate | null => indicator ? {
+  name: indicator.name ?? null,
+  description: indicator.description ?? null,
+  frequency: indicator.frequency ?? null,
+  formula: indicator.formula ?? null,
+  dataSource: indicator.dataSource ?? null,
+  unit: indicator.unit ?? null,
+  reportResponsibleId: indicator.reportResponsibleId ?? null,
+  monitorResponsibleId: indicator.monitorResponsibleId ?? null,
+  greenThreshold: indicator.greenThreshold ?? null,
+  yellowThreshold: indicator.yellowThreshold ?? null,
+  redThreshold: indicator.redThreshold ?? null,
+  baselineValue: indicator.baselineValue ?? null,
+  targetValue: indicator.targetValue ?? null,
+  measurementMethod: indicator.measurementMethod ?? null,
+  deadline: typeof indicator.deadline === 'string' ? calendarDateToUtc(indicator.deadline) : indicator.deadline ?? null,
+} : null
+
+const strategicObjectiveIndicatorValues = (indicators: Array<StrategicObjectiveIndicatorInput> | null | undefined, legacyIndicator?: StrategicObjectiveIndicatorInput | null) => {
+  const candidates = [...(indicators ?? []), ...(legacyIndicator ? [legacyIndicator] : [])]
+  const seen = new Set<string>()
+  return candidates.flatMap((indicator) => {
+    const normalized = strategicObjectiveIndicatorValue(indicator)
+    if (!normalized) return []
+    const signature = JSON.stringify(normalized)
+    if (seen.has(signature)) return []
+    seen.add(signature)
+    return [normalized]
+  })
+}
+
+const suggestionIndicatorsOf = (payload: { indicators?: Array<StrategicObjectiveIndicatorInput>; indicator?: StrategicObjectiveIndicatorInput | null }) => strategicObjectiveIndicatorValues(payload.indicators, payload.indicator)
+
+const validateStrategicObjectiveIndicatorResponsibilities = async (
+  client: PrismaClient | Prisma.TransactionClient,
+  indicators: StrategicObjectiveIndicatorCandidate[],
+  companyId: string,
+) => {
+  for (const indicator of indicators) {
+    for (const userId of [indicator.reportResponsibleId, indicator.monitorResponsibleId]) {
+      if (userId) await assertActiveAssignmentUser(client, userId, companyId, 'Responsible')
+    }
+  }
+}
+
+const strategicObjectiveMissingFields = (objective: StrategicObjectiveCandidate, options: { requireIndicatorConfiguration?: boolean } = {}): string[] => {
   const missing: string[] = []
   if (!objective.title.trim()) missing.push('title')
   if (!objective.statement.trim()) missing.push('statement')
@@ -2419,16 +2571,23 @@ const strategicObjectiveMissingFields = (objective: StrategicObjectiveCandidate)
   if (!objective.achievableCriteria?.trim()) missing.push('achievableCriteria')
   if (!objective.relevantCriteria?.trim()) missing.push('relevantCriteria')
   if (!objective.timeBoundCriteria?.trim()) missing.push('timeBoundCriteria')
-  if (!objective.indicator) {
+  if (objective.indicators.length === 0) {
     missing.push('indicator')
     return missing
   }
-  if (!objective.indicator.name?.trim()) missing.push('indicator.name')
-  if (!objective.indicator.unit?.trim()) missing.push('indicator.unit')
-  if (!objective.indicator.baselineValue?.trim()) missing.push('indicator.baselineValue')
-  if (!objective.indicator.targetValue?.trim()) missing.push('indicator.targetValue')
-  if (!objective.indicator.measurementMethod?.trim()) missing.push('indicator.measurementMethod')
-  if (!objective.indicator.deadline) missing.push('indicator.deadline')
+  objective.indicators.forEach((indicator, index) => {
+    const prefix = objective.indicators.length === 1 ? 'indicator' : `indicators[${index}]`
+    if (!indicator.name?.trim()) missing.push(`${prefix}.name`)
+    if (options.requireIndicatorConfiguration && !indicator.frequency?.trim()) missing.push(`${prefix}.frequency`)
+    if (options.requireIndicatorConfiguration && !indicator.description?.trim()) missing.push(`${prefix}.description`)
+    if (options.requireIndicatorConfiguration && !indicator.formula?.trim()) missing.push(`${prefix}.formula`)
+    if (options.requireIndicatorConfiguration && !indicator.dataSource?.trim()) missing.push(`${prefix}.dataSource`)
+    if (!indicator.unit?.trim()) missing.push(`${prefix}.unit`)
+    if (!indicator.baselineValue?.trim()) missing.push(`${prefix}.baselineValue`)
+    if (!indicator.targetValue?.trim()) missing.push(`${prefix}.targetValue`)
+    if (!indicator.measurementMethod?.trim()) missing.push(`${prefix}.measurementMethod`)
+    if (!indicator.deadline) missing.push(`${prefix}.deadline`)
+  })
   return missing
 }
 
@@ -2441,12 +2600,14 @@ const strategicObjectiveChangeLabels: Record<string, string> = {
   relevantCriteria: 'Criterio relevante',
   timeBoundCriteria: 'Criterio temporal',
   indicator: 'Indicador',
+  indicators: 'Indicadores',
 }
 
 const strategicObjectiveUpdateChanges = (existing: StrategicObjectiveWithInclude, update: Record<string, unknown>): RiskAuditChange[] => Object.entries(update).flatMap(([field, value]) => {
-  if (field !== 'indicator') return [{ field, label: strategicObjectiveChangeLabels[field] ?? field, previousValue: processChangeValue(existing[field as keyof typeof existing]), newValue: processChangeValue(value) }]
-  if (value === null) return Object.entries(existing.indicator ?? {}).map(([indicatorField, previousValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(previousValue), newValue: null }))
-  return Object.entries(value as Record<string, unknown>).map(([indicatorField, nextValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(existing.indicator?.[indicatorField as keyof typeof existing.indicator]), newValue: processChangeValue(nextValue) }))
+  if (field !== 'indicator' && field !== 'indicators') return [{ field, label: strategicObjectiveChangeLabels[field] ?? field, previousValue: processChangeValue(existing[field as keyof typeof existing]), newValue: processChangeValue(value) }]
+  const previous = existing.indicators[0]
+  if (value === null) return Object.entries(previous ?? {}).map(([indicatorField, previousValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(previousValue), newValue: null }))
+  return Object.entries(value as Record<string, unknown>).map(([indicatorField, nextValue]) => ({ field: `indicator.${indicatorField}`, label: `Indicador: ${indicatorField}`, previousValue: processChangeValue(previous?.[indicatorField as keyof typeof previous]), newValue: processChangeValue(nextValue) }))
 })
 
 
@@ -3108,6 +3269,86 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     return resolved.ok ? { ok: true as const, responsibleId: resolved.userId } : resolved
   }
 
+  type EmbeddedKpiInput = z.infer<typeof embeddedKpiListSchema>[number]
+  const normalizeKpiName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase()
+  const kpiCreateDataOf = (item: EmbeddedKpiInput, processId: string) => ({
+    processId,
+    name: item.name,
+    description: item.description,
+    frequency: item.frequency,
+    target: item.target,
+    formula: item.formula,
+    dataSource: item.dataSource,
+    unit: item.unit,
+    reportResponsibleId: item.reportResponsibleId ?? null,
+    monitorResponsibleId: item.monitorResponsibleId ?? null,
+    greenThreshold: item.greenThreshold ?? null,
+    yellowThreshold: item.yellowThreshold ?? null,
+    redThreshold: item.redThreshold ?? null,
+  })
+  const kpiUpdateDataOf = (item: EmbeddedKpiInput) => ({
+    name: item.name,
+    description: item.description,
+    frequency: item.frequency,
+    target: item.target,
+    formula: item.formula,
+    dataSource: item.dataSource,
+    unit: item.unit,
+    reportResponsibleId: item.reportResponsibleId ?? null,
+    monitorResponsibleId: item.monitorResponsibleId ?? null,
+    greenThreshold: item.greenThreshold ?? null,
+    yellowThreshold: item.yellowThreshold ?? null,
+    redThreshold: item.redThreshold ?? null,
+  })
+
+  const validateKpiInputs = async (client: PrismaClient | Prisma.TransactionClient, processId: string, companyId: string, inputs: EmbeddedKpiInput[], scope: 'company' | 'process') => {
+    const existing = scope === 'company'
+      ? await client.kpi.findMany({ where: { process: { companyId } }, select: { id: true, name: true } })
+      : (await client.processKpi.findMany({ where: { processId }, select: { kpiId: true, kpi: { select: { id: true, name: true } } } })).map((link) => link.kpi)
+    const existingById = new Map(existing.map((item) => [item.id, item]))
+    const inputIds = new Set(inputs.flatMap((item) => item.id ? [item.id] : []))
+    const usedNames = new Set(existing.filter((item) => !inputIds.has(item.id)).map((item) => normalizeKpiName(item.name)))
+    for (const item of inputs) {
+      if (item.id && !existingById.has(item.id)) throw new UserAssignmentError(404, scope === 'company' ? 'KPI not found for this company' : 'KPI not linked to this process')
+      const name = normalizeKpiName(item.name)
+      if (usedNames.has(name)) throw new UserAssignmentError(409, `A KPI named "${item.name}" already exists in this process`)
+      usedNames.add(name)
+      if (item.reportResponsibleId) await assertActiveAssignmentUser(client, item.reportResponsibleId, companyId, 'Responsible')
+      if (item.monitorResponsibleId) await assertActiveAssignmentUser(client, item.monitorResponsibleId, companyId, 'Responsible')
+    }
+    return existingById
+  }
+
+  const syncProcessKpis = async (client: PrismaClient | Prisma.TransactionClient, process: { id: string; companyId: string }, inputs: EmbeddedKpiInput[], unlinkIds: string[] = []) => {
+    const existingById = await validateKpiInputs(client, process.id, process.companyId, inputs, 'company')
+    const links = await client.processKpi.findMany({ where: { processId: process.id }, select: { kpiId: true } })
+    const desiredIds = new Set<string>()
+    for (const item of inputs) {
+      const kpiId = item.id && existingById.has(item.id)
+        ? item.id
+        : (await client.kpi.create({ data: kpiCreateDataOf(item, process.id) })).id
+      if (item.id && existingById.has(item.id)) await client.kpi.update({ where: { id: item.id }, data: kpiUpdateDataOf(item) })
+      desiredIds.add(kpiId)
+      if (!links.some((link) => link.kpiId === kpiId)) await client.processKpi.create({ data: { processId: process.id, kpiId } })
+    }
+    const unlinkableIds = unlinkIds.filter((id) => !desiredIds.has(id))
+    if (unlinkableIds.length > 0) await client.processKpi.deleteMany({ where: { processId: process.id, kpiId: { in: unlinkableIds } } })
+  }
+
+  const syncProcedureKpis = async (client: PrismaClient | Prisma.TransactionClient, procedureId: string, process: { id: string; companyId: string }, inputs: EmbeddedKpiInput[]) => {
+    const existingById = await validateKpiInputs(client, process.id, process.companyId, inputs, 'process')
+    const links = await client.procedureKpi.findMany({ where: { procedureId }, select: { kpiId: true } })
+    const desiredIds: string[] = []
+    for (const item of inputs) {
+      const kpiId = item.id && existingById.has(item.id) ? item.id : (await client.kpi.create({ data: kpiCreateDataOf(item, process.id) })).id
+      if (item.id && existingById.has(item.id)) await client.kpi.update({ where: { id: item.id }, data: kpiUpdateDataOf(item) })
+      if (!item.id) await client.processKpi.create({ data: { processId: process.id, kpiId } })
+      desiredIds.push(kpiId)
+      if (!links.some((link) => link.kpiId === kpiId)) await client.procedureKpi.create({ data: { procedureId, kpiId } })
+    }
+    await client.procedureKpi.deleteMany({ where: { procedureId, kpiId: { notIn: desiredIds } } })
+  }
+
   /** El nombre identifica el proceso dentro de la empresa, y solo dentro de ella. */
   const duplicateProcessName = async (companyId: string, name: string, exceptId?: string) => db.process.findFirst({
     where: { companyId, name, ...(exceptId ? { NOT: { id: exceptId } } : {}) },
@@ -3189,7 +3430,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       affectsAccounting: parsed.data.affectsAccounting ?? false,
       personalData: parsed.data.personalData ?? false,
       responsibleId: responsible.responsibleId,
-    })
+    }, parsed.data.kpis ? async (tx, createdProcess) => {
+      await syncProcessKpis(tx, createdProcess, parsed.data.kpis!)
+    } : undefined)
     response.status(201).json({ process: processView(process) })
   }))
 
@@ -3238,12 +3481,23 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (parsed.data.critical !== undefined) data.critical = parsed.data.critical
     if (parsed.data.affectsAccounting !== undefined) data.affectsAccounting = parsed.data.affectsAccounting
     if (parsed.data.personalData !== undefined) data.personalData = parsed.data.personalData
-    const update = await updateProcessWithVersion(db, existing.id, request.user!, data)
+    const hasKpiChanges = parsed.data.kpis !== undefined || parsed.data.kpiUnlinkIds !== undefined
+    const update = await updateProcessWithVersion(db, existing.id, request.user!, data, !hasKpiChanges ? undefined : async (tx) => {
+      await syncProcessKpis(tx, existing, parsed.data.kpis ?? [], parsed.data.kpiUnlinkIds ?? [])
+      return { result: undefined, changes: [] }
+    })
     if (!update) {
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    response.json({ process: processView(update.process) })
+    const process = !hasKpiChanges
+      ? update.process
+      : await db.process.findUnique({ where: { id: existing.id }, include: processInclude })
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    response.json({ process: processView(process) })
   }))
 
   app.delete('/api/processes/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -4459,6 +4713,37 @@ response.json({
      response.status(201).json({ activity: mitigationActivityView(item), assignmentApproval })
   }))
 
+  app.get('/api/kpis', authMiddleware, asyncHandler(async (request, response) => {
+    const parsed = kpiCatalogQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid KPI filters', details: parsed.error.issues })
+      return
+    }
+    if (parsed.data.companyId && request.user?.role !== Role.SUPERUSER && parsed.data.companyId !== request.user?.companyId) {
+      response.status(404).json({ error: 'Company not found' })
+      return
+    }
+    const companyId = parsed.data.companyId ?? (request.user?.role === Role.SUPERUSER ? undefined : request.user?.companyId)
+    if (!companyId && request.user?.role !== Role.SUPERUSER) {
+      response.status(400).json({ error: 'A company is required' })
+      return
+    }
+    const kpis = await db.kpi.findMany({
+      where: {
+        ...(companyId ? { process: { companyId } } : {}),
+        ...(parsed.data.search ? {
+          OR: [
+            { name: { contains: parsed.data.search, mode: 'insensitive' } },
+            { description: { contains: parsed.data.search, mode: 'insensitive' } },
+          ],
+        } : {}),
+      },
+      include: kpiInclude,
+      orderBy: { name: 'asc' },
+    })
+    response.json({ kpis: kpis.map(kpiView) })
+  }))
+
   app.get('/api/processes/:processId/kpis', authMiddleware, asyncHandler(async (request, response) => {
     const parsed = kpiQuerySchema.safeParse(request.query)
     if (!parsed.success) {
@@ -4470,17 +4755,22 @@ response.json({
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const where: Prisma.KpiWhereInput = {
-      processId: process.id,
-      ...(parsed.data.search ? {
-        OR: [
-          { name: { contains: parsed.data.search, mode: 'insensitive' } },
-          { description: { contains: parsed.data.search, mode: 'insensitive' } },
-        ],
-      } : {}),
-    }
-    const kpis = await db.kpi.findMany({ where, include: kpiInclude, orderBy: { name: 'asc' } })
-    response.json({ kpis: kpis.map(kpiView) })
+    const links = await db.processKpi.findMany({
+      where: {
+        processId: process.id,
+        ...(parsed.data.search ? {
+          kpi: {
+            OR: [
+              { name: { contains: parsed.data.search, mode: 'insensitive' } },
+              { description: { contains: parsed.data.search, mode: 'insensitive' } },
+            ],
+          },
+        } : {}),
+      },
+      include: { kpi: { include: kpiInclude } },
+      orderBy: { linkedAt: 'asc' },
+    })
+    response.json({ kpis: links.map((link) => kpiView(link.kpi)) })
   }))
 
   app.post('/api/processes/:processId/kpis', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -4507,9 +4797,9 @@ response.json({
     const kpi = await runInTransaction(db, async (tx) => {
       if (reportResponsible.responsibleId) await assertActiveAssignmentUser(tx, reportResponsible.responsibleId, process.companyId, 'Responsible')
       if (monitorResponsible.responsibleId) await assertActiveAssignmentUser(tx, monitorResponsible.responsibleId, process.companyId, 'Responsible')
-      return tx.kpi.create({
-        data: {
-          processId: process.id,
+       const kpi = await tx.kpi.create({
+         data: {
+           processId: process.id,
           name: parsed.data.name,
           description: parsed.data.description,
           frequency: parsed.data.frequency,
@@ -4522,9 +4812,11 @@ response.json({
           greenThreshold: parsed.data.greenThreshold ?? null,
           yellowThreshold: parsed.data.yellowThreshold ?? null,
           redThreshold: parsed.data.redThreshold ?? null,
-        },
-        include: kpiInclude,
-      })
+         },
+         include: kpiInclude,
+       })
+       await tx.processKpi.create({ data: { processId: process.id, kpiId: kpi.id } })
+       return kpi
     })
     response.status(201).json({ kpi: kpiView(kpi) })
   }))
@@ -4540,11 +4832,12 @@ response.json({
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const existing = await db.kpi.findUnique({ where: { id: String(request.params.kpiId) }, include: kpiInclude })
-    if (!existing || existing.processId !== process.id) {
+    const existingLink = await db.processKpi.findUnique({ where: { processId_kpiId: { processId: process.id, kpiId: String(request.params.kpiId) } }, include: { kpi: { include: kpiInclude } } })
+    if (!existingLink) {
       response.status(404).json({ error: 'KPI not found' })
       return
     }
+    const existing = existingLink.kpi
     if (parsed.data.reportResponsibleId !== undefined) {
       const responsible = await resolveResponsible(parsed.data.reportResponsibleId, process.companyId)
       if (!responsible.ok) {
@@ -4586,12 +4879,12 @@ response.json({
       response.status(404).json({ error: 'Process not found' })
       return
     }
-    const existing = await db.kpi.findUnique({ where: { id: String(request.params.kpiId) }, include: kpiInclude })
-    if (!existing || existing.processId !== process.id) {
+    const existingLink = await db.processKpi.findUnique({ where: { processId_kpiId: { processId: process.id, kpiId: String(request.params.kpiId) } }, select: { kpiId: true } })
+    if (!existingLink) {
       response.status(404).json({ error: 'KPI not found' })
       return
     }
-    await db.kpi.delete({ where: { id: existing.id } })
+    await db.processKpi.delete({ where: { processId_kpiId: { processId: process.id, kpiId: existingLink.kpiId } } })
     response.status(204).send()
   }))
 
@@ -4662,7 +4955,10 @@ response.json({
         include: procedureInclude,
       })
       await procedureHistoryWrite(tx, { procedure: created, action: 'CREATED', actor, snapshot: procedureSnapshot(created) })
-      return created
+       if (parsed.data.kpis && parsed.data.kpis.length > 0) await syncProcedureKpis(tx, created.id, process, parsed.data.kpis)
+       return parsed.data.kpis
+         ? (await tx.procedure.findUnique({ where: { id: created.id }, include: procedureInclude })) ?? created
+         : created
     })
     response.status(201).json({ procedure: procedureView(procedure) })
   }))
@@ -4715,16 +5011,19 @@ response.json({
     }
     const changes = updatedProcedureChanges(existing, data)
     // Sin cambios reales no se escribe historial (mismo criterio que updateProcessWithVersion).
-    if (changes.length === 0) {
+    if (changes.length === 0 && parsed.data.kpis === undefined) {
       response.json({ procedure: procedureView(existing) })
       return
     }
     const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
     const procedure = await db.$transaction(async (tx) => {
       if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Responsible')
-      const updated = await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude })
-      await procedureHistoryWrite(tx, { procedure: updated, action: 'UPDATED', actor, changes, snapshot: procedureSnapshot(updated) })
-      return updated
+      const updated = changes.length > 0 ? await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude }) : existing
+      if (changes.length > 0) await procedureHistoryWrite(tx, { procedure: updated, action: 'UPDATED', actor, changes, snapshot: procedureSnapshot(updated) })
+       if (parsed.data.kpis !== undefined) await syncProcedureKpis(tx, existing.id, process, parsed.data.kpis)
+       return parsed.data.kpis !== undefined
+         ? (await tx.procedure.findUnique({ where: { id: existing.id }, include: procedureInclude })) ?? updated
+         : updated
     })
     response.json({ procedure: procedureView(procedure) })
   }))
@@ -7918,6 +8217,20 @@ response.json({
     return objective
   }
 
+  const strategicObjectiveSuggestionForRequest = async (request: Request, suggestionId: string) => {
+    const suggestion = await db.strategicObjectiveSuggestion.findUnique({
+      where: { id: suggestionId },
+      include: strategicObjectiveSuggestionInclude,
+    })
+    if (!suggestion) return null
+    const diagnostic = await db.qualityDiagnostic.findUnique({
+      where: { id: suggestion.diagnosticId },
+      include: { company: { select: { id: true } } },
+    })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) return null
+    return { suggestion, diagnostic }
+  }
+
   app.post('/api/diagnostics/:id/strategic-objectives/suggest', authMiddleware, userWriteGuard, checkyLimiter, asyncHandler(async (request, response) => {
     const parsed = strategicObjectiveSuggestionRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
@@ -7985,29 +8298,309 @@ response.json({
       ['achievableCriteria', proposal.achievableCriteria],
       ['relevantCriteria', proposal.relevantCriteria],
       ['timeBoundCriteria', proposal.timeBoundCriteria],
-      ['indicator', proposal.indicator],
+      ['indicator', (proposal.indicators?.length || (proposal.indicator ? 1 : 0)) > 0 ? true : null],
     ].flatMap(([field, value]) => value === null || (typeof value === 'string' && !value.trim()) ? [field] : [])
+    const prepared: Array<{
+      proposal: typeof result.suggestions[number]
+      strategyRefs: string[]
+      payload: z.infer<typeof strategicObjectiveSuggestionPayloadSchema>
+      dedupeKey: string
+    }> = []
+    for (const proposal of result.suggestions) {
+      const strategyRefs = strategicObjectiveSuggestionStrategyRefsSchema.safeParse(proposal.strategyRefs)
+      const indicators = proposal.indicators ?? (proposal.indicator ? [proposal.indicator] : [])
+      const payload = strategicObjectiveSuggestionPayloadSchema.safeParse({
+        title: proposal.title,
+        statement: proposal.statement,
+        specificCriteria: proposal.specificCriteria,
+        measurableCriteria: proposal.measurableCriteria,
+        achievableCriteria: proposal.achievableCriteria,
+        relevantCriteria: proposal.relevantCriteria,
+        timeBoundCriteria: proposal.timeBoundCriteria,
+        indicators,
+        indicator: indicators[0] ?? null,
+      })
+      if (!strategyRefs.success || !payload.success || strategyRefs.data.some((ref) => !selectedById.has(ref))) {
+        response.status(502).json({ error: 'Checky returned invalid strategic objective suggestions' })
+        return
+      }
+      prepared.push({ proposal, strategyRefs: strategyRefs.data, payload: payload.data, dedupeKey: strategicObjectiveSuggestionDedupeKey(diagnostic.id, payload.data, strategyRefs.data) })
+    }
+    const persisted = await runInTransaction(db, async (tx) => {
+      const records = []
+      const seen = new Set<string>()
+      for (const item of prepared) {
+        if (seen.has(item.dedupeKey)) continue
+        seen.add(item.dedupeKey)
+        records.push(await tx.strategicObjectiveSuggestion.upsert({
+          where: { diagnosticId_dedupeKey: { diagnosticId: diagnostic.id, dedupeKey: item.dedupeKey } },
+          create: {
+            diagnosticId: diagnostic.id,
+            requestedById: request.user!.id,
+            originalPayload: item.payload,
+            editablePayload: item.payload,
+            strategyRefs: item.strategyRefs,
+            dedupeKey: item.dedupeKey,
+            status: CheckySuggestionStatus.PENDING,
+          },
+          update: {},
+          include: strategicObjectiveSuggestionInclude,
+        }))
+      }
+      return records
+    })
+    const persistedByKey = new Map(persisted.map((suggestion) => [suggestion.dedupeKey, suggestion]))
     response.json({
-      suggestions: result.suggestions.map((proposal) => ({
-        ...proposal,
-        origin: StrategicObjectiveOrigin.CHECKY,
-        missingInformation: result.missingInformation,
-        pendingFields: pendingFields(proposal),
-        strategies: proposal.strategyRefs.map((ref) => {
-          const strategy = selectedById.get(ref)
-          return strategy ? {
-            id: strategy.id,
-            source: strategy.source,
-            sourceRef: strategySourceRef(strategy.description),
-            title: strategy.title,
-            description: strategy.description,
-            weightedScore: strategy.weightedScore,
-            weightingBand: strategy.weightingBand,
-          } : null
-        }).filter((strategy): strategy is NonNullable<typeof strategy> => strategy !== null),
-      })),
+      suggestions: prepared.map(({ proposal, dedupeKey }) => {
+        const suggestion = persistedByKey.get(dedupeKey)!
+        return {
+           ...proposal,
+           indicators: suggestionIndicatorsOf(proposal).map((indicator) => ({
+             name: indicator.name,
+             description: indicator.description,
+             frequency: indicator.frequency,
+             formula: indicator.formula,
+             dataSource: indicator.dataSource,
+             unit: indicator.unit,
+             reportResponsibleId: indicator.reportResponsibleId,
+             monitorResponsibleId: indicator.monitorResponsibleId,
+             greenThreshold: indicator.greenThreshold,
+             yellowThreshold: indicator.yellowThreshold,
+             redThreshold: indicator.redThreshold,
+             baselineValue: indicator.baselineValue,
+             targetValue: indicator.targetValue,
+             measurementMethod: indicator.measurementMethod,
+             deadline: indicator.deadline,
+           })),
+           indicator: suggestionIndicatorsOf(proposal)[0] ?? null,
+          id: suggestion.id,
+          status: suggestion.status,
+          decisionNote: suggestion.decisionNote,
+          origin: StrategicObjectiveOrigin.CHECKY,
+          missingInformation: result.missingInformation,
+          pendingFields: pendingFields(proposal),
+          strategies: proposal.strategyRefs.map((ref) => {
+            const strategy = selectedById.get(ref)
+            return strategy ? {
+              id: strategy.id,
+              source: strategy.source,
+              sourceRef: strategySourceRef(strategy.description),
+              title: strategy.title,
+              description: strategy.description,
+              weightedScore: strategy.weightedScore,
+              weightingBand: strategy.weightingBand,
+            } : null
+          }).filter((strategy): strategy is NonNullable<typeof strategy> => strategy !== null),
+        }
+      }),
       missingInformation: result.missingInformation,
     })
+  }))
+
+  app.get('/api/diagnostics/:id/strategic-objective-suggestions', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const suggestions = await db.strategicObjectiveSuggestion.findMany({ where: { diagnosticId: diagnostic.id }, include: strategicObjectiveSuggestionInclude, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    response.json({ suggestions: suggestions.map(strategicObjectiveSuggestionView) })
+  }))
+
+  app.patch('/api/strategic-objective-suggestions/:id', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveSuggestionUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective suggestion data', details: parsed.error.issues })
+      return
+    }
+    const owned = await strategicObjectiveSuggestionForRequest(request, String(request.params.id))
+    if (!owned) {
+      response.status(404).json({ error: 'Strategic objective suggestion not found' })
+      return
+    }
+    if (owned.suggestion.status !== CheckySuggestionStatus.PENDING) {
+      response.status(409).json({ error: 'This strategic objective suggestion was already decided' })
+      return
+    }
+    const updated = await db.strategicObjectiveSuggestion.updateMany({
+      where: { id: owned.suggestion.id, diagnosticId: owned.diagnostic.id, status: CheckySuggestionStatus.PENDING },
+      data: { editablePayload: parsed.data.editablePayload as Prisma.InputJsonValue },
+    })
+    if (updated.count === 0) {
+      response.status(409).json({ error: 'This strategic objective suggestion was already decided' })
+      return
+    }
+    const suggestion = await db.strategicObjectiveSuggestion.findUnique({ where: { id: owned.suggestion.id }, include: strategicObjectiveSuggestionInclude })
+    response.json({ suggestion: strategicObjectiveSuggestionView(suggestion!) })
+  }))
+
+  app.post('/api/strategic-objective-suggestions/:id/reject', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveSuggestionRejectionSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective suggestion rejection', details: parsed.error.issues })
+      return
+    }
+    const owned = await strategicObjectiveSuggestionForRequest(request, String(request.params.id))
+    if (!owned) {
+      response.status(404).json({ error: 'Strategic objective suggestion not found' })
+      return
+    }
+    if (owned.suggestion.status !== CheckySuggestionStatus.PENDING) {
+      response.status(409).json({ error: 'This strategic objective suggestion was already decided' })
+      return
+    }
+    const updated = await db.strategicObjectiveSuggestion.updateMany({
+      where: { id: owned.suggestion.id, diagnosticId: owned.diagnostic.id, status: CheckySuggestionStatus.PENDING },
+      data: { status: CheckySuggestionStatus.REJECTED, decisionNote: parsed.data.decisionNote ?? null, decidedAt: new Date() },
+    })
+    if (updated.count === 0) {
+      response.status(409).json({ error: 'This strategic objective suggestion was already decided' })
+      return
+    }
+    const suggestion = await db.strategicObjectiveSuggestion.findUnique({ where: { id: owned.suggestion.id }, include: strategicObjectiveSuggestionInclude })
+    response.json({ suggestion: strategicObjectiveSuggestionView(suggestion!) })
+  }))
+
+  app.post('/api/strategic-objective-suggestions/:id/accept', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveSuggestionAcceptanceSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective suggestion acceptance', details: parsed.error.issues })
+      return
+    }
+    try {
+      const accepted = await runInTransaction(db, async (tx) => {
+        const suggestionId = String(request.params.id)
+        if (typeof tx.$queryRaw === 'function') {
+          await tx.$queryRaw`SELECT "id" FROM "StrategicObjectiveSuggestion" WHERE "id" = ${suggestionId} FOR UPDATE`
+        }
+        const suggestion = await tx.strategicObjectiveSuggestion.findUnique({
+          where: { id: suggestionId },
+          include: {
+            ...strategicObjectiveSuggestionInclude,
+            diagnostic: { select: { id: true, company: { select: { id: true } } } },
+          },
+        })
+        if (!suggestion || !canAccessCompany(request, suggestion.diagnostic.company)) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(404, 'Strategic objective suggestion not found')
+        }
+        if (suggestion.status !== CheckySuggestionStatus.PENDING || suggestion.acceptedObjectiveId) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(409, 'This strategic objective suggestion was already decided')
+        }
+
+        const payload = strategicObjectiveSuggestionPayloadSchema.safeParse(suggestion.editablePayload)
+        if (!payload.success) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(400, 'The editable proposal is invalid', { details: payload.error.issues })
+        }
+        const indicators = suggestionIndicatorsOf(payload.data)
+        const candidate: StrategicObjectiveCandidate = {
+          title: payload.data.title,
+          statement: payload.data.statement,
+          specificCriteria: payload.data.specificCriteria,
+          measurableCriteria: payload.data.measurableCriteria,
+          achievableCriteria: payload.data.achievableCriteria,
+          relevantCriteria: payload.data.relevantCriteria,
+          timeBoundCriteria: payload.data.timeBoundCriteria,
+          indicators,
+        }
+        const missingFields = strategicObjectiveMissingFields(candidate)
+        if (missingFields.length > 0) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(400, 'The strategic objective suggestion is incomplete', { missingFields })
+        }
+        if (indicators.length === 0) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(400, 'The strategic objective suggestion is incomplete', { missingFields: ['indicator'] })
+        }
+
+        try {
+          await validateStrategicObjectiveIndicatorResponsibilities(tx, indicators, suggestion.diagnostic.company.id)
+        } catch (error) {
+          if (error instanceof UserAssignmentError) throw new StrategicObjectiveSuggestionAcceptanceError(error.status, error.message)
+          throw error
+        }
+
+        const strategyRefs = strategicObjectiveSuggestionStrategyRefsSchema.safeParse(suggestion.strategyRefs)
+        if (!strategyRefs.success || strategyRefs.data.length === 0) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(409, 'The proposal no longer has valid strategic references')
+        }
+        const strategies = await loadDiagnosticStrategies(tx, suggestion.diagnosticId, true)
+        const selectedStrategies = strategyRefs.data.map((ref) => strategies.find((strategy) => strategy.id === ref))
+        if (selectedStrategies.some((strategy) => !strategy || !strategy.weighting || !strategy.weightingBand || strategy.weightedScore === null)) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(409, 'One or more linked strategies are no longer accepted, weighted and classified for this diagnostic')
+        }
+
+        const objective = await tx.strategicObjective.create({
+          data: {
+            diagnosticId: suggestion.diagnosticId,
+            title: payload.data.title,
+            statement: payload.data.statement,
+            specificCriteria: payload.data.specificCriteria,
+            measurableCriteria: payload.data.measurableCriteria,
+            achievableCriteria: payload.data.achievableCriteria,
+            relevantCriteria: payload.data.relevantCriteria,
+            timeBoundCriteria: payload.data.timeBoundCriteria,
+            status: StrategicObjectiveStatus.DRAFT,
+            origin: StrategicObjectiveOrigin.CHECKY,
+            createdById: request.user!.id,
+             indicators: { create: indicators },
+          },
+          include: strategicObjectiveInclude,
+        })
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: objective.id,
+          eventType: StrategicObjectiveHistoryEventType.CREATED,
+          summary: 'Objetivo estratégico creado desde una propuesta de Checky',
+          actor: request.user!,
+          changes: [
+            { field: 'title', label: 'Título', previousValue: null, newValue: objective.title },
+            { field: 'statement', label: 'Declaración', previousValue: null, newValue: objective.statement },
+            { field: 'status', label: 'Estado', previousValue: null, newValue: objective.status },
+          ],
+          metadata: { origin: objective.origin, suggestionId },
+        })
+
+        for (const strategy of selectedStrategies) {
+          if (!strategy) continue
+          const sourceRef = strategySourceRef(strategy.description)
+          await tx.strategicObjectiveStrategy.create({
+            data: {
+              objectiveId: objective.id,
+              source: strategy.source as StrategicObjectiveStrategySource,
+              sourceRef,
+              strategyTitle: strategy.title,
+              strategyDescription: strategy.description,
+              weightedScore: strategy.weightedScore!,
+              weightingBand: strategy.weightingBand!,
+              linkedById: request.user!.id,
+            },
+          })
+          await strategicObjectiveHistoryWrite(tx, {
+            objectiveId: objective.id,
+            eventType: StrategicObjectiveHistoryEventType.STRATEGY_LINKED,
+            summary: 'Estrategia vinculada al objetivo estratégico desde Checky',
+            actor: request.user!,
+            metadata: { source: strategy.source, sourceRef, strategyTitle: strategy.title, suggestionId },
+          })
+        }
+
+        const decided = await tx.strategicObjectiveSuggestion.updateMany({
+          where: { id: suggestion.id, diagnosticId: suggestion.diagnosticId, status: CheckySuggestionStatus.PENDING, acceptedObjectiveId: null },
+          data: { status: CheckySuggestionStatus.ACCEPTED, acceptedObjectiveId: objective.id, decidedAt: new Date() },
+        })
+        if (decided.count !== 1) {
+          throw new StrategicObjectiveSuggestionAcceptanceError(409, 'This strategic objective suggestion was already decided')
+        }
+        const persistedObjective = await tx.strategicObjective.findUnique({ where: { id: objective.id }, include: strategicObjectiveInclude })
+        const persistedSuggestion = await tx.strategicObjectiveSuggestion.findUnique({ where: { id: suggestion.id }, include: strategicObjectiveSuggestionInclude })
+        if (!persistedObjective || !persistedSuggestion) throw new Error('Accepted strategic objective could not be reloaded')
+        return { objective: persistedObjective, suggestion: persistedSuggestion }
+      })
+      response.status(201).json({ objective: strategicObjectiveView(accepted.objective), suggestion: strategicObjectiveSuggestionView(accepted.suggestion) })
+    } catch (error) {
+      if (error instanceof StrategicObjectiveSuggestionAcceptanceError) {
+        response.status(error.status).json({ error: error.message, ...(error.details ?? {}) })
+        return
+      }
+      throw error
+    }
   }))
 
   app.get('/api/diagnostics/:id/strategic-objectives', authMiddleware, asyncHandler(async (request, response) => {
@@ -8018,6 +8611,19 @@ response.json({
     }
     const objectives = await db.strategicObjective.findMany({ where: { diagnosticId: diagnostic.id }, include: strategicObjectiveInclude, orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }] })
     response.json({ objectives: objectives.map(strategicObjectiveView) })
+  }))
+
+  app.get('/api/diagnostics/:id/process-kpis', authMiddleware, asyncHandler(async (request, response) => {
+    const diagnostic = await db.qualityDiagnostic.findUnique({ where: { id: String(request.params.id) }, include: { company: { select: { id: true } } } })
+    if (!diagnostic || !canAccessCompany(request, diagnostic.company)) {
+      response.status(404).json({ error: 'Diagnostic not found' })
+      return
+    }
+    const [processes, kpis] = await Promise.all([
+      db.process.findMany({ where: { companyId: diagnostic.company.id }, include: processInclude, orderBy: [{ type: 'asc' }, { name: 'asc' }] }),
+      db.kpi.findMany({ where: { process: { companyId: diagnostic.company.id } }, include: kpiInclude, orderBy: { name: 'asc' } }),
+    ])
+    response.json({ processes: processes.map(processView), kpis: kpis.map(kpiView) })
   }))
 
   app.post('/api/diagnostics/:id/strategic-objectives', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -8031,39 +8637,48 @@ response.json({
       response.status(404).json({ error: 'Diagnostic not found' })
       return
     }
-    const indicator = parsed.data.indicator
-    const objective = await runInTransaction(db, async (tx) => {
-      const created = await tx.strategicObjective.create({
-        data: {
-          diagnosticId: diagnostic.id,
-          title: parsed.data.title,
-          statement: parsed.data.statement,
-          specificCriteria: parsed.data.specificCriteria ?? null,
-          measurableCriteria: parsed.data.measurableCriteria ?? null,
-          achievableCriteria: parsed.data.achievableCriteria ?? null,
-          relevantCriteria: parsed.data.relevantCriteria ?? null,
-          timeBoundCriteria: parsed.data.timeBoundCriteria ?? null,
-          origin: (parsed.data.origin ?? StrategicObjectiveOrigin.MANUAL) as StrategicObjectiveOrigin,
-          createdById: request.user!.id,
-          ...(indicator ? { indicator: { create: indicator } } : {}),
-        },
-        include: strategicObjectiveInclude,
+    const indicators = strategicObjectiveIndicatorValues(parsed.data.indicators, parsed.data.indicator)
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        await validateStrategicObjectiveIndicatorResponsibilities(tx, indicators, diagnostic.company.id)
+        const created = await tx.strategicObjective.create({
+          data: {
+            diagnosticId: diagnostic.id,
+            title: parsed.data.title,
+            statement: parsed.data.statement,
+            specificCriteria: parsed.data.specificCriteria ?? null,
+            measurableCriteria: parsed.data.measurableCriteria ?? null,
+            achievableCriteria: parsed.data.achievableCriteria ?? null,
+            relevantCriteria: parsed.data.relevantCriteria ?? null,
+            timeBoundCriteria: parsed.data.timeBoundCriteria ?? null,
+            origin: (parsed.data.origin ?? StrategicObjectiveOrigin.MANUAL) as StrategicObjectiveOrigin,
+            createdById: request.user!.id,
+            ...(indicators.length > 0 ? { indicators: { create: indicators } } : {}),
+          },
+          include: strategicObjectiveInclude,
+        })
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: created.id,
+          eventType: StrategicObjectiveHistoryEventType.CREATED,
+          summary: 'Objetivo estratégico creado',
+          actor: request.user!,
+          changes: [
+            { field: 'title', label: 'Título', previousValue: null, newValue: created.title },
+            { field: 'statement', label: 'Declaración', previousValue: null, newValue: created.statement },
+            { field: 'status', label: 'Estado', previousValue: null, newValue: created.status },
+          ],
+          metadata: { origin: created.origin },
+        })
+        return created
       })
-      await strategicObjectiveHistoryWrite(tx, {
-        objectiveId: created.id,
-        eventType: StrategicObjectiveHistoryEventType.CREATED,
-        summary: 'Objetivo estratégico creado',
-        actor: request.user!,
-        changes: [
-          { field: 'title', label: 'Título', previousValue: null, newValue: created.title },
-          { field: 'statement', label: 'Declaración', previousValue: null, newValue: created.statement },
-          { field: 'status', label: 'Estado', previousValue: null, newValue: created.status },
-        ],
-        metadata: { origin: created.origin },
-      })
-      return created
-    })
-    response.status(201).json({ objective: strategicObjectiveView(objective) })
+      response.status(201).json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (error instanceof UserAssignmentError) {
+        response.status(error.status).json({ error: error.message })
+        return
+      }
+      throw error
+    }
   }))
 
   app.get('/api/strategic-objectives/:id', authMiddleware, asyncHandler(async (request, response) => {
@@ -8072,6 +8687,187 @@ response.json({
       response.status(404).json({ error: 'Strategic objective not found' })
       return
     }
+    response.json({ objective: strategicObjectiveView(objective) })
+  }))
+
+  app.put('/api/strategic-objectives/:id/indicator', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveIndicatorSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const indicator = strategicObjectiveIndicatorValue(parsed.data)
+    if (!indicator) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data' })
+      return
+    }
+    const candidate: StrategicObjectiveCandidate = {
+      title: existing.title,
+      statement: existing.statement,
+      specificCriteria: existing.specificCriteria,
+      measurableCriteria: existing.measurableCriteria,
+      achievableCriteria: existing.achievableCriteria,
+      relevantCriteria: existing.relevantCriteria,
+      timeBoundCriteria: existing.timeBoundCriteria,
+      indicators: [indicator],
+    }
+    const missingFields = strategicObjectiveMissingFields(candidate, { requireIndicatorConfiguration: existing.origin === StrategicObjectiveOrigin.MANUAL || existing.status === StrategicObjectiveStatus.APPROVED })
+    if (existing.status === StrategicObjectiveStatus.APPROVED && missingFields.length > 0) {
+      response.status(400).json({ error: 'An approved strategic objective must remain SMART-complete', missingFields })
+      return
+    }
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        await validateStrategicObjectiveIndicatorResponsibilities(tx, [indicator], existing.diagnostic.company.id)
+        if (existing.indicators[0]) {
+          await tx.strategicObjectiveIndicator.update({ where: { id: existing.indicators[0].id }, data: parsed.data })
+        } else {
+          await tx.strategicObjectiveIndicator.create({ data: { objectiveId: existing.id, ...parsed.data } })
+        }
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: existing.id,
+          eventType: StrategicObjectiveHistoryEventType.UPDATED,
+          summary: 'Indicador del objetivo estratégico actualizado',
+          actor: request.user!,
+          changes: Object.entries(parsed.data).map(([field, value]) => ({ field: `indicator.${existing.indicators[0]?.id ?? 'new'}.${field}`, label: `Indicador: ${field}`, previousValue: processChangeValue(existing.indicators[0]?.[field as keyof typeof existing.indicators[number]]), newValue: processChangeValue(value) })),
+        })
+        return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+      })
+      response.json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (error instanceof UserAssignmentError) {
+        response.status(error.status).json({ error: error.message })
+        return
+      }
+      throw error
+    }
+  }))
+
+  app.post('/api/strategic-objectives/:id/indicators', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveIndicatorSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    if (!existing) {
+      response.status(404).json({ error: 'Strategic objective not found' })
+      return
+    }
+    const indicator = strategicObjectiveIndicatorValue(parsed.data)
+    if (!indicator) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data' })
+      return
+    }
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        await validateStrategicObjectiveIndicatorResponsibilities(tx, [indicator], existing.diagnostic.company.id)
+        await tx.strategicObjectiveIndicator.create({ data: { objectiveId: existing.id, ...parsed.data } })
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: existing.id,
+          eventType: StrategicObjectiveHistoryEventType.UPDATED,
+          summary: 'Indicador del objetivo estratégico agregado',
+          actor: request.user!,
+          changes: Object.entries(parsed.data).map(([field, value]) => ({ field: `indicators.new.${field}`, label: `Indicador: ${field}`, previousValue: null, newValue: processChangeValue(value) })),
+        })
+        return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+      })
+      response.status(201).json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (error instanceof UserAssignmentError) {
+        response.status(error.status).json({ error: error.message })
+        return
+      }
+      throw error
+    }
+  }))
+
+  app.put('/api/strategic-objectives/:id/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = strategicObjectiveIndicatorSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data', details: parsed.error.issues })
+      return
+    }
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    const current = existing?.indicators.find((indicator) => indicator.id === String(request.params.indicatorId))
+    if (!existing || !current) {
+      response.status(404).json({ error: 'Strategic objective indicator not found' })
+      return
+    }
+    const indicator = strategicObjectiveIndicatorValue(parsed.data)
+    if (!indicator) {
+      response.status(400).json({ error: 'Invalid strategic objective indicator data' })
+      return
+    }
+    const candidate: StrategicObjectiveCandidate = {
+      title: existing.title,
+      statement: existing.statement,
+      specificCriteria: existing.specificCriteria,
+      measurableCriteria: existing.measurableCriteria,
+      achievableCriteria: existing.achievableCriteria,
+      relevantCriteria: existing.relevantCriteria,
+      timeBoundCriteria: existing.timeBoundCriteria,
+      indicators: existing.indicators.map((item) => item.id === current.id ? indicator : strategicObjectiveIndicatorValue(item)!).filter((item): item is StrategicObjectiveIndicatorCandidate => item !== null),
+    }
+    const missingFields = strategicObjectiveMissingFields(candidate, { requireIndicatorConfiguration: existing.origin === StrategicObjectiveOrigin.MANUAL || existing.status === StrategicObjectiveStatus.APPROVED })
+    if (existing.status === StrategicObjectiveStatus.APPROVED && missingFields.length > 0) {
+      response.status(400).json({ error: 'An approved strategic objective must remain SMART-complete', missingFields })
+      return
+    }
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        await validateStrategicObjectiveIndicatorResponsibilities(tx, [indicator], existing.diagnostic.company.id)
+        await tx.strategicObjectiveIndicator.update({ where: { id: current.id }, data: parsed.data })
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: existing.id,
+          eventType: StrategicObjectiveHistoryEventType.UPDATED,
+          summary: 'Indicador del objetivo estratégico actualizado',
+          actor: request.user!,
+          changes: Object.entries(parsed.data).map(([field, value]) => ({ field: `indicators.${current.id}.${field}`, label: `Indicador: ${field}`, previousValue: processChangeValue(current[field as keyof typeof current]), newValue: processChangeValue(value) })),
+        })
+        return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+      })
+      response.json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (error instanceof UserAssignmentError) {
+        response.status(error.status).json({ error: error.message })
+        return
+      }
+      throw error
+    }
+  }))
+
+  app.delete('/api/strategic-objectives/:id/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const existing = await strategicObjectiveForRequest(request, String(request.params.id))
+    const current = existing?.indicators.find((indicator) => indicator.id === String(request.params.indicatorId))
+    if (!existing || !current) {
+      response.status(404).json({ error: 'Strategic objective indicator not found' })
+      return
+    }
+    const remaining = existing.indicators.filter((indicator) => indicator.id !== current.id).map((indicator) => strategicObjectiveIndicatorValue(indicator)!).filter((indicator): indicator is StrategicObjectiveIndicatorCandidate => indicator !== null)
+    if (existing.status === StrategicObjectiveStatus.APPROVED) {
+      const missingFields = strategicObjectiveMissingFields({ title: existing.title, statement: existing.statement, specificCriteria: existing.specificCriteria, measurableCriteria: existing.measurableCriteria, achievableCriteria: existing.achievableCriteria, relevantCriteria: existing.relevantCriteria, timeBoundCriteria: existing.timeBoundCriteria, indicators: remaining }, { requireIndicatorConfiguration: true })
+      if (missingFields.length > 0) {
+        response.status(400).json({ error: 'An approved strategic objective must remain SMART-complete', missingFields })
+        return
+      }
+    }
+    const objective = await runInTransaction(db, async (tx) => {
+      await tx.strategicObjectiveIndicator.delete({ where: { id: current.id } })
+      await strategicObjectiveHistoryWrite(tx, {
+        objectiveId: existing.id,
+        eventType: StrategicObjectiveHistoryEventType.UPDATED,
+        summary: 'Indicador del objetivo estratégico eliminado',
+        actor: request.user!,
+        changes: Object.entries(current).map(([field, value]) => ({ field: `indicators.${current.id}.${field}`, label: `Indicador: ${field}`, previousValue: processChangeValue(value), newValue: null })),
+      })
+      return (await tx.strategicObjective.findUnique({ where: { id: existing.id }, include: strategicObjectiveInclude }))!
+    })
     response.json({ objective: strategicObjectiveView(objective) })
   }))
 
@@ -8086,19 +8882,39 @@ response.json({
       response.status(404).json({ error: 'Strategic objective not found' })
       return
     }
-    const incomingIndicator = parsed.data.indicator
+    const hasIncomingIndicators = Object.prototype.hasOwnProperty.call(parsed.data, 'indicators')
+    const hasLegacyIndicator = Object.prototype.hasOwnProperty.call(parsed.data, 'indicator')
+    if (hasIncomingIndicators) {
+      response.status(400).json({ error: 'Use the individual indicator endpoints to manage multiple indicators' })
+      return
+    }
+    const incomingIndicator = hasLegacyIndicator ? parsed.data.indicator : undefined
+    if (hasLegacyIndicator && existing.indicators.length > 1) {
+      response.status(409).json({ error: 'This objective has multiple indicators; update one by id' })
+      return
+    }
+    const currentIndicator = existing.indicators[0]
     const candidateIndicator = incomingIndicator === undefined
-      ? existing.indicator
+      ? currentIndicator ? strategicObjectiveIndicatorValue(currentIndicator) : null
       : incomingIndicator === null
         ? null
-        : {
-            name: incomingIndicator.name ?? existing.indicator?.name ?? null,
-            unit: incomingIndicator.unit ?? existing.indicator?.unit ?? null,
-            baselineValue: incomingIndicator.baselineValue ?? existing.indicator?.baselineValue ?? null,
-            targetValue: incomingIndicator.targetValue ?? existing.indicator?.targetValue ?? null,
-            measurementMethod: incomingIndicator.measurementMethod ?? existing.indicator?.measurementMethod ?? null,
-            deadline: incomingIndicator.deadline ?? existing.indicator?.deadline ?? null,
-          }
+        : strategicObjectiveIndicatorValue({
+            name: incomingIndicator.name !== undefined ? incomingIndicator.name : currentIndicator?.name,
+            description: incomingIndicator.description !== undefined ? incomingIndicator.description : currentIndicator?.description,
+            frequency: incomingIndicator.frequency !== undefined ? incomingIndicator.frequency : currentIndicator?.frequency,
+            formula: incomingIndicator.formula !== undefined ? incomingIndicator.formula : currentIndicator?.formula,
+            dataSource: incomingIndicator.dataSource !== undefined ? incomingIndicator.dataSource : currentIndicator?.dataSource,
+            unit: incomingIndicator.unit !== undefined ? incomingIndicator.unit : currentIndicator?.unit,
+            reportResponsibleId: incomingIndicator.reportResponsibleId !== undefined ? incomingIndicator.reportResponsibleId : currentIndicator?.reportResponsibleId,
+            monitorResponsibleId: incomingIndicator.monitorResponsibleId !== undefined ? incomingIndicator.monitorResponsibleId : currentIndicator?.monitorResponsibleId,
+            greenThreshold: incomingIndicator.greenThreshold !== undefined ? incomingIndicator.greenThreshold : currentIndicator?.greenThreshold,
+            yellowThreshold: incomingIndicator.yellowThreshold !== undefined ? incomingIndicator.yellowThreshold : currentIndicator?.yellowThreshold,
+            redThreshold: incomingIndicator.redThreshold !== undefined ? incomingIndicator.redThreshold : currentIndicator?.redThreshold,
+            baselineValue: incomingIndicator.baselineValue !== undefined ? incomingIndicator.baselineValue : currentIndicator?.baselineValue,
+            targetValue: incomingIndicator.targetValue !== undefined ? incomingIndicator.targetValue : currentIndicator?.targetValue,
+            measurementMethod: incomingIndicator.measurementMethod !== undefined ? incomingIndicator.measurementMethod : currentIndicator?.measurementMethod,
+            deadline: incomingIndicator.deadline !== undefined ? incomingIndicator.deadline : currentIndicator?.deadline,
+          })
     const candidate: StrategicObjectiveCandidate = {
       title: parsed.data.title ?? existing.title,
       statement: parsed.data.statement ?? existing.statement,
@@ -8107,42 +8923,53 @@ response.json({
       achievableCriteria: parsed.data.achievableCriteria !== undefined ? parsed.data.achievableCriteria : existing.achievableCriteria,
       relevantCriteria: parsed.data.relevantCriteria !== undefined ? parsed.data.relevantCriteria : existing.relevantCriteria,
       timeBoundCriteria: parsed.data.timeBoundCriteria !== undefined ? parsed.data.timeBoundCriteria : existing.timeBoundCriteria,
-      indicator: candidateIndicator,
+      indicators: incomingIndicator === undefined
+        ? existing.indicators.map((indicator) => strategicObjectiveIndicatorValue(indicator)!).filter((indicator): indicator is StrategicObjectiveIndicatorCandidate => indicator !== null)
+        : candidateIndicator ? [candidateIndicator] : [],
     }
-    const missingFields = strategicObjectiveMissingFields(candidate)
+    const missingFields = strategicObjectiveMissingFields(candidate, { requireIndicatorConfiguration: existing.origin === StrategicObjectiveOrigin.MANUAL || existing.status === StrategicObjectiveStatus.APPROVED })
     if (existing.status === StrategicObjectiveStatus.APPROVED && missingFields.length > 0) {
       response.status(400).json({ error: 'An approved strategic objective must remain SMART-complete', missingFields })
       return
     }
-    const objective = await runInTransaction(db, async (tx) => {
-      const data: Prisma.StrategicObjectiveUncheckedUpdateInput = {}
-      if (parsed.data.title !== undefined) data.title = parsed.data.title
-      if (parsed.data.statement !== undefined) data.statement = parsed.data.statement
-      if (parsed.data.specificCriteria !== undefined) data.specificCriteria = parsed.data.specificCriteria
-      if (parsed.data.measurableCriteria !== undefined) data.measurableCriteria = parsed.data.measurableCriteria
-      if (parsed.data.achievableCriteria !== undefined) data.achievableCriteria = parsed.data.achievableCriteria
-      if (parsed.data.relevantCriteria !== undefined) data.relevantCriteria = parsed.data.relevantCriteria
-      if (parsed.data.timeBoundCriteria !== undefined) data.timeBoundCriteria = parsed.data.timeBoundCriteria
-      const updated = await tx.strategicObjective.update({ where: { id: existing.id }, data, include: strategicObjectiveInclude })
-      if (incomingIndicator === null) {
-        if (existing.indicator) await tx.strategicObjectiveIndicator.delete({ where: { objectiveId: existing.id } })
-      } else if (incomingIndicator) {
-        if (existing.indicator) {
-          await tx.strategicObjectiveIndicator.update({ where: { objectiveId: existing.id }, data: incomingIndicator })
-        } else {
-          await tx.strategicObjectiveIndicator.create({ data: { objectiveId: existing.id, ...incomingIndicator } })
+    try {
+      const objective = await runInTransaction(db, async (tx) => {
+        if (candidateIndicator) await validateStrategicObjectiveIndicatorResponsibilities(tx, [candidateIndicator], existing.diagnostic.company.id)
+        const data: Prisma.StrategicObjectiveUncheckedUpdateInput = {}
+        if (parsed.data.title !== undefined) data.title = parsed.data.title
+        if (parsed.data.statement !== undefined) data.statement = parsed.data.statement
+        if (parsed.data.specificCriteria !== undefined) data.specificCriteria = parsed.data.specificCriteria
+        if (parsed.data.measurableCriteria !== undefined) data.measurableCriteria = parsed.data.measurableCriteria
+        if (parsed.data.achievableCriteria !== undefined) data.achievableCriteria = parsed.data.achievableCriteria
+        if (parsed.data.relevantCriteria !== undefined) data.relevantCriteria = parsed.data.relevantCriteria
+        if (parsed.data.timeBoundCriteria !== undefined) data.timeBoundCriteria = parsed.data.timeBoundCriteria
+        const updated = await tx.strategicObjective.update({ where: { id: existing.id }, data, include: strategicObjectiveInclude })
+        if (incomingIndicator === null) {
+          if (currentIndicator) await tx.strategicObjectiveIndicator.delete({ where: { id: currentIndicator.id } })
+        } else if (incomingIndicator) {
+          if (currentIndicator) {
+            await tx.strategicObjectiveIndicator.update({ where: { id: currentIndicator.id }, data: incomingIndicator })
+          } else {
+            await tx.strategicObjectiveIndicator.create({ data: { objectiveId: existing.id, ...incomingIndicator } })
+          }
         }
-      }
-      await strategicObjectiveHistoryWrite(tx, {
-        objectiveId: existing.id,
-        eventType: StrategicObjectiveHistoryEventType.UPDATED,
-        summary: 'Objetivo estratégico actualizado',
-        actor: request.user!,
-         changes: strategicObjectiveUpdateChanges(existing, parsed.data),
+        await strategicObjectiveHistoryWrite(tx, {
+          objectiveId: existing.id,
+          eventType: StrategicObjectiveHistoryEventType.UPDATED,
+          summary: 'Objetivo estratégico actualizado',
+          actor: request.user!,
+          changes: strategicObjectiveUpdateChanges(existing, parsed.data),
+        })
+        return (await tx.strategicObjective.findUnique({ where: { id: updated.id }, include: strategicObjectiveInclude })) ?? updated
       })
-      return (await tx.strategicObjective.findUnique({ where: { id: updated.id }, include: strategicObjectiveInclude })) ?? updated
-    })
-    response.json({ objective: strategicObjectiveView(objective) })
+      response.json({ objective: strategicObjectiveView(objective) })
+    } catch (error) {
+      if (error instanceof UserAssignmentError) {
+        response.status(error.status).json({ error: error.message })
+        return
+      }
+      throw error
+    }
   }))
 
   app.post('/api/strategic-objectives/:id/approve', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
@@ -8160,7 +8987,7 @@ response.json({
       response.status(409).json({ error: 'Strategic objective is already approved' })
       return
     }
-    const missingFields = strategicObjectiveMissingFields(existing)
+    const missingFields = strategicObjectiveMissingFields(existing, { requireIndicatorConfiguration: true })
     if (missingFields.length > 0) {
       response.status(400).json({ error: 'Strategic objective is incomplete', missingFields })
       return
@@ -10038,6 +10865,10 @@ const checkySessionForRequest = async (request: Request, sessionId: string) => {
     }
     if (error instanceof TicketAssignmentApprovalError) {
       response.status(error.status).json({ error: error.message })
+      return
+    }
+    if (error instanceof StrategicObjectiveSuggestionAcceptanceError) {
+      response.status(error.status).json({ error: error.message, ...(error.details ?? {}) })
       return
     }
     // Subida de evidencia: formato/tamaño/tipo del archivo, ya con su estado (400/413/415).

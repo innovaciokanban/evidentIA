@@ -315,8 +315,10 @@ model User {
   evidenceUploads               TicketEvidenceFile[]       @relation("TicketEvidenceUploaders")
   processChanges                ProcessChange[]            @relation("ProcessChangeActors")
   riskAuditEvents               RiskAuditEvent[]           @relation("RiskAuditActors")
-  reportResponsibleKpis         Kpi[]                      @relation("ReportResponsibleKpis")
-  monitorResponsibleKpis        Kpi[]                      @relation("MonitorResponsibleKpis")
+   reportResponsibleKpis         Kpi[]                      @relation("ReportResponsibleKpis")
+   monitorResponsibleKpis        Kpi[]                      @relation("MonitorResponsibleKpis")
+   reportResponsibleStrategicObjectiveIndicators  StrategicObjectiveIndicator[] @relation("ReportResponsibleStrategicObjectiveIndicators")
+   monitorResponsibleStrategicObjectiveIndicators StrategicObjectiveIndicator[] @relation("MonitorResponsibleStrategicObjectiveIndicators")
   responsibleProcedures         Procedure[]                @relation("ProcedureResponsibles")
   procedureVersions             ProcedureVersion[]         @relation("ProcedureVersionActors")
   auditLeadAuditors             Audit[]                    @relation("AuditLeadAuditors")
@@ -329,6 +331,7 @@ model User {
   auditActionProgressCreators   AuditActionProgress[]      @relation("AuditActionProgressCreators")
   auditEvidenceUploaders        AuditEvidenceFile[]        @relation("AuditEvidenceUploaders")
   createdStrategicObjectives    StrategicObjective[]       @relation("CreatedStrategicObjectives")
+  requestedStrategicObjectiveSuggestions StrategicObjectiveSuggestion[] @relation("RequestedStrategicObjectiveSuggestions")
   strategicObjectiveLinks       StrategicObjectiveStrategy[] @relation("LinkedStrategicObjectiveStrategies")
   strategicObjectiveHistory     StrategicObjectiveHistory[] @relation("StrategicObjectiveHistoryActors")
   createdLearningCourses        LearningCourse[]            @relation("LearningCourseCreators")
@@ -578,6 +581,7 @@ model QualityDiagnostic {
   strategyWeightings StrategyWeighting[]
   checkySessions     CheckySession[]
   strategicObjectives StrategicObjective[]
+  strategicObjectiveSuggestions StrategicObjectiveSuggestion[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -840,13 +844,43 @@ model StrategicObjective {
   diagnostic         QualityDiagnostic                @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
   createdBy          User                             @relation("CreatedStrategicObjectives", fields: [createdById], references: [id], onDelete: Restrict)
   strategyLinks      StrategicObjectiveStrategy[]
-  indicator          StrategicObjectiveIndicator?
+  indicators         StrategicObjectiveIndicator[]
   history            StrategicObjectiveHistory[]
+  acceptedSuggestion StrategicObjectiveSuggestion? @relation("AcceptedStrategicObjectiveSuggestion")
   createdAt          DateTime                         @default(now())
   updatedAt          DateTime                         @updatedAt
 
   @@index([diagnosticId, status])
   @@index([createdById])
+}
+
+/**
+ * Propuesta SMART persistida por Checky. La propuesta se mantiene separada del objetivo oficial
+ * hasta que el usuario la acepte; así los estados de colaboración no se mezclan con DRAFT/APPROVED.
+ * originalPayload nunca se actualiza; editablePayload contiene la última versión revisada por la
+ * persona y ambos documentos comparten el mismo contrato validado por la aplicación.
+ */
+model StrategicObjectiveSuggestion {
+  id                String                 @id @default(cuid())
+  diagnosticId      String
+  requestedById     String
+  originalPayload   Json
+  editablePayload   Json
+  strategyRefs      String[]               @default([])
+  dedupeKey         String
+  status            CheckySuggestionStatus @default(PENDING)
+  decisionNote      String?
+  acceptedObjectiveId String?              @unique
+  decidedAt         DateTime?
+  diagnostic        QualityDiagnostic      @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+  requestedBy       User                   @relation("RequestedStrategicObjectiveSuggestions", fields: [requestedById], references: [id], onDelete: Restrict)
+  acceptedObjective StrategicObjective?     @relation("AcceptedStrategicObjectiveSuggestion", fields: [acceptedObjectiveId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([diagnosticId, dedupeKey])
+  @@index([diagnosticId, status])
+  @@index([requestedById])
 }
 
 model StrategicObjectiveStrategy {
@@ -869,19 +903,35 @@ model StrategicObjectiveStrategy {
 }
 
 model StrategicObjectiveIndicator {
-  id                String             @id @default(cuid())
-  objectiveId       String             @unique
-  name              String?
-  unit              String?
-  baselineValue     String?
-  targetValue       String?
-  measurementMethod String?
-  deadline          DateTime?
-  objective         StrategicObjective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  id                   String             @id @default(cuid())
+  objectiveId          String
+  kpiId                String?
+  name                 String?
+  description          String?
+  frequency            String?
+  targetValue          String?
+  formula              String?
+  dataSource           String?
+  unit                 String?
+  reportResponsibleId  String?
+  monitorResponsibleId String?
+  greenThreshold       String?
+  yellowThreshold      String?
+  redThreshold         String?
+  baselineValue        String?
+  measurementMethod    String?
+  deadline             DateTime?
+  objective            StrategicObjective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  kpi                  Kpi?               @relation(fields: [kpiId], references: [id], onDelete: SetNull)
+  reportResponsible    User?              @relation("ReportResponsibleStrategicObjectiveIndicators", fields: [reportResponsibleId], references: [id], onDelete: SetNull)
+  monitorResponsible   User?              @relation("MonitorResponsibleStrategicObjectiveIndicators", fields: [monitorResponsibleId], references: [id], onDelete: SetNull)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   @@index([deadline])
+  @@index([kpiId])
+  @@index([reportResponsibleId])
+  @@index([monitorResponsibleId])
 }
 
 model StrategicObjectiveHistory {
@@ -926,6 +976,7 @@ model Process {
   responsible        User?           @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
   changeHistory      ProcessChange[]
   kpis               Kpi[]
+  kpiLinks           ProcessKpi[]
   sipocSuppliers     SipocSupplier[]
   sipocInputs        SipocInput[]
   sipocProcesses     SipocProcess[]
@@ -964,8 +1015,8 @@ model ProcessChange {
 }
 
 /**
- * Indicador de un proceso. La empresa se obtiene de process.companyId para evitar duplicar el
- * tenant en dos columnas que podrían divergir; la API la devuelve como parte de la vista del KPI.
+ * Indicador de catálogo. processId conserva el proceso propietario histórico; ProcessKpi contiene
+ * las asociaciones reutilizables con procesos de la misma empresa.
  */
 model Kpi {
   id                   String   @id @default(cuid())
@@ -985,12 +1036,27 @@ model Kpi {
   process              Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
   reportResponsible    User?    @relation("ReportResponsibleKpis", fields: [reportResponsibleId], references: [id], onDelete: SetNull)
   monitorResponsible   User?    @relation("MonitorResponsibleKpis", fields: [monitorResponsibleId], references: [id], onDelete: SetNull)
+  strategicObjectiveIndicators StrategicObjectiveIndicator[]
+  processLinks        ProcessKpi[]
+  procedureLinks       ProcedureKpi[]
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
   @@index([processId])
   @@index([reportResponsibleId])
   @@index([monitorResponsibleId])
+}
+
+/** Relación explícita entre un KPI de empresa y los procesos que lo utilizan. */
+model ProcessKpi {
+  processId String
+  kpiId     String
+  process   Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+  kpi       Kpi     @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  linkedAt  DateTime @default(now())
+
+  @@id([processId, kpiId])
+  @@index([kpiId])
 }
 
 /**
@@ -1011,6 +1077,7 @@ model Procedure {
   version         String             @default("1.0")
   process         Process            @relation(fields: [processId], references: [id], onDelete: Restrict)
   responsible     User?              @relation("ProcedureResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  kpis            ProcedureKpi[]
   versions        ProcedureVersion[]
   auditProcedures AuditProcedure[]
   findingAudits   AuditFinding[]
@@ -1021,6 +1088,18 @@ model Procedure {
   @@index([processId])
   @@index([status])
   @@index([responsibleId])
+}
+
+/** Relación explícita entre un KPI de proceso y los procedimientos que lo utilizan. */
+model ProcedureKpi {
+  procedureId String
+  kpiId       String
+  procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+  kpi         Kpi       @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  linkedAt    DateTime  @default(now())
+
+  @@id([procedureId, kpiId])
+  @@index([kpiId])
 }
 
 /**

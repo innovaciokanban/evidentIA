@@ -10,16 +10,24 @@ export function smartMissingFields(objective: StrategicObjective): string[] {
   if (!objective.achievableCriteria?.trim()) missing.push('criterio alcanzable')
   if (!objective.relevantCriteria?.trim()) missing.push('criterio relevante')
   if (!objective.timeBoundCriteria?.trim()) missing.push('criterio temporal')
-  if (!objective.indicator) {
+  const indicators = objective.indicators?.length ? objective.indicators : objective.indicator ? [objective.indicator] : []
+  if (indicators.length === 0) {
     missing.push('indicador')
     return missing
   }
-  if (!objective.indicator.name?.trim()) missing.push('nombre del indicador')
-  if (!objective.indicator.unit?.trim()) missing.push('unidad del indicador')
-  if (!objective.indicator.baselineValue?.trim()) missing.push('línea base')
-  if (!objective.indicator.targetValue?.trim()) missing.push('meta')
-  if (!objective.indicator.measurementMethod?.trim()) missing.push('método de medición')
-  if (!objective.indicator.deadline) missing.push('fecha límite')
+  indicators.forEach((indicator, index) => {
+    const prefix = indicators.length === 1 ? '' : ` ${index + 1}`
+    if (!indicator.name?.trim()) missing.push(`nombre del indicador${prefix}`)
+    if (!indicator.frequency?.trim()) missing.push(`frecuencia del indicador${prefix}`)
+    if (!indicator.description?.trim()) missing.push(`descripción del indicador${prefix}`)
+    if (!indicator.formula?.trim()) missing.push(`fórmula del indicador${prefix}`)
+    if (!indicator.dataSource?.trim()) missing.push(`fuente de datos del indicador${prefix}`)
+    if (!indicator.unit?.trim()) missing.push(`unidad del indicador${prefix}`)
+    if (!indicator.baselineValue?.trim()) missing.push(`línea base${prefix}`)
+    if (!indicator.targetValue?.trim()) missing.push(`meta${prefix}`)
+    if (!indicator.measurementMethod?.trim()) missing.push(`método de medición${prefix}`)
+    if (!indicator.deadline) missing.push(`fecha límite${prefix}`)
+  })
   return missing
 }
 

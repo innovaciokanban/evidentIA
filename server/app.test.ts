@@ -201,7 +201,43 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   let storedCheckySessionOwners: Record<string, string> = { [checkySessionFixture.id]: diagnostic.id }
   let storedCrossWeightings: typeof crossWeightingFixture[] = []
   let storedStrategyWeightings: typeof strategyWeightingFixture[] = []
+  type StoredStrategicObjectiveSuggestion = {
+    id: string
+    diagnosticId: string
+    requestedById: string
+    originalPayload: unknown
+    editablePayload: unknown
+    strategyRefs: string[]
+    dedupeKey: string
+    status: 'PENDING' | 'ACCEPTED' | 'REJECTED'
+    decisionNote: string | null
+    acceptedObjectiveId: string | null
+    decidedAt: Date | null
+    createdAt: Date
+    updatedAt: Date
+  }
+  let storedStrategicObjectiveSuggestions: StoredStrategicObjectiveSuggestion[] = []
   let storedProcesses: typeof processFixture[] = [processFixture]
+  type StoredKpi = {
+    id: string
+    processId: string
+    name: string
+    description: string
+    frequency: string
+    target: string
+    formula: string
+    dataSource: string
+    unit: string
+    reportResponsibleId: string | null
+    monitorResponsibleId: string | null
+    greenThreshold: string | null
+    yellowThreshold: string | null
+    redThreshold: string | null
+    createdAt: Date
+    updatedAt: Date
+  }
+  let storedKpis: StoredKpi[] = []
+  let storedProcessKpiLinks: Array<{ processId: string; kpiId: string }> = []
   type StoredProcessChange = { id: string; processId: string; processName: string; version: string; action: 'CREATED' | 'UPDATED'; changedById: string | null; changedByName: string | null; changedByEmail: string | null; changes: unknown; changedAt: Date }
   let storedProcessChanges: StoredProcessChange[] = []
   const ownSwotItem = (item: { id: string; type: string; description: string }) => ({ ...item, swotId: diagnostic.swotAnalysis.id, createdAt: new Date('2026-01-04'), swot: { diagnosticId: diagnostic.id } })
@@ -264,6 +300,28 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
     }
     return true
   }
+  const strategicObjectiveSuggestionView = (suggestion: StoredStrategicObjectiveSuggestion) => ({
+    ...suggestion,
+    requestedBy: (() => {
+      const user = users.find((item) => item.id === suggestion.requestedById) ?? member
+      return { id: user.id, name: user.name, email: user.email }
+    })(),
+  })
+  const kpiView = (kpi: StoredKpi) => ({
+    ...kpi,
+    process: { id: kpi.processId, companyId: company.id, name: 'Proceso KPI', code: null },
+    reportResponsible: null,
+    monitorResponsible: null,
+  })
+  const processView = (item: typeof processFixture) => ({
+    ...item,
+    kpiLinks: storedProcessKpiLinks.filter((link) => link.processId === item.id).flatMap((link) => {
+      const kpi = storedKpis.find((item) => item.id === link.kpiId)
+      return kpi ? [{ kpi: kpiView(kpi) }] : []
+    }),
+    company: { id: item.companyId },
+    responsible: item.responsibleId === member.id ? { id: member.id, name: member.name } : null,
+  })
   const db = {
     $queryRaw: vi.fn(async (strings: TemplateStringsArray) => {
       const sql = Array.from(strings).join('')
@@ -421,24 +479,73 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       count: vi.fn(async () => 1),
     },
     process: {
-      findMany: vi.fn(async ({ where }: { where?: { companyId?: string } } = {}) => storedProcesses.filter((item) => !where?.companyId || item.companyId === where.companyId).map((item) => ({ ...item, company: { id: item.companyId }, responsible: item.responsibleId === member.id ? { id: member.id, name: member.name } : null }))),
+      findMany: vi.fn(async ({ where }: { where?: { companyId?: string } } = {}) => storedProcesses.filter((item) => !where?.companyId || item.companyId === where.companyId).map(processView)),
       findFirst: vi.fn(async ({ where }: { where: { companyId: string; name: string; NOT?: { id: string } } }) => storedProcesses.find((item) => item.companyId === where.companyId && item.name === where.name && item.id !== where.NOT?.id) ? { id: 'duplicate' } : null),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
         const item = storedProcesses.find((process) => process.id === where.id)
-        return item ? { ...item, company: { id: item.companyId }, responsible: item.responsibleId === member.id ? { id: member.id, name: member.name } : null } : null
+        return item ? processView(item) : null
       }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         const created = { ...processFixture, ...data, id: `cmprocesscreated${String(storedProcesses.length).padStart(10, '0')}`, createdAt: new Date('2026-02-01'), updatedAt: new Date('2026-02-01') } as typeof processFixture
         storedProcesses = [created, ...storedProcesses]
-        return { ...created, company: { id: created.companyId }, responsible: created.responsibleId === member.id ? { id: member.id, name: member.name } : null }
+        return processView(created)
       }),
       update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const current = storedProcesses.find((item) => item.id === where.id) ?? processFixture
         const updated = { ...current, ...data, updatedAt: new Date('2026-02-02') } as typeof processFixture
         storedProcesses = storedProcesses.map((item) => item.id === where.id ? updated : item)
-        return { ...updated, company: { id: updated.companyId }, responsible: updated.responsibleId === member.id ? { id: member.id, name: member.name } : null }
+        return processView(updated)
       }),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => { storedProcesses = storedProcesses.filter((item) => item.id !== where.id); return { id: where.id } }),
+    },
+    kpi: {
+      findMany: vi.fn(async ({ where, select }: { where?: { processId?: string }; select?: { id?: boolean; name?: boolean } } = {}) => storedKpis
+        .filter((kpi) => !where?.processId || kpi.processId === where.processId)
+        .map((kpi) => select ? { id: kpi.id, name: kpi.name } : kpiView(kpi))),
+      create: vi.fn(async ({ data }: { data: Omit<StoredKpi, 'id' | 'createdAt' | 'updatedAt'> }) => {
+        const kpi: StoredKpi = { ...data, id: `cmkpi${String(storedKpis.length + 1).padStart(20, '0')}`, createdAt: new Date(), updatedAt: new Date() }
+        storedKpis = [kpi, ...storedKpis]
+        return kpiView(kpi)
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<StoredKpi> }) => {
+        const current = storedKpis.find((kpi) => kpi.id === where.id)
+        if (!current) throw new Error('KPI not found')
+        const updated = { ...current, ...data, updatedAt: new Date() }
+        storedKpis = storedKpis.map((kpi) => kpi.id === where.id ? updated : kpi)
+        return kpiView(updated)
+      }),
+    },
+    processKpi: {
+      findMany: vi.fn(async ({ where, select, include }: { where?: { processId?: string }; select?: { kpiId?: boolean; kpi?: { select: { id: boolean; name: boolean } } }; include?: { kpi?: unknown } } = {}) => {
+        const links = storedProcessKpiLinks.filter((link) => !where?.processId || link.processId === where.processId)
+        return links.map((link) => {
+          const kpi = storedKpis.find((item) => item.id === link.kpiId)
+          if (select?.kpi) return { kpiId: link.kpiId, kpi: kpi ? { id: kpi.id, name: kpi.name } : null }
+          if (select?.kpiId) return { kpiId: link.kpiId }
+          return { ...link, ...(include?.kpi && kpi ? { kpi: kpiView(kpi) } : {}) }
+        })
+      }),
+      findUnique: vi.fn(async ({ where, include, select }: { where: { processId_kpiId: { processId: string; kpiId: string } }; include?: { kpi?: unknown }; select?: { kpiId?: boolean } }) => {
+        const link = storedProcessKpiLinks.find((item) => item.processId === where.processId_kpiId.processId && item.kpiId === where.processId_kpiId.kpiId)
+        if (!link) return null
+        if (select?.kpiId) return { kpiId: link.kpiId }
+        const kpi = storedKpis.find((item) => item.id === link.kpiId)
+        return { ...link, ...(include?.kpi && kpi ? { kpi: kpiView(kpi) } : {}) }
+      }),
+      create: vi.fn(async ({ data }: { data: { processId: string; kpiId: string } }) => {
+        const link = { ...data }
+        storedProcessKpiLinks = [...storedProcessKpiLinks, link]
+        return link
+      }),
+      delete: vi.fn(async ({ where }: { where: { processId_kpiId: { processId: string; kpiId: string } } }) => {
+        storedProcessKpiLinks = storedProcessKpiLinks.filter((link) => !(link.processId === where.processId_kpiId.processId && link.kpiId === where.processId_kpiId.kpiId))
+        return where.processId_kpiId
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: { processId: string; kpiId: { in: string[] } } }) => {
+        const before = storedProcessKpiLinks.length
+        storedProcessKpiLinks = storedProcessKpiLinks.filter((link) => !(link.processId === where.processId && where.kpiId.in.includes(link.kpiId)))
+        return { count: before - storedProcessKpiLinks.length }
+      }),
     },
     processChange: {
       create: vi.fn(async ({ data }: { data: Omit<StoredProcessChange, 'id' | 'changedAt'> }) => {
@@ -571,6 +678,37 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       // Acotado al diagnóstico de la consulta, que es el aislamiento de esta tabla.
       findMany: vi.fn(async ({ where }: { where?: { diagnosticId?: string } } = {}) => storedStrategyWeightings.filter((row) => (where?.diagnosticId ? row.diagnosticId === where.diagnosticId : true))),
     },
+    strategicObjectiveSuggestion: {
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const suggestion = storedStrategicObjectiveSuggestions.find((item) => item.id === where.id)
+        return suggestion ? strategicObjectiveSuggestionView(suggestion) : null
+      }),
+      findMany: vi.fn(async ({ where }: { where?: { diagnosticId?: string } } = {}) => storedStrategicObjectiveSuggestions
+        .filter((item) => !where?.diagnosticId || item.diagnosticId === where.diagnosticId)
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+        .map(strategicObjectiveSuggestionView)),
+      upsert: vi.fn(async ({ where, create }: { where: { diagnosticId_dedupeKey: { diagnosticId: string; dedupeKey: string } }; create: Omit<StoredStrategicObjectiveSuggestion, 'id' | 'createdAt' | 'updatedAt' | 'decisionNote' | 'acceptedObjectiveId' | 'decidedAt'> }) => {
+        const existing = storedStrategicObjectiveSuggestions.find((item) => item.diagnosticId === where.diagnosticId_dedupeKey.diagnosticId && item.dedupeKey === where.diagnosticId_dedupeKey.dedupeKey)
+        if (existing) return strategicObjectiveSuggestionView(existing)
+        const now = new Date()
+        const created: StoredStrategicObjectiveSuggestion = {
+          ...create,
+          id: `cmsuggestion${String(storedStrategicObjectiveSuggestions.length + 1).padStart(10, '0')}`,
+          decisionNote: null,
+          acceptedObjectiveId: null,
+          decidedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        }
+        storedStrategicObjectiveSuggestions = [...storedStrategicObjectiveSuggestions, created]
+        return strategicObjectiveSuggestionView(created)
+      }),
+      updateMany: vi.fn(async ({ where, data }: { where: { id: string; diagnosticId: string; status: string }; data: Partial<StoredStrategicObjectiveSuggestion> }) => {
+        const targets = storedStrategicObjectiveSuggestions.filter((item) => item.id === where.id && item.diagnosticId === where.diagnosticId && item.status === where.status)
+        storedStrategicObjectiveSuggestions = storedStrategicObjectiveSuggestions.map((item) => targets.includes(item) ? { ...item, ...data, updatedAt: new Date() } : item)
+        return { count: targets.length }
+      }),
+    },
     checkySession: {
       create: vi.fn(async ({ data }: { data: { diagnosticId: string; title: string | null; createdById: string } }) => {
         const id = `cmcheckysess${String(Object.keys(storedCheckySessionOwners).length).padStart(8, '0')}`
@@ -614,6 +752,8 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
   const messagesBefore = storedCheckyMessages
   const processChangesBefore = storedProcessChanges
   const processesBefore = storedProcesses
+  const kpisBefore = storedKpis
+  const processKpiLinksBefore = storedProcessKpiLinks
   const ticketAuditEventsBefore = storedTicketAuditEvents
   const assignmentApprovalsBefore = storedAssignmentApprovals.map((approval) => ({ ...approval }))
   const usersBefore = storedUsers.map((user) => ({ ...user }))
@@ -624,6 +764,8 @@ function makeDb(role: Role = 'SUPERUSER', ticketOwnerId = member.id, ticketAssig
       storedCheckyMessages = messagesBefore
       storedProcessChanges = processChangesBefore
       storedProcesses = processesBefore
+      storedKpis = kpisBefore
+      storedProcessKpiLinks = processKpiLinksBefore
       storedTicketAuditEvents = ticketAuditEventsBefore
       storedAssignmentApprovals = assignmentApprovalsBefore
       storedUsers = usersBefore
@@ -1419,6 +1561,98 @@ describe('processes API', () => {
     expect((db as unknown as { $queryRaw: ReturnType<typeof vi.fn> }).$queryRaw).toHaveBeenCalledTimes(4)
   })
 
+  it('creates and edits embedded KPIs in the same process flow', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    const kpi = (name: string, target: string) => ({
+      name,
+      description: `Medición de ${name}.`,
+      frequency: 'Mensual',
+      target,
+      formula: 'Casos cumplidos / casos totales',
+      dataSource: 'Reporte operativo',
+      unit: 'Porcentaje',
+      reportResponsibleId: member.id,
+      monitorResponsibleId: null,
+      greenThreshold: '95%',
+      yellowThreshold: '85%',
+      redThreshold: '84%',
+    })
+
+    const created = await agent.post('/api/processes').send({
+      name: 'Proceso con indicadores embebidos',
+      type: 'SUPPORT',
+      category: 'apoyo',
+      objective: 'Validar indicadores en el formulario principal',
+      companyId: company.id,
+      kpis: [kpi('Cumplimiento operativo', '95%'), kpi('Tiempo de respuesta', '24 horas')],
+    })
+    expect(created.status).toBe(201)
+    expect((db.processKpi.create as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2)
+    expect(created.body.process.kpis).toHaveLength(2)
+    expect((await agent.get(`/api/kpis?companyId=${company.id}`)).body.kpis).toHaveLength(2)
+
+    const firstKpi = created.body.process.kpis[0]
+    const secondKpi = created.body.process.kpis[1]
+    const updated = await agent.patch(`/api/processes/${created.body.process.id}`).send({
+      kpis: [{ ...kpi('Cumplimiento operativo actualizado', '98%'), id: firstKpi.id }],
+      kpiUnlinkIds: [secondKpi.id],
+    })
+    expect(updated.status).toBe(200)
+    expect(updated.body.process.kpis).toHaveLength(1)
+    expect(updated.body.process.kpis[0]).toMatchObject({ id: firstKpi.id, name: 'Cumplimiento operativo actualizado', target: '98%' })
+    expect((await agent.get(`/api/processes/${created.body.process.id}`)).body.process.kpis).toHaveLength(1)
+    expect(await db.kpi.findMany({})).toHaveLength(2)
+
+    const linked = await agent.post('/api/processes').send({
+      name: 'Proceso que reutiliza KPI',
+      type: 'SUPPORT',
+      category: 'apoyo',
+      objective: 'Validar vínculo existente',
+      companyId: company.id,
+      kpis: [{ ...kpi('Cumplimiento operativo actualizado', '98%'), id: firstKpi.id }],
+    })
+    expect(linked.status).toBe(201)
+    expect(linked.body.process.kpis).toHaveLength(1)
+    expect(linked.body.process.kpis[0].id).toBe(firstKpi.id)
+    expect((await agent.delete(`/api/processes/${linked.body.process.id}/kpis/${firstKpi.id}`)).status).toBe(204)
+    expect((await agent.get(`/api/processes/${linked.body.process.id}`)).body.process.kpis).toHaveLength(0)
+    expect(await db.kpi.findMany({})).toHaveLength(2)
+  })
+
+  it('rolls back embedded KPIs when process history persistence fails', async () => {
+    const db = makeDb()
+    const agent = request.agent(createApp(db))
+    await agent.post('/api/auth/login').send({ email: admin.email, password: 'Password123!' })
+    ;(db.processChange.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('History unavailable'))
+
+    const response = await agent.post('/api/processes').send({
+      name: 'Proceso KPI atómico',
+      type: 'SUPPORT',
+      category: 'apoyo',
+      objective: 'Validar rollback de indicadores',
+      companyId: company.id,
+      kpis: [{
+        name: 'KPI atómico',
+        description: 'Indicador de prueba',
+        frequency: 'Mensual',
+        target: '100%',
+        formula: 'Cumplidos / totales',
+        dataSource: 'Reporte',
+        unit: 'Porcentaje',
+        reportResponsibleId: member.id,
+        monitorResponsibleId: null,
+        greenThreshold: '95%',
+        yellowThreshold: '85%',
+        redThreshold: '84%',
+      }],
+    })
+    expect(response.status).toBe(500)
+    expect((await agent.get('/api/processes')).body.processes).toHaveLength(1)
+    expect(await db.kpi.findMany({})).toHaveLength(0)
+  })
+
   it('rolls back the process update and version when history persistence fails', async () => {
     const db = makeDb()
     const agent = request.agent(createApp(db))
@@ -2000,7 +2234,7 @@ describe('AI analysis service and API', () => {
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 
-  it('validates strategic objective suggestions and keeps unsupported indicator data pending', async () => {
+  it('validates strategic objective suggestions and preserves multiple indicator data', async () => {
     const strategyRef = 'cross:cmcross000000000000000001'
     const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({
       suggestions: [{
@@ -2011,7 +2245,7 @@ describe('AI analysis service and API', () => {
         achievableCriteria: null,
         relevantCriteria: 'Conecta una estrategia priorizada con el crecimiento.',
         timeBoundCriteria: null,
-        indicator: null,
+         indicators: [],
         strategyRefs: [strategyRef],
       }],
       missingInformation: ['Definir responsable, línea base, meta y fecha.'],
@@ -2022,7 +2256,7 @@ describe('AI analysis service and API', () => {
       strategies: [{ strategyRef, source: 'STRATEGIC_CROSS', title: 'Aprovechar la expansión comercial', description: 'Usar la fortaleza para capturar la oportunidad', weightedScore: 4.2, weightingBand: 'INMEDIATA', factors: [] }],
     })
     expect(result.suggestions).toHaveLength(1)
-    expect(result.suggestions[0].indicator).toBeNull()
+     expect(result.suggestions[0].indicators).toEqual([])
     expect(result.suggestions[0].strategyRefs).toEqual([strategyRef])
     expect(client.responses.create).toHaveBeenCalledOnce()
   })
@@ -2039,7 +2273,7 @@ describe('AI analysis service and API', () => {
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 
-  it('returns ephemeral SMART suggestions only from accepted weighted strategies', async () => {
+  it('persists SMART suggestions only from accepted weighted strategies', async () => {
     const seededCross: SeededCross = {
       id: strategicCrossFixture.id,
       crossType: 'FO',

@@ -166,6 +166,7 @@ export const processCreateSchema = z.object({
   status: processStatusSchema.optional(),
   responsibleId: idReference.nullable().optional(),
   companyId: idReference.optional(),
+  kpis: z.lazy(() => embeddedKpiListSchema).optional(),
 }).refine(
   (value) => processTypeForCategory[value.category] === value.type,
   { path: ['category'], message: 'Process type does not match selected category' },
@@ -186,6 +187,8 @@ export const processUpdateSchema = z.object({
   personalData: z.boolean().optional(),
   status: processStatusSchema.optional(),
   responsibleId: idReference.nullable().optional(),
+  kpis: z.lazy(() => embeddedKpiListSchema).optional(),
+  kpiUnlinkIds: z.array(idReference).max(50).optional(),
 }).refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
@@ -224,6 +227,23 @@ export const kpiQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
 })
 
+export const kpiCatalogQuerySchema = kpiQuerySchema.extend({
+  companyId: idReference.optional(),
+})
+
+const embeddedKpiSchema = kpiCreateSchema.extend({ id: idReference.optional() }).strict()
+export const embeddedKpiListSchema = z.array(embeddedKpiSchema).max(50).superRefine((items, context) => {
+  const names = new Set<string>()
+  const ids = new Set<string>()
+  items.forEach((item, index) => {
+    const normalizedName = item.name.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (names.has(normalizedName)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'name'], message: 'KPI names must be unique in this form' })
+    names.add(normalizedName)
+    if (item.id && ids.has(item.id)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'id'], message: 'A KPI cannot be listed twice' })
+    if (item.id) ids.add(item.id)
+  })
+})
+
 // Estados documentales del procedimiento, espejo de ProcedureStatus: DRAFT es el único estado
 // editable; APPROVED solo se abandona abriendo una nueva revisión para no pisar lo aprobado.
 export const procedureStatusSchema = z.enum(['DRAFT', 'IN_REVIEW', 'APPROVED', 'OBSOLETE'])
@@ -240,6 +260,7 @@ export const procedureCreateSchema = z.object({
   scope: procedureText(2000),
   description: z.string().trim().max(10000).nullable().optional(),
   responsibleId: procedureResponsibleId,
+  kpis: embeddedKpiListSchema.optional(),
 })
 
 export const procedureUpdateSchema = procedureCreateSchema.partial().refine(
@@ -759,12 +780,95 @@ const strategicObjectiveCriterion = (max: number) => z.string().trim().max(max).
 
 export const strategicObjectiveIndicatorSchema = z.object({
   name: z.string().trim().min(3).max(200).optional(),
+  description: z.string().trim().max(5000).nullable().optional(),
+  frequency: z.string().trim().max(80).nullable().optional(),
+  formula: z.string().trim().max(1000).nullable().optional(),
+  dataSource: z.string().trim().max(1000).nullable().optional(),
   unit: z.string().trim().min(1).max(80).optional(),
+  reportResponsibleId: z.string().trim().min(1).max(64).nullable().optional(),
+  monitorResponsibleId: z.string().trim().min(1).max(64).nullable().optional(),
+  greenThreshold: z.string().trim().max(120).nullable().optional(),
+  yellowThreshold: z.string().trim().max(120).nullable().optional(),
+  redThreshold: z.string().trim().max(120).nullable().optional(),
   baselineValue: z.string().trim().min(1).max(120).optional(),
   targetValue: z.string().trim().min(1).max(120).optional(),
   measurementMethod: z.string().trim().min(3).max(1000).optional(),
   deadline: calendarDateInput.nullable().optional(),
 }).strict()
+
+const strategicObjectiveIndicatorListSchema = z.array(strategicObjectiveIndicatorSchema).max(20).superRefine((indicators, context) => {
+  const seen = new Set<string>()
+  indicators.forEach((indicator, index) => {
+    const signature = JSON.stringify(indicator)
+    if (seen.has(signature)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: 'Indicators must not be duplicated' })
+    seen.add(signature)
+  })
+})
+
+const strategicObjectiveSuggestionText = (max: number) => z.string().trim().max(max).nullable()
+const strategicObjectiveSuggestionDate = z.string().trim().refine(isCalendarDate, 'Deadline must be a valid YYYY-MM-DD date').nullable()
+
+/**
+ * Stored Checky proposal document. All keys are explicit so the immutable original and the editable
+ * copy can be compared without relying on optional-field semantics. Dates stay as calendar strings
+ * because this document is persisted as JSON and must not depend on a server timezone.
+ */
+const strategicObjectiveSuggestionIndicatorSchema = z.object({
+  name: strategicObjectiveSuggestionText(200),
+  description: strategicObjectiveSuggestionText(5000).optional(),
+  frequency: strategicObjectiveSuggestionText(80).optional(),
+  formula: strategicObjectiveSuggestionText(1000).optional(),
+  dataSource: strategicObjectiveSuggestionText(1000).optional(),
+  unit: strategicObjectiveSuggestionText(80),
+  reportResponsibleId: idReference.nullable().optional(),
+  monitorResponsibleId: idReference.nullable().optional(),
+  greenThreshold: strategicObjectiveSuggestionText(120).optional(),
+  yellowThreshold: strategicObjectiveSuggestionText(120).optional(),
+  redThreshold: strategicObjectiveSuggestionText(120).optional(),
+  baselineValue: strategicObjectiveSuggestionText(120),
+  targetValue: strategicObjectiveSuggestionText(120),
+  measurementMethod: strategicObjectiveSuggestionText(1000),
+  deadline: strategicObjectiveSuggestionDate,
+}).strict()
+
+const strategicObjectiveSuggestionIndicatorListSchema = z.array(strategicObjectiveSuggestionIndicatorSchema).max(20).superRefine((indicators, context) => {
+  const seen = new Set<string>()
+  indicators.forEach((indicator, index) => {
+    const signature = JSON.stringify(indicator)
+    if (seen.has(signature)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: 'Indicators must not be duplicated' })
+    seen.add(signature)
+  })
+})
+
+export const strategicObjectiveSuggestionPayloadSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  statement: z.string().trim().min(3).max(5000),
+  specificCriteria: strategicObjectiveSuggestionText(2000),
+  measurableCriteria: strategicObjectiveSuggestionText(2000),
+  achievableCriteria: strategicObjectiveSuggestionText(2000),
+  relevantCriteria: strategicObjectiveSuggestionText(2000),
+  timeBoundCriteria: strategicObjectiveSuggestionText(2000),
+  indicators: strategicObjectiveSuggestionIndicatorListSchema.optional(),
+  indicator: strategicObjectiveSuggestionIndicatorSchema.nullable().optional(),
+}).strict().refine((payload) => payload.indicators !== undefined || payload.indicator !== undefined, 'Indicators are required')
+
+export const strategicObjectiveSuggestionStrategyRefsSchema = z.array(
+  z.string().trim().min(1).max(200),
+).max(8).refine(
+  (refs) => new Set(refs).size === refs.length,
+  'Strategy references must not be duplicated',
+)
+
+export const strategicObjectiveSuggestionUpdateSchema = z.object({
+  editablePayload: strategicObjectiveSuggestionPayloadSchema,
+}).strict()
+
+export const strategicObjectiveSuggestionRejectionSchema = z.object({
+  decisionNote: z.string().trim().min(1).max(1000).optional(),
+}).strict()
+
+/** Reserved for the Fase 3 acceptance endpoint; no route changes status in this phase. */
+export const strategicObjectiveSuggestionAcceptanceSchema = z.object({}).strict()
 
 export const strategicObjectiveCreateSchema = z.object({
   title: z.string().trim().min(3).max(200),
@@ -775,6 +879,7 @@ export const strategicObjectiveCreateSchema = z.object({
   relevantCriteria: strategicObjectiveCriterion(2000),
   timeBoundCriteria: strategicObjectiveCriterion(2000),
   origin: strategicObjectiveOriginSchema.optional(),
+  indicators: strategicObjectiveIndicatorListSchema.optional(),
   indicator: strategicObjectiveIndicatorSchema.nullable().optional(),
 }).strict()
 
@@ -793,6 +898,24 @@ export const strategicObjectiveSuggestionRequestSchema = z.object({
   strategyRefs: z.array(z.string().trim().min(1).max(200)).max(12).optional(),
 }).strict()
 
+const strategicObjectiveAISuggestionIndicatorSchema = z.object({
+  name: z.string().trim().max(200).nullable(),
+  description: z.string().trim().max(5000).nullable(),
+  frequency: z.string().trim().max(80).nullable(),
+  formula: z.string().trim().max(1000).nullable(),
+  dataSource: z.string().trim().max(1000).nullable(),
+  unit: z.string().trim().max(80).nullable(),
+  reportResponsibleId: idReference.nullable(),
+  monitorResponsibleId: idReference.nullable(),
+  greenThreshold: z.string().trim().max(120).nullable(),
+  yellowThreshold: z.string().trim().max(120).nullable(),
+  redThreshold: z.string().trim().max(120).nullable(),
+  baselineValue: z.string().trim().max(120).nullable(),
+  targetValue: z.string().trim().max(120).nullable(),
+  measurementMethod: z.string().trim().max(1000).nullable(),
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+}).strict()
+
 const strategicObjectiveAISuggestionSchema = z.object({
   title: z.string().trim().min(3).max(200),
   statement: z.string().trim().min(3).max(5000),
@@ -801,14 +924,8 @@ const strategicObjectiveAISuggestionSchema = z.object({
   achievableCriteria: z.string().trim().max(2000).nullable(),
   relevantCriteria: z.string().trim().max(2000).nullable(),
   timeBoundCriteria: z.string().trim().max(2000).nullable(),
-  indicator: z.object({
-    name: z.string().trim().max(200).nullable(),
-    unit: z.string().trim().max(80).nullable(),
-    baselineValue: z.string().trim().max(120).nullable(),
-    targetValue: z.string().trim().max(120).nullable(),
-    measurementMethod: z.string().trim().max(1000).nullable(),
-    deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-  }).strict().nullable(),
+  indicators: z.array(strategicObjectiveAISuggestionIndicatorSchema).max(20).default([]),
+  indicator: strategicObjectiveAISuggestionIndicatorSchema.nullable().optional(),
   strategyRefs: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
 }).strict()
 
@@ -960,6 +1077,7 @@ export function buildGeneratedCrossesAnalysisSchema(allowedIds: Set<string>) {
 export const checkyMessageRoleSchema = z.enum(['USER', 'CHECKY'])
 export const checkyFindingBasisSchema = z.enum(['FACT', 'INFERENCE'])
 export const checkySuggestionStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED'])
+export const strategicObjectiveSuggestionStatusSchema = checkySuggestionStatusSchema
 
 export const checkyCategorySchema = z.enum([
   'REVIEW_ASPECTS',

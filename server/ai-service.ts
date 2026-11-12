@@ -105,9 +105,36 @@ export type StrategicObjectiveSuggestionResult = {
     achievableCriteria: string | null
     relevantCriteria: string | null
     timeBoundCriteria: string | null
-    indicator: {
+    indicators: Array<{
       name: string | null
+      description: string | null
+      frequency: string | null
+      formula: string | null
+      dataSource: string | null
       unit: string | null
+      reportResponsibleId: string | null
+      monitorResponsibleId: string | null
+      greenThreshold: string | null
+      yellowThreshold: string | null
+      redThreshold: string | null
+      baselineValue: string | null
+      targetValue: string | null
+      measurementMethod: string | null
+      deadline: string | null
+    }>
+    /** Legacy adapter for callers that still return one indicator. */
+    indicator?: {
+      name: string | null
+      description?: string | null
+      frequency?: string | null
+      formula?: string | null
+      dataSource?: string | null
+      unit: string | null
+      reportResponsibleId?: string | null
+      monitorResponsibleId?: string | null
+      greenThreshold?: string | null
+      yellowThreshold?: string | null
+      redThreshold?: string | null
       baselineValue: string | null
       targetValue: string | null
       measurementMethod: string | null
@@ -589,22 +616,35 @@ const strategicObjectiveSuggestionJsonSchema = {
           achievableCriteria: { type: ['string', 'null'] },
           relevantCriteria: { type: ['string', 'null'] },
           timeBoundCriteria: { type: ['string', 'null'] },
-          indicator: {
-            type: ['object', 'null'],
-            additionalProperties: false,
-            properties: {
-              name: { type: ['string', 'null'] },
-              unit: { type: ['string', 'null'] },
-              baselineValue: { type: ['string', 'null'] },
-              targetValue: { type: ['string', 'null'] },
-              measurementMethod: { type: ['string', 'null'] },
-              deadline: { type: ['string', 'null'] },
+          indicators: {
+            type: 'array',
+            maxItems: 20,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: ['string', 'null'] },
+                description: { type: ['string', 'null'] },
+                frequency: { type: ['string', 'null'] },
+                formula: { type: ['string', 'null'] },
+                dataSource: { type: ['string', 'null'] },
+                unit: { type: ['string', 'null'] },
+                reportResponsibleId: { type: ['string', 'null'] },
+                monitorResponsibleId: { type: ['string', 'null'] },
+                greenThreshold: { type: ['string', 'null'] },
+                yellowThreshold: { type: ['string', 'null'] },
+                redThreshold: { type: ['string', 'null'] },
+                baselineValue: { type: ['string', 'null'] },
+                targetValue: { type: ['string', 'null'] },
+                measurementMethod: { type: ['string', 'null'] },
+                deadline: { type: ['string', 'null'] },
+              },
+              required: ['name', 'description', 'frequency', 'formula', 'dataSource', 'unit', 'reportResponsibleId', 'monitorResponsibleId', 'greenThreshold', 'yellowThreshold', 'redThreshold', 'baselineValue', 'targetValue', 'measurementMethod', 'deadline'],
             },
-            required: ['name', 'unit', 'baselineValue', 'targetValue', 'measurementMethod', 'deadline'],
           },
           strategyRefs: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' } },
         },
-        required: ['title', 'statement', 'specificCriteria', 'measurableCriteria', 'achievableCriteria', 'relevantCriteria', 'timeBoundCriteria', 'indicator', 'strategyRefs'],
+          required: ['title', 'statement', 'specificCriteria', 'measurableCriteria', 'achievableCriteria', 'relevantCriteria', 'timeBoundCriteria', 'indicators', 'strategyRefs'],
       },
     },
     missingInformation: { type: 'array', maxItems: 20, items: { type: 'string' } },
@@ -1286,7 +1326,7 @@ export class AIService {
       'Actúa como asesor de planeación estratégica y propone objetivos SMART a partir exclusivamente del diagnóstico y de las estrategias recibidas.',
       'Las estrategias recibidas son las únicas elegibles: ya fueron aceptadas por la persona, ponderadas y clasificadas por el servidor. Cada propuesta debe referenciar una o más strategyRef exactamente como llegan en el contexto.',
       'No inventes hechos, cifras, recursos, fechas, líneas base, metas, responsables, indicadores ni información externa.',
-      'Redacta objetivos y criterios accionables, pero deja en null cualquier dato que el contexto no defina. En particular, no inventes baselineValue, targetValue, deadline ni un indicador: indicator debe ser null cuando no exista una definición explícita en el contexto.',
+       'Redacta objetivos y criterios accionables, pero deja en null cualquier dato que el contexto no defina. En particular, no inventes baselineValue, targetValue, deadline ni indicadores: devuelve un arreglo vacío cuando no exista una definición explícita en el contexto.',
       'Los criterios que queden en null son pendientes por definir y deben aparecer en missingInformation de forma concreta. No rellenes esos vacíos con recomendaciones disfrazadas de hechos.',
       'No escribas strategyRef, ids técnicos ni metadatos internos dentro de title, statement, criterios o missingInformation. Las referencias solo pueden ir en strategyRefs.',
       'Devuelve únicamente JSON válido según el schema solicitado.',
@@ -1304,13 +1344,13 @@ export class AIService {
       const parsed = buildStrategicObjectiveSuggestionSchema(allowedStrategyRefs).safeParse(candidate)
       if (!parsed.success) throw new AIServiceError('INVALID_RESPONSE')
       const forbiddenReferences = [...allowedStrategyRefs]
-      const textFields = (suggestion: typeof parsed.data.suggestions[number]) => [suggestion.title, suggestion.statement, suggestion.specificCriteria, suggestion.measurableCriteria, suggestion.achievableCriteria, suggestion.relevantCriteria, suggestion.timeBoundCriteria, suggestion.indicator?.name, suggestion.indicator?.unit, suggestion.indicator?.baselineValue, suggestion.indicator?.targetValue, suggestion.indicator?.measurementMethod, suggestion.indicator?.deadline]
-      if (parsed.data.suggestions.some((suggestion) => textFields(suggestion).some((text) => text !== null && text !== undefined && forbiddenReferences.some((reference) => text.includes(reference))) || parsed.data.missingInformation.some((text) => forbiddenReferences.some((reference) => text.includes(reference))) || new Set(suggestion.strategyRefs).size !== suggestion.strategyRefs.length)) {
+       const textFields = (suggestion: typeof parsed.data.suggestions[number]) => [suggestion.title, suggestion.statement, suggestion.specificCriteria, suggestion.measurableCriteria, suggestion.achievableCriteria, suggestion.relevantCriteria, suggestion.timeBoundCriteria, ...suggestion.indicators.flatMap((indicator) => Object.values(indicator))]
+       if (parsed.data.suggestions.some((suggestion) => textFields(suggestion).some((text) => typeof text === 'string' && forbiddenReferences.some((reference) => text.includes(reference))) || new Set(suggestion.strategyRefs).size !== suggestion.strategyRefs.length || new Set(suggestion.indicators.map((indicator) => JSON.stringify(indicator))).size !== suggestion.indicators.length) || parsed.data.missingInformation.some((text) => forbiddenReferences.some((reference) => text.includes(reference)))) {
         throw new AIServiceError('INVALID_RESPONSE')
       }
       return {
         ...parsed.data,
-        suggestions: parsed.data.suggestions.map((suggestion) => ({ ...suggestion, indicator: null })),
+         suggestions: parsed.data.suggestions.map((suggestion) => ({ ...suggestion, indicators: suggestion.indicators, indicator: undefined })),
       }
     } catch (error) {
       this.fail(error)

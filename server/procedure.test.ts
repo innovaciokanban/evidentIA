@@ -21,12 +21,30 @@ const payload = {
   responsibleId: admin.id,
 }
 
+const kpiPayload = (name: string, target = '95%') => ({
+  name,
+  description: `Medición de ${name}.`,
+  frequency: 'Mensual',
+  target,
+  formula: 'Casos cumplidos / casos totales',
+  dataSource: 'Reporte operativo',
+  unit: 'Porcentaje',
+  reportResponsibleId: admin.id,
+  monitorResponsibleId: null,
+  greenThreshold: '95%',
+  yellowThreshold: '85%',
+  redThreshold: '84%',
+})
+
 function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const users = [admin, companyUser, foreignAdmin]
   const currentUser = users.find((user) => user.role === role && user.companyId === userCompanyId) ?? { ...admin, role, companyId: userCompanyId }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   let sessionActive = false
   const storedProcedures: Array<Record<string, unknown>> = []
+  const storedKpis: Array<Record<string, unknown>> = []
+  const storedProcessKpis: Array<{ processId: string; kpiId: string }> = []
+  const storedProcedureKpis: Array<{ procedureId: string; kpiId: string }> = []
   const storedVersions: Array<Record<string, unknown>> = []
   let procedureSeq = 0
   let versionSeq = 0
@@ -35,10 +53,19 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
     const user = users.find((item) => item.id === id)
     return user ? { id: user.id, name: user.name } : null
   }
+  const kpiView = (kpi: Record<string, unknown>) => ({
+    ...kpi,
+    process: { id: processId, companyId, name: process.name, code: process.code },
+    reportResponsible: userView(kpi.reportResponsibleId),
+    monitorResponsible: userView(kpi.monitorResponsibleId),
+  })
   const procedureView = (procedure: Record<string, unknown>) => ({
     ...procedure,
     process: { id: processId, companyId: process.companyId, name: process.name, code: process.code },
     responsible: userView(procedure.responsibleId),
+    kpis: storedProcedureKpis
+      .filter((link) => link.procedureId === procedure.id)
+      .map((link) => ({ kpi: kpiView(storedKpis.find((kpi) => kpi.id === link.kpiId)!) })),
   })
   const versionView = (version: Record<string, unknown>) => ({
     ...version,
@@ -82,6 +109,51 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
     },
     process: {
       findUnique: vi.fn(async () => ({ ...process, company: { id: process.companyId } })),
+    },
+    kpi: {
+      findMany: vi.fn(async ({ where, select }: { where?: { processId?: string }; select?: { id?: boolean; name?: boolean } } = {}) => storedKpis
+        .filter((kpi) => !where?.processId || kpi.processId === where.processId)
+        .map((kpi) => select ? { id: kpi.id, name: kpi.name } : kpiView(kpi))),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const kpi = storedKpis.find((item) => item.id === where.id)
+        return kpi ? kpiView(kpi) : null
+      }),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const kpi = { ...data, id: `cmkpi${String(storedKpis.length + 1).padStart(20, '0')}`, createdAt: new Date(), updatedAt: new Date() }
+        storedKpis.push(kpi)
+        return kpiView(kpi)
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const kpi = storedKpis.find((item) => item.id === where.id)
+        if (!kpi) throw new Error('KPI not found')
+        Object.assign(kpi, data, { updatedAt: new Date() })
+        return kpiView(kpi)
+      }),
+    },
+    processKpi: {
+      findMany: vi.fn(async ({ where, select }: { where?: { processId?: string }; select?: { kpiId?: boolean; kpi?: { select: { id: boolean; name: boolean } } } } = {}) => storedProcessKpis
+        .filter((link) => !where?.processId || link.processId === where.processId)
+        .map((link) => {
+          const kpi = storedKpis.find((item) => item.id === link.kpiId)
+          return select?.kpi ? { kpiId: link.kpiId, kpi: kpi ? { id: kpi.id, name: kpi.name } : null } : { kpiId: link.kpiId }
+        })),
+      create: vi.fn(async ({ data }: { data: { processId: string; kpiId: string } }) => { storedProcessKpis.push(data); return data }),
+    },
+    procedureKpi: {
+      findMany: vi.fn(async ({ where }: { where?: { procedureId?: string } } = {}) => storedProcedureKpis.filter((link) => !where?.procedureId || link.procedureId === where.procedureId)),
+      create: vi.fn(async ({ data }: { data: { procedureId: string; kpiId: string } }) => {
+        const link = { ...data }
+        storedProcedureKpis.push(link)
+        return link
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: { procedureId: string; kpiId: { notIn: string[] } } }) => {
+        const before = storedProcedureKpis.length
+        for (let index = storedProcedureKpis.length - 1; index >= 0; index -= 1) {
+          const link = storedProcedureKpis[index]
+          if (link.procedureId === where.procedureId && !where.kpiId.notIn.includes(link.kpiId)) storedProcedureKpis.splice(index, 1)
+        }
+        return { count: before - storedProcedureKpis.length }
+      }),
     },
     procedure: {
       findMany: vi.fn(async ({ where }: { where?: WhereClause } = {}) => storedProcedures.filter((procedure) => procedureMatches(procedure, where)).map(procedureView)),
@@ -136,7 +208,7 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
   }
   // Misma convención que el resto de arneses: la transacción ejecuta sobre el propio mock.
   db.$transaction = vi.fn(async (fn: (client: Record<string, unknown>) => Promise<unknown>) => fn(db))
-  return { db: db as unknown as PrismaClient, storedProcedures, storedVersions }
+  return { db: db as unknown as PrismaClient, storedProcedures, storedKpis, storedProcessKpis, storedProcedureKpis, storedVersions }
 }
 
 async function loggedIn(db: PrismaClient, email = admin.email) {
@@ -199,6 +271,45 @@ describe('process procedure API', () => {
     expect(removed.status).toBe(204)
     expect((await agent.get(listPath)).body.procedures).toHaveLength(0)
     expect(storedVersions).toHaveLength(0)
+  })
+
+  it('creates and edits multiple embedded KPIs without deleting the process KPIs', async () => {
+    const { db, storedKpis, storedProcedureKpis } = makeProcedureDb()
+    const agent = await loggedIn(db)
+    const first = await agent.post(listPath).send({
+      ...payload,
+      kpis: [kpiPayload('Cumplimiento de atención'), kpiPayload('Satisfacción del cliente', '90%')],
+    })
+    expect(first.status).toBe(201)
+    expect(first.body.procedure.kpis).toHaveLength(2)
+    expect(first.body.procedure.kpis.map((kpi: { name: string }) => kpi.name)).toEqual(['Cumplimiento de atención', 'Satisfacción del cliente'])
+    expect(storedKpis).toHaveLength(2)
+    expect(storedProcedureKpis).toHaveLength(2)
+
+    const firstProcedureId = first.body.procedure.id as string
+    const firstKpi = first.body.procedure.kpis[0]
+    const secondProcedure = await agent.post(listPath).send({
+      ...payload,
+      code: 'PRO-COM-02',
+      name: 'Seguimiento de solicitudes',
+      kpis: [{ ...kpiPayload(firstKpi.name), id: firstKpi.id }],
+    })
+    expect(secondProcedure.status).toBe(201)
+    expect(secondProcedure.body.procedure.kpis).toHaveLength(1)
+    expect(secondProcedure.body.procedure.kpis[0].id).toBe(firstKpi.id)
+    expect(storedKpis).toHaveLength(2)
+
+    const edited = await agent.patch(`${listPath}/${firstProcedureId}`).send({
+      kpis: [{ ...kpiPayload('Cumplimiento de atención actualizado', '98%'), id: firstKpi.id }],
+    })
+    expect(edited.status).toBe(200)
+    expect(edited.body.procedure.kpis).toHaveLength(1)
+    expect(edited.body.procedure.kpis[0]).toMatchObject({ id: firstKpi.id, name: 'Cumplimiento de atención actualizado', target: '98%' })
+    expect(storedKpis).toHaveLength(2)
+    expect(storedProcedureKpis).toEqual(expect.arrayContaining([
+      { procedureId: secondProcedure.body.procedure.id, kpiId: firstKpi.id },
+      { procedureId: firstProcedureId, kpiId: firstKpi.id },
+    ]))
   })
 
   it('enforces the review flow and never overwrites approved content', async () => {

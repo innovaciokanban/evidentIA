@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api, ApiError } from '../../api'
-import type { Procedure, ProcedureStatus, ProcedureVersion, Process, ProcessChangeItem, ProcessChangeValue, User } from '../../types'
+import type { Procedure, ProcedureStatus, ProcedureVersion, Process, ProcessChangeItem, ProcessChangeValue, ProcessKpi, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
 import { activeUserOptions, userOptionLabel } from '../../user-status'
+import { EmbeddedKpiSection, type EmbeddedKpiEntry } from './EmbeddedKpiSection'
+import { kpiPayloadOf } from './process-kpi.model'
 
 export type ProcedureUser = Pick<User, 'id' | 'name' | 'isActive'> & { companyId: string | null }
 
@@ -48,10 +50,11 @@ export type ProcedureDraft = {
   scope: string
   description: string
   responsibleId: string
+  kpis?: EmbeddedKpiEntry[]
 }
 
 const emptyProcedureDraft: ProcedureDraft = {
-  code: '', name: '', objective: '', scope: '', description: '', responsibleId: '',
+  code: '', name: '', objective: '', scope: '', description: '', responsibleId: '', kpis: [],
 }
 
 const draftFromProcedure = (procedure: Procedure): ProcedureDraft => ({
@@ -61,6 +64,7 @@ const draftFromProcedure = (procedure: Procedure): ProcedureDraft => ({
   scope: procedure.scope,
   description: procedure.description ?? '',
   responsibleId: procedure.responsible?.id ?? '',
+  kpis: procedure.kpis?.map((kpi) => ({ key: kpi.id, id: kpi.id, draft: { name: kpi.name, description: kpi.description, frequency: kpi.frequency, target: kpi.target, formula: kpi.formula, dataSource: kpi.dataSource, unit: kpi.unit, reportResponsibleId: kpi.reportResponsible?.id ?? '', monitorResponsibleId: kpi.monitorResponsible?.id ?? '', greenThreshold: kpi.greenThreshold ?? '', yellowThreshold: kpi.yellowThreshold ?? '', redThreshold: kpi.redThreshold ?? '' } })) ?? [],
 })
 
 const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' })
@@ -81,9 +85,10 @@ type ProcedureFormProps = {
   error: string
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onClose: () => void
+  processKpis: ProcessKpi[]
 }
 
-function ProcedureForm({ draft, setDraft, users, editing, saving, error, onSubmit, onClose }: ProcedureFormProps) {
+function ProcedureForm({ draft, setDraft, users, editing, saving, error, onSubmit, onClose, processKpis }: ProcedureFormProps) {
   const update = <K extends keyof ProcedureDraft>(field: K, value: ProcedureDraft[K]) => setDraft((current) => ({ ...current, [field]: value }))
 
   return (
@@ -106,7 +111,8 @@ function ProcedureForm({ draft, setDraft, users, editing, saving, error, onSubmi
           <label className="procedure-field-wide">Alcance<textarea value={draft.scope} onChange={(event) => update('scope', event.target.value)} placeholder="Qué cubre y qué queda por fuera" rows={3} maxLength={2000} required /></label>
           <label className="procedure-field-wide">Descripción<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} placeholder="Pasos, criterios o contexto adicional del procedimiento (opcional)" rows={4} maxLength={10000} /></label>
         </div>
-      </section>
+       </section>
+       <EmbeddedKpiSection entries={draft.kpis ?? []} setEntries={(next) => setDraft((current) => ({ ...current, kpis: typeof next === 'function' ? next(current.kpis ?? []) : next }))} users={users} availableKpis={processKpis} allowUnlinkExisting title="Indicadores KPI" description="Vincula indicadores del proceso o crea nuevos para este procedimiento." />
       <footer className="procedure-form-footer">
         <button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
         <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : editing ? 'Guardar cambios' : 'Guardar procedimiento'}</button>
@@ -132,6 +138,7 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
   const [history, setHistory] = useState<ProcedureVersion[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
+  const [processKpis, setProcessKpis] = useState<ProcessKpi[]>([])
 
   const historicalUsers: ProcedureUser[] = editing?.responsible ? [{ ...editing.responsible, companyId: process.companyId }] : []
   const availableUsers = activeUserOptions<ProcedureUser>(users.filter((user) => user.companyId === process.companyId), historicalUsers)
@@ -150,12 +157,24 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
     }
   }, [process.id])
 
+  const loadProcessKpis = useCallback(async () => {
+    try {
+      const result = await api<{ kpis: ProcessKpi[] }>(`/processes/${process.id}/kpis`)
+      setProcessKpis(result.kpis)
+    } catch (requestError) {
+      console.error('[process-procedures] failed to load process KPIs', requestError)
+    }
+  }, [process.id])
+
   // Carga inicial diferida con setTimeout, mismo patrón que ProcessChangeHistory: evita ejecutar
   // setState sincrónico dentro del cuerpo del efecto.
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadProcedures() }, 0)
+    const timer = window.setTimeout(() => {
+      void loadProcedures()
+      void loadProcessKpis()
+    }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadProcedures])
+  }, [loadProcedures, loadProcessKpis])
 
   const filtered = procedures.filter((procedure) => {
     const term = search.trim().toLowerCase()
@@ -172,7 +191,7 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
 
   function startCreate() {
     setEditing(null)
-    setDraft(emptyProcedureDraft)
+    setDraft({ ...emptyProcedureDraft, kpis: [] })
     setFormError('')
     setNotice('')
     setShowForm(true)
@@ -199,6 +218,7 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
       scope: draft.scope,
       description: draft.description.trim() || null,
       responsibleId: draft.responsibleId || null,
+      ...(draft.kpis ? { kpis: draft.kpis.map((entry) => ({ ...kpiPayloadOf(entry.draft), ...(entry.id ? { id: entry.id } : {}) })) } : {}),
     }
     try {
       if (editing) {
@@ -290,7 +310,7 @@ export function ProcessProcedurePanel({ process, users, canWrite, onBack }: { pr
       {notice && !showForm && <div className="form-success page-alert" role="status">{notice}</div>}
       {formError && !showForm && <div className="form-error page-alert" role="alert">{formError}</div>}
       {showForm ? (
-        <ProcedureForm draft={draft} setDraft={setDraft} users={availableUsers} editing={Boolean(editing)} saving={saving} error={formError} onSubmit={(event) => void saveProcedure(event)} onClose={closeForm} />
+         <ProcedureForm draft={draft} setDraft={setDraft} users={availableUsers} processKpis={processKpis} editing={Boolean(editing)} saving={saving} error={formError} onSubmit={(event) => void saveProcedure(event)} onClose={closeForm} />
       ) : (
         <section className="panel procedure-list-panel">
           <div className="panel-heading procedure-list-heading"><div><p className="detail-label">DOCUMENTOS DEL PROCESO</p><h2>Listado de procedimientos</h2></div><span className="procedure-list-note">Flujo de revisión y aprobación</span></div>

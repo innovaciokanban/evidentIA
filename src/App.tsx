@@ -2392,7 +2392,7 @@ function DiagnosticDetail({ diagnostic, user, onBack, onEdit, onDelete, stage, o
       )}
       {activeFlow === 'objetivos' && (
         <section className="diag-stage active">
-          <StrategicObjectivesSection diagnosticId={diagnostic.id} canWrite={canValue} />
+          <StrategicObjectivesSection diagnosticId={diagnostic.id} companyId={diagnostic.companyId} canWrite={canValue} />
           <div className="diag-nav">
             <button className="button secondary" onClick={() => goToFlowStep('ponderacion')}>← Volver a Ponderación</button>
           </div>

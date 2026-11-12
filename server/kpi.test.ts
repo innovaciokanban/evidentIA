@@ -34,6 +34,7 @@ function makeKpiDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   let sessionActive = false
   let storedKpi: Record<string, unknown> | null = null
+  let linked = false
 
   const responsibleView = (id: unknown) => {
     const user = users.find((item) => item.id === id)
@@ -74,6 +75,12 @@ function makeKpiDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         return kpiView(storedKpi)
       }),
       delete: vi.fn(async () => { storedKpi = null; return { id: kpiId } }),
+    },
+    processKpi: {
+      findMany: vi.fn(async () => linked && storedKpi ? [{ processId, kpiId, kpi: kpiView(storedKpi), linkedAt: new Date() }] : []),
+      findUnique: vi.fn(async () => linked && storedKpi ? { processId, kpiId, kpi: kpiView(storedKpi) } : null),
+      create: vi.fn(async () => { linked = true; return { processId, kpiId } }),
+      delete: vi.fn(async () => { linked = false; return { processId, kpiId } }),
     },
   }
   return { db: db as unknown as PrismaClient, currentUser }

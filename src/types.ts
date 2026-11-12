@@ -162,7 +162,18 @@ export type StrategicObjectiveIndicator = {
   id: string
   objectiveId: string
   name: string | null
+  description?: string | null
+  frequency?: string | null
+  formula?: string | null
+  dataSource?: string | null
   unit: string | null
+  reportResponsible?: Pick<User, 'id' | 'name' | 'email' | 'isActive'> | null
+  monitorResponsible?: Pick<User, 'id' | 'name' | 'email' | 'isActive'> | null
+  reportResponsibleId?: string | null
+  monitorResponsibleId?: string | null
+  greenThreshold?: string | null
+  yellowThreshold?: string | null
+  redThreshold?: string | null
   baselineValue: string | null
   targetValue: string | null
   measurementMethod: string | null
@@ -195,6 +206,8 @@ export type StrategicObjective = {
   status: StrategicObjectiveStatus
   origin: StrategicObjectiveOrigin
   createdBy: Pick<User, 'id' | 'name' | 'email'>
+  indicators: StrategicObjectiveIndicator[]
+  /** Compatibility alias for clients that only understand one indicator. */
   indicator: StrategicObjectiveIndicator | null
   strategies: StrategicObjectiveStrategy[]
   createdAt: string
@@ -212,6 +225,82 @@ export type StrategicObjectiveSuggestion = {
   indicator: StrategicObjectiveIndicator | null
   origin: 'CHECKY'
   strategyRefs: string[]
+  missingInformation: string[]
+  pendingFields: string[]
+  strategies: Array<Pick<DiagnosticStrategy, 'id' | 'source' | 'title' | 'description' | 'weightedScore' | 'weightingBand'> & { sourceRef: string }>
+}
+/** Persisted Checky proposal contract for the SMART collaboration flow. */
+export type StrategicObjectiveSuggestionPayload = {
+  title: string
+  statement: string
+  specificCriteria: string | null
+  measurableCriteria: string | null
+  achievableCriteria: string | null
+  relevantCriteria: string | null
+  timeBoundCriteria: string | null
+  indicators?: Array<{
+    name: string | null
+    description?: string | null
+    frequency?: string | null
+    formula?: string | null
+    dataSource?: string | null
+    unit: string | null
+    reportResponsibleId?: string | null
+    monitorResponsibleId?: string | null
+    greenThreshold?: string | null
+    yellowThreshold?: string | null
+    redThreshold?: string | null
+    baselineValue: string | null
+    targetValue: string | null
+    measurementMethod: string | null
+    deadline: string | null
+  }>
+  /** Compatibility alias for persisted proposals created before multi-indicator support. */
+  indicator?: {
+    name: string | null
+    description?: string | null
+    frequency?: string | null
+    formula?: string | null
+    dataSource?: string | null
+    unit: string | null
+    reportResponsibleId?: string | null
+    monitorResponsibleId?: string | null
+    greenThreshold?: string | null
+    yellowThreshold?: string | null
+    redThreshold?: string | null
+    baselineValue: string | null
+    targetValue: string | null
+    measurementMethod: string | null
+    deadline: string | null
+  } | null
+}
+export type StrategicObjectiveSuggestionRecord = {
+  id: string
+  diagnosticId: string
+  requestedBy: Pick<User, 'id' | 'name' | 'email'>
+  requestedById: string
+  originalPayload: StrategicObjectiveSuggestionPayload
+  editablePayload: StrategicObjectiveSuggestionPayload
+  strategyRefs: string[]
+  dedupeKey: string
+  status: CheckySuggestionStatus
+  decisionNote: string | null
+  acceptedObjectiveId: string | null
+  decidedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+export type StrategicObjectiveSuggestionCard = StrategicObjectiveSuggestionRecord & {
+  title: string
+  statement: string
+  specificCriteria: string | null
+  measurableCriteria: string | null
+  achievableCriteria: string | null
+  relevantCriteria: string | null
+  timeBoundCriteria: string | null
+  indicators: NonNullable<StrategicObjectiveSuggestionPayload['indicators']>
+  indicator: StrategicObjectiveSuggestionPayload['indicator']
+  origin: 'CHECKY'
   missingInformation: string[]
   pendingFields: string[]
   strategies: Array<Pick<DiagnosticStrategy, 'id' | 'source' | 'title' | 'description' | 'weightedScore' | 'weightingBand'> & { sourceRef: string }>
@@ -451,6 +540,7 @@ export type Process = {
   affectsAccounting: boolean
   personalData: boolean
   responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  kpis?: ProcessKpi[]
   createdAt: string
   updatedAt: string
 }
@@ -553,6 +643,7 @@ export type Procedure = {
   scope: string
   description: string | null
   responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  kpis: ProcessKpi[]
   status: ProcedureStatus
   version: string
   createdAt: string
