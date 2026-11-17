@@ -9,10 +9,10 @@ import { ProcessKpiPanel } from './ProcessKpiPanel'
 import { ProcessRiskPanel } from './ProcessRiskPanel'
 import { ProcessChangeHistory } from './ProcessChangeHistory'
 import { ProcessProcedurePanel } from './ProcessProcedurePanel'
-import { embeddedKpiEntryFromKpi } from './process-kpi.model'
+import { processIndicatorEntryFromIndicator, processIndicatorPayloadOf } from './process-indicator.model'
 import { ArrowDownIcon, BriefcaseIcon, SupportIcon, TargetIcon } from './ProcessIcons'
 import { api, ApiError } from '../../api'
-import type { Company, Process, ProcessKpi, ProcessType, User } from '../../types'
+import type { Company, Process, ProcessType, User } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
 
 export const categoryOf: Record<ProcessType, ProcessCategory> = { STRATEGIC: 'estrategico', MISSIONAL: 'misional', SUPPORT: 'apoyo' }
@@ -58,8 +58,7 @@ const emptyProcessDraft: ProcessDraft = {
   critical: false,
   affectsAccounting: false,
   personalData: false,
-  kpis: [],
-  kpiUnlinkIds: [],
+  indicators: [],
 }
 
 const draftFromProcess = (process: Process): ProcessDraft => ({
@@ -81,8 +80,7 @@ const draftFromProcess = (process: Process): ProcessDraft => ({
   critical: process.critical,
   affectsAccounting: process.affectsAccounting,
   personalData: process.personalData,
-  kpis: process.kpis?.map(embeddedKpiEntryFromKpi) ?? [],
-  kpiUnlinkIds: [],
+  indicators: process.indicators?.map(processIndicatorEntryFromIndicator) ?? [],
 })
 
 /**
@@ -104,14 +102,12 @@ export function processDraftPayload(draft: ProcessDraft) {
     critical: draft.critical,
     affectsAccounting: draft.affectsAccounting,
     personalData: draft.personalData,
-    ...(draft.kpis ? { kpis: draft.kpis.map((entry) => ({ ...entry.draft, ...(entry.id ? { id: entry.id } : {}), reportResponsibleId: entry.draft.reportResponsibleId || null, monitorResponsibleId: entry.draft.monitorResponsibleId || null, greenThreshold: entry.draft.greenThreshold.trim() || null, yellowThreshold: entry.draft.yellowThreshold.trim() || null, redThreshold: entry.draft.redThreshold.trim() || null })) } : {}),
-    ...(draft.kpiUnlinkIds && draft.kpiUnlinkIds.length > 0 ? { kpiUnlinkIds: draft.kpiUnlinkIds } : {}),
   }
 }
 
 /** El alta añade el tipo derivado de la categoría elegida y la empresa seleccionada. */
 export function createProcessPayload(draft: ProcessDraft) {
-  return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId }
+  return { ...processDraftPayload(draft), type: draft.type, category: categoryOf[draft.type], companyId: draft.companyId, indicators: (draft.indicators ?? []).map((entry) => processIndicatorPayloadOf(entry.draft)) }
 }
 
 export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApproval, onOpenTicket, onOpenCompanyDiagnostics }: { user: User; riskIntent?: { processId: string; riskId: string; section?: 'residual' | null } | null; onConsumeRiskIntent?: () => void; onOpenApproval?: (approvalId: string) => void; onOpenTicket?: (ticketId: string) => void; onOpenCompanyDiagnostics?: (companyId: string) => void }) {
@@ -119,7 +115,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
   const [processes, setProcesses] = useState<Process[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
   const [users, setUsers] = useState<ProcessUser[]>([])
-  const [kpiCatalog, setKpiCatalog] = useState<ProcessKpi[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [formError, setFormError] = useState('')
@@ -136,9 +131,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
   // Riesgo a enfocar al entrar desde la bandeja de aprobaciones, desde un ticket o desde una
   // notificación; el section opcional pide llevar además a una sección concreta del detalle.
   const [riskFocus, setRiskFocus] = useState<{ riskId: string; section?: 'residual' | null } | null>(null)
-  const availableKpisForDraft: ProcessKpi[] = [...kpiCatalog, ...processes.flatMap((process) => process.kpis ?? [])]
-    .filter((kpi, index, all) => kpi.companyId === draft.companyId && all.findIndex((item) => item.id === kpi.id) === index)
-
   const loadProcesses = useCallback(async (): Promise<boolean> => {
     setLoading(true)
     setLoadError('')
@@ -198,16 +190,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     }
   }
 
-  async function ensureKpiCatalog(companyId: string) {
-    if (!companyId) return
-    try {
-      const result = await api<{ kpis: ProcessKpi[] }>(`/kpis?companyId=${encodeURIComponent(companyId)}`)
-      setKpiCatalog(result.kpis)
-    } catch {
-      // Los KPI que ya vienen en el mapa siguen disponibles como fallback del formulario.
-    }
-  }
-
   function startCreate(type: ProcessType) {
     if (!canCreate) return
     setFormError('')
@@ -222,7 +204,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setDraft({ ...emptyProcessDraft, type, companyId })
     setShowForm(true)
     void ensureUsers()
-    void ensureKpiCatalog(companyId)
   }
 
   function startEdit(process: Process) {
@@ -238,7 +219,6 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
     setDraft(draftFromProcess(process))
     setShowForm(true)
     void ensureUsers()
-    void ensureKpiCatalog(process.companyId)
   }
 
   function openProcess(process: Process) {
@@ -426,10 +406,8 @@ export function ProcessesPage({ user, riskIntent, onConsumeRiskIntent, onOpenApp
             onOpenRisks={editing ? () => openRisks(editing) : undefined}
             onOpenChangeHistory={editing ? () => openChangeHistory(editing) : undefined}
             onOpenProcedures={editing ? () => openProcedures(editing) : undefined}
-            processId={editing?.id}
-            availableKpis={availableKpisForDraft}
-            onCompanyChange={(companyId) => void ensureKpiCatalog(companyId)}
-          />
+             processId={editing?.id}
+           />
        ) : <>
        <section className="metric-grid">
         {summary.map((item) => (

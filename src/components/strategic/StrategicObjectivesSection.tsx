@@ -4,7 +4,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { LoadingState } from '../ui/LoadingState'
 import { askConfirm } from '../ui/useConfirm'
 import { smartErrorMessage, smartMissingFields } from './strategic-objectives.model'
-import { KpiFields } from '../processes/KpiForm'
+import { KpiIndicatorModal } from '../processes/KpiForm'
 import { emptyKpiDraft, kpiMissingFields, type KpiDraft, type KpiUser } from '../processes/process-kpi.model'
 import type { DiagnosticStrategy, StrategicObjective, StrategicObjectiveStrategy, StrategicObjectiveSuggestionCard, StrategicObjectiveSuggestionPayload, StrategicObjectiveSuggestionRecord, StrategyBand, StrategySource, User } from '../../types'
 import checkyImage from '../../assets/Aprobado por checky.png'
@@ -267,27 +267,8 @@ function SmartSuggestionCard({ suggestion, canWrite, busy, onEdit, onAccept, onR
   )
 }
 
-function SmartIndicatorModal({ draft, users, editing, saving, error, onDraftChange, onSubmit, onClose }: { draft: SmartIndicatorDraft; users: KpiUser[]; editing: boolean; saving: boolean; error: string; onDraftChange: React.Dispatch<React.SetStateAction<SmartIndicatorDraft>>; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
-  return (
-    <div className="drawer-backdrop centered-backdrop smart-indicator-backdrop">
-      <form className="kpi-form panel smart-indicator-modal" onSubmit={onSubmit} aria-label={editing ? 'Editar indicador SMART' : 'Nuevo indicador SMART'}>
-        <header className="kpi-form-header">
-          <div>
-            <p className="eyebrow">INDICADORES SMART</p>
-            <h2>{editing ? 'EDITAR INDICADOR' : 'NUEVO INDICADOR'}</h2>
-            <p>Define la configuración propia de este objetivo. No se creará ni modificará ningún KPI de Procesos o Procedimientos.</p>
-          </div>
-          <button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
-        </header>
-        {error && <div className="form-error kpi-form-error" role="alert">{error}</div>}
-        <KpiFields draft={draft} setDraft={onDraftChange} users={users} supplemental={draft} />
-        <footer className="kpi-form-footer">
-          <button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando...' : editing ? 'Guardar cambios' : 'Guardar indicador'}</button>
-        </footer>
-      </form>
-    </div>
-  )
+function SmartIndicatorModal({ draft, users, editing, saving, error, onDraftChange, onSubmit, onClose }: { draft: SmartIndicatorDraft; users: KpiUser[]; editing: boolean; saving: boolean; error: string; onDraftChange: React.Dispatch<React.SetStateAction<SmartIndicatorDraft>>; onSubmit: () => void; onClose: () => void }) {
+  return <KpiIndicatorModal draft={draft} setDraft={onDraftChange} users={users} editing={editing} saving={saving} error={error} eyebrow="INDICADORES SMART" title={editing ? 'EDITAR INDICADOR' : 'NUEVO INDICADOR'} description="Define la configuración propia de este objetivo. No se creará ni modificará ningún KPI de Procesos o Procedimientos." ariaLabel={editing ? 'Editar indicador SMART' : 'Nuevo indicador SMART'} onSubmit={onSubmit} onClose={onClose} />
 }
 
 function ObjectiveFormModal({ draft, editing, suggestionMode, strategyOptions, selectedKeys, saving, error, onDraftChange, onToggleStrategy, onOpenIndicator, onEditIndicator, onSubmit, onClose }: { draft: ObjectiveDraft; editing: StrategicObjective | null; suggestionMode: boolean; strategyOptions: StrategicStrategyOption[]; selectedKeys: Set<string>; saving: boolean; error: string; onDraftChange: (draft: ObjectiveDraft) => void; onToggleStrategy: (strategy: StrategicStrategyOption) => void; onOpenIndicator: () => void; onEditIndicator: (index: number) => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onClose: () => void }) {
@@ -451,8 +432,7 @@ export function StrategicObjectivesSection({ diagnosticId, companyId, canWrite, 
     setIndicatorModalOpen(true)
   }
 
-  async function saveIndicator(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function saveIndicator() {
     if (indicatorSaving) return
     const missing = kpiMissingFields(indicatorEditor)
     if (missing.length > 0) {
@@ -656,7 +636,7 @@ export function StrategicObjectivesSection({ diagnosticId, companyId, canWrite, 
         {loading ? <LoadingState text="Cargando objetivos y estrategias priorizadas..." /> : objectives.length === 0 ? <EmptyState icon="◎" title="Todavía no hay objetivos SMART" text={canWrite ? 'Crea un borrador y completa sus criterios a medida que avances.' : 'Los objetivos SMART de este análisis aparecerán aquí.'} action={canWrite ? <button type="button" className="button secondary" onClick={openCreate}>Crear primer objetivo</button> : undefined} /> : <div className="smart-objectives-list">{objectives.map((objective) => <SmartObjectiveCard key={objective.id} objective={objective} canWrite={canWrite} busyKey={busyKey} expanded={expandedId === objective.id} onToggle={() => setExpandedId((current) => current === objective.id ? null : objective.id)} onEdit={() => openEdit(objective)} onEditIndicator={(indicatorId) => openIndicatorEditorForId(objective, indicatorId)} onDeleteIndicator={(indicatorId) => void deleteIndicator(objective, indicatorId)} onApprove={() => void approve(objective)} onUnlink={(link) => void unlink(objective, link)} />)}</div>}
        {!loading && <RelationMap objectives={objectives} />}
          {modalOpen && <ObjectiveFormModal draft={draft} editing={editing} suggestionMode={Boolean(activeSuggestion)} strategyOptions={strategyOptions} selectedKeys={selectedKeys} saving={saving} error={error} onDraftChange={setDraft} onToggleStrategy={toggleStrategy} onOpenIndicator={openIndicatorEditor} onEditIndicator={openIndicatorEditorForIndex} onSubmit={(event) => void saveObjective(event)} onClose={() => { if (!saving) setModalOpen(false) }} />}
-         {indicatorModalOpen && <SmartIndicatorModal draft={indicatorEditor} users={indicatorUsers} editing={editingIndicatorId !== null || editingIndicatorIndex !== null} saving={indicatorSaving} error={indicatorError} onDraftChange={setIndicatorEditor} onSubmit={(event) => void saveIndicator(event)} onClose={() => { if (!indicatorSaving) setIndicatorModalOpen(false) }} />}
+          {indicatorModalOpen && <SmartIndicatorModal draft={indicatorEditor} users={indicatorUsers} editing={editingIndicatorId !== null || editingIndicatorIndex !== null} saving={indicatorSaving} error={indicatorError} onDraftChange={setIndicatorEditor} onSubmit={() => void saveIndicator()} onClose={() => { if (!indicatorSaving) setIndicatorModalOpen(false) }} />}
     </section>
   )
 }

@@ -10,6 +10,8 @@ export type KpiSupplementalFields = {
   deadline: string
 }
 
+export type KpiIndicatorDraft = KpiDraft & KpiSupplementalFields
+
 type KpiFormProps = {
   draft: KpiDraft
   setDraft: Dispatch<SetStateAction<KpiDraft>>
@@ -86,5 +88,33 @@ export function KpiFields<T extends KpiDraft>({ draft, setDraft, users, suppleme
         </div>
       </section>
     </>
+  )
+}
+
+export function KpiIndicatorModal<T extends KpiIndicatorDraft>({ draft, setDraft, users, editing, saving, error, eyebrow, title, description, ariaLabel, onSubmit, onClose }: { draft: T; setDraft: Dispatch<SetStateAction<T>>; users: KpiUser[]; editing: boolean; saving: boolean; error: string; eyebrow: string; title: string; description: string; ariaLabel: string; onSubmit: () => void; onClose: () => void }) {
+  return (
+    <div className="drawer-backdrop centered-backdrop smart-indicator-backdrop">
+      <div className="kpi-form panel smart-indicator-modal" role="dialog" aria-modal="true" aria-label={ariaLabel} onKeyDown={(event) => {
+        if (event.key === 'Enter' && event.target instanceof HTMLInputElement) {
+          event.preventDefault()
+          if (!saving) onSubmit()
+        }
+      }}>
+        <header className="kpi-form-header">
+          <div>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
+            <p>{description}</p>
+          </div>
+          <button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
+        </header>
+        {error && <div className="form-error kpi-form-error" role="alert">{error}</div>}
+        <KpiFields draft={draft} setDraft={setDraft} users={users} supplemental={draft} />
+        <footer className="kpi-form-footer">
+          <button type="button" className="button secondary" onClick={onClose}>Cancelar</button>
+          <button type="button" className="button primary" onClick={onSubmit} disabled={saving}>{saving ? 'Guardando...' : editing ? 'Guardar cambios' : 'Guardar indicador'}</button>
+        </footer>
+      </div>
+    </div>
   )
 }

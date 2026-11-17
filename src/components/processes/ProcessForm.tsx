@@ -1,9 +1,9 @@
 import type { Dispatch, FormEvent, SetStateAction } from 'react'
-import type { Company, ProcessKpi, ProcessState, ProcessType, User } from '../../types'
+import type { Company, ProcessState, ProcessType, User } from '../../types'
 import { activeUserOptions, userOptionLabel } from '../../user-status'
 import { ProcessSipocSection } from './ProcessSipocSection'
-import { EmbeddedKpiSection, type EmbeddedKpiEntry } from './EmbeddedKpiSection'
-import type { KpiUser } from './process-kpi.model'
+import { ProcessIndicatorSection } from './ProcessIndicatorSection'
+import type { ProcessIndicatorEntry } from './process-indicator.model'
 
 export type ProcessDraft = {
   name: string
@@ -24,8 +24,7 @@ export type ProcessDraft = {
   critical: boolean
   affectsAccounting: boolean
   personalData: boolean
-  kpis?: EmbeddedKpiEntry[]
-  kpiUnlinkIds?: string[]
+  indicators?: ProcessIndicatorEntry[]
 }
 
 const processTypeOptions: { value: ProcessType; label: string }[] = [
@@ -56,8 +55,6 @@ type ProcessFormProps = {
   onOpenChangeHistory?: () => void
   onOpenProcedures?: () => void
   processId?: string
-  availableKpis?: ProcessKpi[]
-  onCompanyChange?: (companyId: string) => void
 }
 
 const dateLabel = (value: string | null) => value
@@ -74,7 +71,7 @@ function ToggleField({ label, value, onChange }: { label: string; value: boolean
   )
 }
 
-export function ProcessForm({ draft, setDraft, users, historicalResponsible, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, onOpenProcedures, processId, availableKpis = [], onCompanyChange }: ProcessFormProps) {
+export function ProcessForm({ draft, setDraft, users, historicalResponsible, companies, editing, readOnly, saving, error, onSubmit, onClose, onOpenKpis, onOpenRisks, onOpenChangeHistory, onOpenProcedures, processId }: ProcessFormProps) {
   // El servidor vuelve a validar esta relación; aquí evitamos ofrecer responsables de otra empresa.
   const availableUsers = activeUserOptions(users.filter((user) => !draft.companyId || user.companyId === draft.companyId), historicalResponsible ? [historicalResponsible] : [])
   const selectedCompany = companies.find((company) => company.id === draft.companyId)
@@ -135,7 +132,7 @@ export function ProcessForm({ draft, setDraft, users, historicalResponsible, com
           <div className="characterization-field"><span>Fecha actualización</span><strong>{dateLabel(draft.updatedAt)}</strong></div>
           <div className="characterization-field"><span>Versión</span><strong>{draft.version || 'Sin versión'}</strong></div>
           {companies.length > 1 ? (
-            <label>Empresa<select value={draft.companyId} onChange={(event) => { setDraft({ ...draft, companyId: event.target.value, responsibleId: '' }); onCompanyChange?.(event.target.value) }} required>
+            <label>Empresa<select value={draft.companyId} onChange={(event) => setDraft({ ...draft, companyId: event.target.value, responsibleId: '' })} required>
               <option value="">Selecciona una entidad</option>
               {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
             </select></label>
@@ -166,7 +163,7 @@ export function ProcessForm({ draft, setDraft, users, historicalResponsible, com
           <ToggleField label="Datos personales" value={draft.personalData} onChange={() => update('personalData', !draft.personalData)} />
         </div>
         </section>
-         <EmbeddedKpiSection entries={draft.kpis ?? []} setEntries={(next) => setDraft((current) => ({ ...current, kpis: typeof next === 'function' ? next(current.kpis ?? []) : next }))} users={users as KpiUser[]} availableKpis={availableKpis} allowUnlinkExisting onLinkExisting={(id) => setDraft((current) => ({ ...current, kpiUnlinkIds: (current.kpiUnlinkIds ?? []).filter((item) => item !== id) }))} onUnlinkExisting={(id) => setDraft((current) => ({ ...current, kpiUnlinkIds: Array.from(new Set([...(current.kpiUnlinkIds ?? []), id])) }))} readOnly={readOnly} title="Indicadores KPI" description="Crea KPI nuevos o vincula indicadores existentes de la empresa." />
+          <ProcessIndicatorSection processId={processId} entries={draft.indicators ?? []} setEntries={(next) => setDraft((current) => ({ ...current, indicators: typeof next === 'function' ? next(current.indicators ?? []) : next }))} users={users} readOnly={readOnly} />
        </fieldset>
 
        <ProcessSipocSection processId={processId} readOnly={readOnly} />

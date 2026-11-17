@@ -540,7 +540,30 @@ export type Process = {
   affectsAccounting: boolean
   personalData: boolean
   responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  indicators?: ProcessIndicator[]
   kpis?: ProcessKpi[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProcessIndicator = {
+  id: string
+  processId: string
+  name: string
+  description: string
+  frequency: string
+  target: string
+  formula: string
+  dataSource: string
+  unit: string
+  reportResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  monitorResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  greenThreshold: string | null
+  yellowThreshold: string | null
+  redThreshold: string | null
+  baselineValue: string | null
+  measurementMethod: string | null
+  deadline: string | null
   createdAt: string
   updatedAt: string
 }

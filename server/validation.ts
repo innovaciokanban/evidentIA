@@ -167,6 +167,7 @@ export const processCreateSchema = z.object({
   responsibleId: idReference.nullable().optional(),
   companyId: idReference.optional(),
   kpis: z.lazy(() => embeddedKpiListSchema).optional(),
+  indicators: z.lazy(() => processIndicatorListSchema).optional(),
 }).refine(
   (value) => processTypeForCategory[value.category] === value.type,
   { path: ['category'], message: 'Process type does not match selected category' },
@@ -241,6 +242,38 @@ export const embeddedKpiListSchema = z.array(embeddedKpiSchema).max(50).superRef
     names.add(normalizedName)
     if (item.id && ids.has(item.id)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'id'], message: 'A KPI cannot be listed twice' })
     if (item.id) ids.add(item.id)
+  })
+})
+
+export const processIndicatorCreateSchema = z.object({
+  name: kpiText(120).refine((value) => value.length >= 3, 'Name must have at least 3 characters'),
+  description: kpiText(5000),
+  frequency: kpiText(80),
+  target: kpiText(120),
+  formula: kpiText(1000),
+  dataSource: kpiText(1000),
+  unit: kpiText(80),
+  reportResponsibleId: kpiResponsibleId,
+  monitorResponsibleId: kpiResponsibleId,
+  greenThreshold: kpiNullableText(120),
+  yellowThreshold: kpiNullableText(120),
+  redThreshold: kpiNullableText(120),
+  baselineValue: kpiNullableText(120),
+  measurementMethod: kpiNullableText(1000),
+  deadline: calendarDateInput.nullable().optional(),
+}).strict()
+
+export const processIndicatorUpdateSchema = processIndicatorCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one process indicator field is required',
+)
+
+export const processIndicatorListSchema = z.array(processIndicatorCreateSchema).max(50).superRefine((items, context) => {
+  const names = new Set<string>()
+  items.forEach((item, index) => {
+    const normalizedName = item.name.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (names.has(normalizedName)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'name'], message: 'Indicator names must be unique in this process' })
+    names.add(normalizedName)
   })
 })
 

@@ -10,12 +10,6 @@ const draft: ProcessDraft = {
 }
 
 const company = { id: 'company-1', name: 'Acme Consultores', identification: '900123', industry: 'Servicios', description: 'Empresa', admin: null, createdAt: '', updatedAt: '' }
-const existingKpi = {
-  id: 'ckpi00000000000000000001', processId: 'process-2', companyId: 'company-1', name: 'KPI existente', description: 'Indicador reutilizable',
-  frequency: 'Mensual', target: '95%', formula: 'Cumplidos / totales', dataSource: 'Reporte', unit: '%', reportResponsible: null, monitorResponsible: null,
-  greenThreshold: null, yellowThreshold: null, redThreshold: null, createdAt: '', updatedAt: '',
-}
-
 describe('ProcessForm embebido', () => {
   it('renderiza la ficha principal sin wrapper de modal', () => {
     const markup = renderToStaticMarkup(
@@ -45,7 +39,7 @@ describe('ProcessForm embebido', () => {
     expect(markup).toContain('<span>Empresa</span>')
     expect(markup).not.toContain('<span>Entidad</span>')
     expect(markup).toContain('ATRIBUTOS')
-    expect(markup).toContain('Crear KPI nuevo')
+    expect(markup).toContain('Añadir indicador')
     expect(markup).toContain('role="switch"')
     expect(markup).not.toContain('Medio de entrega')
     expect(markup).not.toContain('Mov. efectivo')
@@ -55,10 +49,10 @@ describe('ProcessForm embebido', () => {
     expect(markup).not.toContain('centered-modal')
   })
 
-  it('ofrece crear KPI nuevo y vincular KPI existente del catálogo de la empresa', () => {
+  it('ofrece añadir indicadores propios sin acciones del catálogo KPI', () => {
     const markup = renderToStaticMarkup(
       <ProcessForm
-        draft={{ ...draft, kpis: [] }}
+        draft={{ ...draft, indicators: [] }}
         setDraft={vi.fn() as unknown as Dispatch<SetStateAction<ProcessDraft>>}
         users={[]}
         companies={[company]}
@@ -68,13 +62,12 @@ describe('ProcessForm embebido', () => {
         error=""
         onSubmit={vi.fn()}
         onClose={vi.fn()}
-        availableKpis={[existingKpi]}
       />,
     )
 
-    expect(markup).toContain('Crear KPI nuevo')
-    expect(markup).toContain('Vincular KPI existente')
-    expect(markup).toContain('KPI existente')
+    expect(markup).toContain('Añadir indicador')
+    expect(markup).not.toContain('Selecciona un KPI existente')
+    expect(markup).not.toContain('Vincular KPI existente')
   })
 
   it('cambia el encabezado para edición', () => {

@@ -2682,6 +2682,23 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
 .embedded-kpi-editor-error { margin: 18px 28px 0; }
 .embedded-kpi-editor .kpi-form-section { padding-top: 20px; }
 .embedded-kpi-editor-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 18px 28px 24px; border-top: 1px solid var(--border-light); }
+.process-indicator-section { margin: 0 28px 24px; padding: 20px 0 0; border-top: 1px solid var(--border-light); }
+.process-indicator-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.process-indicator-heading h3 { margin: 0; color: var(--ink); font: 700 14px 'Space Grotesk', sans-serif; }
+.process-indicator-heading p:not(.detail-label) { max-width: 64ch; margin: 4px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.process-indicator-heading > .button { flex: none; }
+.process-indicator-notice, .process-indicator-error { margin-top: 14px; }
+.process-indicator-empty { margin: 14px 0 0; padding: 13px; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--muted); background: var(--bg); font-size: 11.5px; }
+.process-indicator-list { display: grid; gap: 8px; margin-top: 14px; }
+.process-indicator-card { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.process-indicator-card-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; }
+.process-indicator-card-copy { min-width: 0; }
+.process-indicator-card-copy strong { display: block; margin-top: 4px; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.process-indicator-card-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; overflow-wrap: anywhere; }
+.process-indicator-kind { display: inline-flex; padding: 3px 7px; border-radius: 999px; color: var(--purple); background: var(--purple-light); font-size: 9px; font-weight: 700; }
+.process-indicator-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.process-indicator-detail { padding: 0 13px 13px; background: var(--blue-light); }
+.process-indicator-detail .kpi-detail-grid { padding: 13px; }
 @media (max-width: 640px) {
   .embedded-kpi-section { margin-right: 18px; margin-left: 18px; }
   .embedded-kpi-heading { flex-direction: column; }
@@ -2694,6 +2711,11 @@ tbody td { padding: 14px 20px; white-space: nowrap; }
   .embedded-kpi-editor .kpi-form-section { padding-right: 18px; padding-left: 18px; }
   .embedded-kpi-editor-footer { align-items: stretch; flex-direction: column-reverse; padding: 18px; }
   .embedded-kpi-editor-footer .button { width: 100%; }
+  .process-indicator-section { margin-right: 18px; margin-left: 18px; }
+  .process-indicator-heading { align-items: flex-start; flex-direction: column; }
+  .process-indicator-heading > .button { width: 100%; }
+  .process-indicator-card-main { align-items: flex-start; flex-direction: column; }
+  .process-indicator-actions { justify-content: flex-start; }
 }
 
 /* Refinamiento visual del módulo de calidad */

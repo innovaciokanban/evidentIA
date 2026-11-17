@@ -317,6 +317,8 @@ model User {
   riskAuditEvents               RiskAuditEvent[]           @relation("RiskAuditActors")
    reportResponsibleKpis         Kpi[]                      @relation("ReportResponsibleKpis")
    monitorResponsibleKpis        Kpi[]                      @relation("MonitorResponsibleKpis")
+   reportResponsibleProcessIndicators  ProcessIndicator[]   @relation("ReportResponsibleProcessIndicators")
+   monitorResponsibleProcessIndicators ProcessIndicator[]   @relation("MonitorResponsibleProcessIndicators")
    reportResponsibleStrategicObjectiveIndicators  StrategicObjectiveIndicator[] @relation("ReportResponsibleStrategicObjectiveIndicators")
    monitorResponsibleStrategicObjectiveIndicators StrategicObjectiveIndicator[] @relation("MonitorResponsibleStrategicObjectiveIndicators")
   responsibleProcedures         Procedure[]                @relation("ProcedureResponsibles")
@@ -975,6 +977,7 @@ model Process {
   company            Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   responsible        User?           @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
   changeHistory      ProcessChange[]
+  indicators         ProcessIndicator[]
   kpis               Kpi[]
   kpiLinks           ProcessKpi[]
   sipocSuppliers     SipocSupplier[]
@@ -994,6 +997,36 @@ model Process {
   @@index([companyId])
   @@index([type])
   @@index([responsibleId])
+}
+
+model ProcessIndicator {
+  id                   String   @id @default(cuid())
+  processId            String
+  name                 String
+  description          String
+  frequency            String
+  target               String
+  formula              String
+  dataSource           String
+  unit                 String
+  reportResponsibleId  String?
+  monitorResponsibleId String?
+  greenThreshold       String?
+  yellowThreshold      String?
+  redThreshold         String?
+  baselineValue        String?
+  measurementMethod    String?
+  deadline             DateTime?
+  process              Process  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  reportResponsible    User?    @relation("ReportResponsibleProcessIndicators", fields: [reportResponsibleId], references: [id], onDelete: SetNull)
+  monitorResponsible   User?    @relation("MonitorResponsibleProcessIndicators", fields: [monitorResponsibleId], references: [id], onDelete: SetNull)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([processId])
+  @@index([deadline])
+  @@index([reportResponsibleId])
+  @@index([monitorResponsibleId])
 }
 
 model ProcessChange {

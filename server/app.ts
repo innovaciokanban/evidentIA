@@ -33,6 +33,7 @@ import { registerLearningRoutes } from './learning/learning-routes.js'
 import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strategicObjectiveHistoryQuerySchema, strategicObjectiveIndicatorSchema, strategicObjectiveStrategyLinkSchema, strategicObjectiveSuggestionAcceptanceSchema, strategicObjectiveSuggestionPayloadSchema, strategicObjectiveSuggestionRejectionSchema, strategicObjectiveSuggestionRequestSchema, strategicObjectiveSuggestionStrategyRefsSchema, strategicObjectiveSuggestionUpdateSchema, strategicObjectiveUpdateSchema } from './validation.js'
 import { strategicObjectiveSuggestionDedupeKey } from './strategic-objective-suggestions.js'
 import { embeddedKpiListSchema } from './validation.js'
+import { processIndicatorCreateSchema, processIndicatorUpdateSchema } from './validation.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCatalogQuerySchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -310,6 +311,33 @@ const kpiView = (kpi: Prisma.KpiGetPayload<{ include: typeof kpiInclude }>) => (
   redThreshold: kpi.redThreshold,
   createdAt: kpi.createdAt,
   updatedAt: kpi.updatedAt,
+})
+
+const processIndicatorInclude = {
+  reportResponsible: { select: { id: true, name: true, isActive: true } },
+  monitorResponsible: { select: { id: true, name: true, isActive: true } },
+} as const
+type ProcessIndicatorWithInclude = Prisma.ProcessIndicatorGetPayload<{ include: typeof processIndicatorInclude }>
+const processIndicatorView = (indicator: ProcessIndicatorWithInclude) => ({
+  id: indicator.id,
+  processId: indicator.processId,
+  name: indicator.name,
+  description: indicator.description,
+  frequency: indicator.frequency,
+  target: indicator.target,
+  formula: indicator.formula,
+  dataSource: indicator.dataSource,
+  unit: indicator.unit,
+  reportResponsible: indicator.reportResponsible,
+  monitorResponsible: indicator.monitorResponsible,
+  greenThreshold: indicator.greenThreshold,
+  yellowThreshold: indicator.yellowThreshold,
+  redThreshold: indicator.redThreshold,
+  baselineValue: indicator.baselineValue,
+  measurementMethod: indicator.measurementMethod,
+  deadline: indicator.deadline,
+  createdAt: indicator.createdAt,
+  updatedAt: indicator.updatedAt,
 })
 
 const strategicObjectiveInclude = {
@@ -703,7 +731,7 @@ const canOperateTicketEvidence = (request: Request, ticket: {
 const scopeForCompany = (request: Request): Prisma.CompanyWhereInput => request.user?.role === Role.SUPERUSER ? {} : { id: request.user?.companyId ?? 'none' }
 const canAccessCompany = (request: Request, company: { id: string }) => request.user?.role === Role.SUPERUSER || company.id === request.user?.companyId
 
-const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true, isActive: true } }, kpiLinks: { include: { kpi: { include: kpiInclude } }, orderBy: { linkedAt: 'asc' as const } } } as const
+const processInclude = { company: { select: { id: true } }, responsible: { select: { id: true, name: true, isActive: true } }, indicators: { include: processIndicatorInclude, orderBy: { createdAt: 'asc' as const } }, kpiLinks: { include: { kpi: { include: kpiInclude } }, orderBy: { linkedAt: 'asc' as const } } } as const
 const processView = (process: Prisma.ProcessGetPayload<{ include: typeof processInclude }>) => ({
   id: process.id,
   companyId: process.companyId,
@@ -723,6 +751,7 @@ const processView = (process: Prisma.ProcessGetPayload<{ include: typeof process
   affectsAccounting: process.affectsAccounting,
   personalData: process.personalData,
   responsible: process.responsible,
+  indicators: Array.isArray(process.indicators) ? process.indicators.map(processIndicatorView) : [],
   kpis: Array.isArray(process.kpiLinks) ? process.kpiLinks.map((link) => kpiView(link.kpi)) : [],
   createdAt: process.createdAt,
   updatedAt: process.updatedAt,
@@ -3335,6 +3364,63 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     if (unlinkableIds.length > 0) await client.processKpi.deleteMany({ where: { processId: process.id, kpiId: { in: unlinkableIds } } })
   }
 
+  type ProcessIndicatorInput = z.infer<typeof processIndicatorCreateSchema>
+  const normalizeProcessIndicatorName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase()
+  const processIndicatorCreateDataOf = (item: ProcessIndicatorInput, processId: string) => ({
+    processId,
+    name: item.name,
+    description: item.description,
+    frequency: item.frequency,
+    target: item.target,
+    formula: item.formula,
+    dataSource: item.dataSource,
+    unit: item.unit,
+    reportResponsibleId: item.reportResponsibleId ?? null,
+    monitorResponsibleId: item.monitorResponsibleId ?? null,
+    greenThreshold: item.greenThreshold ?? null,
+    yellowThreshold: item.yellowThreshold ?? null,
+    redThreshold: item.redThreshold ?? null,
+    baselineValue: item.baselineValue ?? null,
+    measurementMethod: item.measurementMethod ?? null,
+    deadline: item.deadline ?? null,
+  })
+  const processIndicatorUpdateDataOf = (item: z.infer<typeof processIndicatorUpdateSchema>) => ({
+    ...(item.name !== undefined ? { name: item.name } : {}),
+    ...(item.description !== undefined ? { description: item.description } : {}),
+    ...(item.frequency !== undefined ? { frequency: item.frequency } : {}),
+    ...(item.target !== undefined ? { target: item.target } : {}),
+    ...(item.formula !== undefined ? { formula: item.formula } : {}),
+    ...(item.dataSource !== undefined ? { dataSource: item.dataSource } : {}),
+    ...(item.unit !== undefined ? { unit: item.unit } : {}),
+    ...(item.reportResponsibleId !== undefined ? { reportResponsibleId: item.reportResponsibleId } : {}),
+    ...(item.monitorResponsibleId !== undefined ? { monitorResponsibleId: item.monitorResponsibleId } : {}),
+    ...(item.greenThreshold !== undefined ? { greenThreshold: item.greenThreshold } : {}),
+    ...(item.yellowThreshold !== undefined ? { yellowThreshold: item.yellowThreshold } : {}),
+    ...(item.redThreshold !== undefined ? { redThreshold: item.redThreshold } : {}),
+    ...(item.baselineValue !== undefined ? { baselineValue: item.baselineValue } : {}),
+    ...(item.measurementMethod !== undefined ? { measurementMethod: item.measurementMethod } : {}),
+    ...(item.deadline !== undefined ? { deadline: item.deadline } : {}),
+  })
+  const assertUniqueProcessIndicatorName = async (client: PrismaClient | Prisma.TransactionClient, processId: string, name: string, exceptId?: string) => {
+    const indicators = await client.processIndicator.findMany({ where: { processId }, select: { id: true, name: true } })
+    if (indicators.some((indicator) => indicator.id !== exceptId && normalizeProcessIndicatorName(indicator.name) === normalizeProcessIndicatorName(name))) {
+      throw new UserAssignmentError(409, `An indicator named "${name}" already exists in this process`)
+    }
+  }
+  const syncProcessIndicators = async (client: PrismaClient | Prisma.TransactionClient, process: { id: string; companyId: string }, inputs: ProcessIndicatorInput[]) => {
+    const usedNames = new Set<string>()
+    const existing = await client.processIndicator.findMany({ where: { processId: process.id }, select: { name: true } })
+    existing.forEach((indicator) => usedNames.add(normalizeProcessIndicatorName(indicator.name)))
+    for (const item of inputs) {
+      const normalizedName = normalizeProcessIndicatorName(item.name)
+      if (usedNames.has(normalizedName)) throw new UserAssignmentError(409, `An indicator named "${item.name}" already exists in this process`)
+      usedNames.add(normalizedName)
+      if (item.reportResponsibleId) await assertActiveAssignmentUser(client, item.reportResponsibleId, process.companyId, 'Responsible')
+      if (item.monitorResponsibleId) await assertActiveAssignmentUser(client, item.monitorResponsibleId, process.companyId, 'Responsible')
+      await client.processIndicator.create({ data: processIndicatorCreateDataOf(item, process.id), include: processIndicatorInclude })
+    }
+  }
+
   const syncProcedureKpis = async (client: PrismaClient | Prisma.TransactionClient, procedureId: string, process: { id: string; companyId: string }, inputs: EmbeddedKpiInput[]) => {
     const existingById = await validateKpiInputs(client, process.id, process.companyId, inputs, 'process')
     const links = await client.procedureKpi.findMany({ where: { procedureId }, select: { kpiId: true } })
@@ -3430,8 +3516,9 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       affectsAccounting: parsed.data.affectsAccounting ?? false,
       personalData: parsed.data.personalData ?? false,
       responsibleId: responsible.responsibleId,
-    }, parsed.data.kpis ? async (tx, createdProcess) => {
-      await syncProcessKpis(tx, createdProcess, parsed.data.kpis!)
+    }, parsed.data.kpis || parsed.data.indicators ? async (tx, createdProcess) => {
+      if (parsed.data.kpis) await syncProcessKpis(tx, createdProcess, parsed.data.kpis)
+      if (parsed.data.indicators) await syncProcessIndicators(tx, createdProcess, parsed.data.indicators)
     } : undefined)
     response.status(201).json({ process: processView(process) })
   }))
@@ -4885,6 +4972,101 @@ response.json({
       return
     }
     await db.processKpi.delete({ where: { processId_kpiId: { processId: process.id, kpiId: existingLink.kpiId } } })
+    response.status(204).send()
+  }))
+
+  app.get('/api/processes/:processId/indicators', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const indicators = await db.processIndicator.findMany({ where: { processId: process.id }, include: processIndicatorInclude, orderBy: { createdAt: 'asc' } })
+    response.json({ indicators: indicators.map(processIndicatorView) })
+  }))
+
+  app.post('/api/processes/:processId/indicators', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = processIndicatorCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid process indicator data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const reportResponsible = await resolveResponsible(parsed.data.reportResponsibleId, process.companyId)
+    if (!reportResponsible.ok) {
+      response.status(reportResponsible.status).json({ error: reportResponsible.error })
+      return
+    }
+    const monitorResponsible = await resolveResponsible(parsed.data.monitorResponsibleId, process.companyId)
+    if (!monitorResponsible.ok) {
+      response.status(monitorResponsible.status).json({ error: monitorResponsible.error })
+      return
+    }
+    const indicator = await runInTransaction(db, async (tx) => {
+      if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${process.id} FOR UPDATE`
+      await assertUniqueProcessIndicatorName(tx, process.id, parsed.data.name)
+      if (reportResponsible.responsibleId) await assertActiveAssignmentUser(tx, reportResponsible.responsibleId, process.companyId, 'Responsible')
+      if (monitorResponsible.responsibleId) await assertActiveAssignmentUser(tx, monitorResponsible.responsibleId, process.companyId, 'Responsible')
+      return tx.processIndicator.create({ data: { ...processIndicatorCreateDataOf(parsed.data, process.id), reportResponsibleId: reportResponsible.responsibleId, monitorResponsibleId: monitorResponsible.responsibleId }, include: processIndicatorInclude })
+    })
+    response.status(201).json({ indicator: processIndicatorView(indicator) })
+  }))
+
+  app.patch('/api/processes/:processId/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = processIndicatorUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid process indicator data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.processIndicator.findUnique({ where: { id: String(request.params.indicatorId) }, include: processIndicatorInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Process indicator not found' })
+      return
+    }
+    const reportResponsible = parsed.data.reportResponsibleId === undefined ? null : await resolveResponsible(parsed.data.reportResponsibleId, process.companyId)
+    if (reportResponsible && !reportResponsible.ok) {
+      response.status(reportResponsible.status).json({ error: reportResponsible.error })
+      return
+    }
+    const monitorResponsible = parsed.data.monitorResponsibleId === undefined ? null : await resolveResponsible(parsed.data.monitorResponsibleId, process.companyId)
+    if (monitorResponsible && !monitorResponsible.ok) {
+      response.status(monitorResponsible.status).json({ error: monitorResponsible.error })
+      return
+    }
+    const indicator = await runInTransaction(db, async (tx) => {
+      if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Process" WHERE "id" = ${process.id} FOR UPDATE`
+      if (parsed.data.name !== undefined) await assertUniqueProcessIndicatorName(tx, process.id, parsed.data.name, existing.id)
+      if (reportResponsible?.ok && reportResponsible.responsibleId) await assertActiveAssignmentUser(tx, reportResponsible.responsibleId, process.companyId, 'Responsible')
+      if (monitorResponsible?.ok && monitorResponsible.responsibleId) await assertActiveAssignmentUser(tx, monitorResponsible.responsibleId, process.companyId, 'Responsible')
+      const data = processIndicatorUpdateDataOf(parsed.data)
+      if (reportResponsible?.ok) data.reportResponsibleId = reportResponsible.responsibleId
+      if (monitorResponsible?.ok) data.monitorResponsibleId = monitorResponsible.responsibleId
+      return tx.processIndicator.update({ where: { id: existing.id }, data, include: processIndicatorInclude })
+    })
+    response.json({ indicator: processIndicatorView(indicator) })
+  }))
+
+  app.delete('/api/processes/:processId/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.processIndicator.findUnique({ where: { id: String(request.params.indicatorId) }, select: { id: true, processId: true } })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Process indicator not found' })
+      return
+    }
+    await db.processIndicator.delete({ where: { id: existing.id } })
     response.status(204).send()
   }))
 
