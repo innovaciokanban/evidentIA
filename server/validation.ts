@@ -285,18 +285,50 @@ const procedureText = (max: number) => z.string().trim().min(1).max(max)
 // El responsable se valida contra la empresa en la API; la base existente también contiene UUIDs
 // (mismo criterio que kpiResponsibleId).
 const procedureResponsibleId = z.string().trim().min(1).max(64).nullable().optional()
+const procedureStepResponsibleIds = z.array(idReference).max(50).superRefine((ids, context) => {
+  const seen = new Set<string>()
+  ids.forEach((id, index) => {
+    if (seen.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: 'A step cannot assign the same responsible twice' })
+    seen.add(id)
+  })
+})
+
+const legacyProcedureCode = z.string().trim().max(40).nullable().optional()
+
+export const procedureStepSchema = z.object({
+  id: idReference.optional(),
+  position: z.number().int().min(0).max(1000),
+  title: procedureText(160),
+  instruction: procedureText(10000),
+  criteria: z.string().trim().max(5000).nullable().optional(),
+  responsibleIds: procedureStepResponsibleIds.optional(),
+}).strict()
+
+export const procedureStepListSchema = z.array(procedureStepSchema).max(100).superRefine((items, context) => {
+  const positions = new Set<number>()
+  const ids = new Set<string>()
+  items.forEach((item, index) => {
+    if (positions.has(item.position)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'position'], message: 'Step positions must be unique' })
+    positions.add(item.position)
+    if (item.id && ids.has(item.id)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'id'], message: 'A step cannot be listed twice' })
+    if (item.id) ids.add(item.id)
+  })
+})
 
 export const procedureCreateSchema = z.object({
-  code: procedureText(40).refine((value) => value.length >= 2, 'Code must have at least 2 characters'),
+  // Accepted only for compatibility with the current client; the server never uses it to assign a code.
+  code: legacyProcedureCode,
   name: procedureText(160).refine((value) => value.length >= 3, 'Name must have at least 3 characters'),
   objective: procedureText(2000),
   scope: procedureText(2000),
   description: z.string().trim().max(10000).nullable().optional(),
   responsibleId: procedureResponsibleId,
   kpis: embeddedKpiListSchema.optional(),
+  steps: procedureStepListSchema.optional(),
+  indicators: z.lazy(() => procedureIndicatorListSchema).optional(),
 })
 
-export const procedureUpdateSchema = procedureCreateSchema.partial().refine(
+export const procedureUpdateSchema = procedureCreateSchema.omit({ indicators: true }).partial().refine(
   (value) => Object.keys(value).length > 0,
   'At least one field is required',
 )
@@ -624,6 +656,20 @@ export const riskApprovalDecisionSchema = z.object({
 )
 export const riskApprovalQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'OUTDATED']).optional(),
+})
+
+export const procedureIndicatorCreateSchema = processIndicatorCreateSchema
+export const procedureIndicatorUpdateSchema = procedureIndicatorCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one procedure indicator field is required',
+)
+export const procedureIndicatorListSchema = z.array(procedureIndicatorCreateSchema).max(50).superRefine((items, context) => {
+  const names = new Set<string>()
+  items.forEach((item, index) => {
+    const normalizedName = item.name.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (names.has(normalizedName)) context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'name'], message: 'Indicator names must be unique in this procedure' })
+    names.add(normalizedName)
+  })
 })
 
 export const ticketAssignmentApprovalStatusSchema = z.enum(['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'SUPERSEDED'])

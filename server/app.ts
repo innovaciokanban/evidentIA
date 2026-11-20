@@ -34,6 +34,7 @@ import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strat
 import { strategicObjectiveSuggestionDedupeKey } from './strategic-objective-suggestions.js'
 import { embeddedKpiListSchema } from './validation.js'
 import { processIndicatorCreateSchema, processIndicatorUpdateSchema } from './validation.js'
+import { procedureIndicatorCreateSchema, procedureIndicatorUpdateSchema, procedureStepSchema } from './validation.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCatalogQuerySchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
 const asyncHandler = (handler: RequestHandler): RequestHandler => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next)
@@ -792,6 +793,32 @@ export const nextProcessCode = (type: ProcessType, codes: readonly (string | nul
   return `${prefix}-${String(nextNumber).padStart(3, '0')}`
 }
 
+const procedureCodePattern = /^PROC-(\d+)$/
+const procedureCodeLocks = new Map<string, Promise<void>>()
+
+export const nextProcedureCode = (codes: readonly (string | null | undefined)[]): string => {
+  const usedNumbers = codes.flatMap((code) => {
+    const match = code?.match(procedureCodePattern)
+    return match ? [Number(match[1])] : []
+  })
+  const nextNumber = usedNumbers.length > 0 ? Math.max(...usedNumbers) + 1 : 1
+  return `PROC-${String(nextNumber).padStart(2, '0')}`
+}
+
+async function withProcedureCodeLock<T>(companyId: string, work: () => Promise<T>): Promise<T> {
+  const previous = procedureCodeLocks.get(companyId) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  procedureCodeLocks.set(companyId, current)
+  await previous
+  try {
+    return await work()
+  } finally {
+    release()
+    if (procedureCodeLocks.get(companyId) === current) procedureCodeLocks.delete(companyId)
+  }
+}
+
 const processVersionPattern = /^(\d+)(\.\d+)?$/
 
 export const nextProcessVersion = (version: string | null | undefined): string => {
@@ -941,9 +968,58 @@ export async function updateProcessWithVersion<T = undefined>(db: PrismaClient, 
 /** Un proceso solo se lista dentro de su empresa; el súper usuario, que no tiene empresa propia, ve todas. */
 const scopeForProcess = (request: Request): Prisma.ProcessWhereInput => request.user?.role === Role.SUPERUSER ? {} : { companyId: request.user?.companyId ?? 'none' }
 
+const procedureIndicatorInclude = {
+  reportResponsible: { select: { id: true, name: true, isActive: true } },
+  monitorResponsible: { select: { id: true, name: true, isActive: true } },
+} as const
+type ProcedureIndicatorWithInclude = Prisma.ProcedureIndicatorGetPayload<{ include: typeof procedureIndicatorInclude }>
+const procedureIndicatorView = (indicator: ProcedureIndicatorWithInclude) => ({
+  id: indicator.id,
+  procedureId: indicator.procedureId,
+  name: indicator.name,
+  description: indicator.description,
+  frequency: indicator.frequency,
+  target: indicator.target,
+  formula: indicator.formula,
+  dataSource: indicator.dataSource,
+  unit: indicator.unit,
+  reportResponsible: indicator.reportResponsible,
+  monitorResponsible: indicator.monitorResponsible,
+  greenThreshold: indicator.greenThreshold,
+  yellowThreshold: indicator.yellowThreshold,
+  redThreshold: indicator.redThreshold,
+  baselineValue: indicator.baselineValue,
+  measurementMethod: indicator.measurementMethod,
+  deadline: indicator.deadline,
+  createdAt: indicator.createdAt,
+  updatedAt: indicator.updatedAt,
+})
+
+const procedureStepInclude = {
+  responsibles: {
+    orderBy: { userId: 'asc' as const },
+    include: { user: { select: { id: true, name: true, isActive: true } } },
+  },
+} as const
+type ProcedureStepWithInclude = Prisma.ProcedureStepGetPayload<{ include: typeof procedureStepInclude }>
+const procedureStepView = (step: ProcedureStepWithInclude) => ({
+  id: step.id,
+  procedureId: step.procedureId,
+  position: step.position,
+  title: step.title,
+  instruction: step.instruction,
+  criteria: step.criteria,
+  responsibleIds: step.responsibles.map((link) => link.userId),
+  responsibles: step.responsibles.map((link) => link.user),
+  createdAt: step.createdAt,
+  updatedAt: step.updatedAt,
+})
+
 const procedureInclude = {
   process: { select: { id: true, companyId: true, name: true, code: true } },
   responsible: { select: { id: true, name: true, isActive: true } },
+  steps: { include: procedureStepInclude, orderBy: { position: 'asc' as const } },
+  indicators: { include: procedureIndicatorInclude, orderBy: { createdAt: 'asc' as const } },
   kpis: { include: { kpi: { include: kpiInclude } }, orderBy: { linkedAt: 'asc' as const } },
 } as const
 type ProcedureWithInclude = Prisma.ProcedureGetPayload<{ include: typeof procedureInclude }>
@@ -959,6 +1035,8 @@ const procedureView = (procedure: ProcedureWithInclude) => ({
   responsible: procedure.responsible,
   status: procedure.status,
   version: procedure.version,
+  steps: procedure.steps.map(procedureStepView),
+  indicators: Array.isArray(procedure.indicators) ? procedure.indicators.map(procedureIndicatorView) : [],
   kpis: Array.isArray(procedure.kpis) ? procedure.kpis.map((link) => kpiView(link.kpi)) : [],
   createdAt: procedure.createdAt,
   updatedAt: procedure.updatedAt,
@@ -1024,6 +1102,48 @@ const procedureSnapshot = (procedure: ProcedureWithInclude) => ({
   responsibleId: procedure.responsibleId,
   status: procedure.status,
   version: procedure.version,
+  steps: procedure.steps.map((step) => ({
+    id: step.id,
+    position: step.position,
+    title: step.title,
+    instruction: step.instruction,
+    criteria: step.criteria,
+    responsibleIds: step.responsibles.map((link) => link.userId),
+  })),
+  indicators: procedure.indicators.map((indicator) => ({
+    id: indicator.id,
+    name: indicator.name,
+    description: indicator.description,
+    frequency: indicator.frequency,
+    target: indicator.target,
+    formula: indicator.formula,
+    dataSource: indicator.dataSource,
+    unit: indicator.unit,
+    reportResponsibleId: indicator.reportResponsibleId,
+    monitorResponsibleId: indicator.monitorResponsibleId,
+    greenThreshold: indicator.greenThreshold,
+    yellowThreshold: indicator.yellowThreshold,
+    redThreshold: indicator.redThreshold,
+    baselineValue: indicator.baselineValue,
+    measurementMethod: indicator.measurementMethod,
+    deadline: indicator.deadline?.toISOString() ?? null,
+  })),
+  kpis: procedure.kpis.map(({ kpi }) => ({
+    id: kpi.id,
+    processId: kpi.processId,
+    name: kpi.name,
+    description: kpi.description,
+    frequency: kpi.frequency,
+    target: kpi.target,
+    formula: kpi.formula,
+    dataSource: kpi.dataSource,
+    unit: kpi.unit,
+    reportResponsibleId: kpi.reportResponsibleId,
+    monitorResponsibleId: kpi.monitorResponsibleId,
+    greenThreshold: kpi.greenThreshold,
+    yellowThreshold: kpi.yellowThreshold,
+    redThreshold: kpi.redThreshold,
+  })),
 })
 
 // Única vía de escritura del historial y siempre desde el backend con el cliente (db o tx) de la
@@ -3435,6 +3555,99 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
     await client.procedureKpi.deleteMany({ where: { procedureId, kpiId: { notIn: desiredIds } } })
   }
 
+  type ProcedureStepInput = z.infer<typeof procedureStepSchema>
+  type ProcedureIndicatorInput = z.infer<typeof procedureIndicatorCreateSchema>
+
+  const syncProcedureSteps = async (client: PrismaClient | Prisma.TransactionClient, procedureId: string, companyId: string, inputs: ProcedureStepInput[]) => {
+    const existing = await client.procedureStep.findMany({ where: { procedureId }, select: { id: true, responsibles: { select: { userId: true } } } })
+    const existingIds = new Set(existing.map((step) => step.id))
+    for (const item of inputs) {
+      if (item.id && !existingIds.has(item.id)) throw new UserAssignmentError(404, 'Procedure step not found')
+      if (item.responsibleIds !== undefined) {
+        for (const userId of item.responsibleIds) await assertActiveAssignmentUser(client, userId, companyId, 'Step responsible')
+      }
+    }
+
+    if (existing.length > 0) {
+      await client.procedureStep.updateMany({ where: { procedureId }, data: { position: { increment: existing.length + inputs.length + 1 } } })
+    }
+
+    const desiredIds: string[] = []
+    for (const [position, item] of inputs.entries()) {
+      const data = { position, title: item.title, instruction: item.instruction, criteria: item.criteria ?? null }
+      let stepId: string
+      if (item.id) {
+        await client.procedureStep.update({ where: { id: item.id }, data })
+        stepId = item.id
+      } else {
+        const created = await client.procedureStep.create({ data: { procedureId, ...data } })
+        stepId = created.id
+      }
+      desiredIds.push(stepId)
+      if (item.responsibleIds !== undefined) {
+        await client.procedureStepResponsible.deleteMany({ where: { stepId } })
+        if (item.responsibleIds.length > 0) {
+          await client.procedureStepResponsible.createMany({ data: item.responsibleIds.map((userId) => ({ stepId, userId })) })
+        }
+      }
+    }
+    await client.procedureStep.deleteMany({ where: { procedureId, ...(desiredIds.length > 0 ? { id: { notIn: desiredIds } } : {}) } })
+  }
+
+  const normalizeProcedureIndicatorName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase()
+  const procedureIndicatorCreateDataOf = (item: ProcedureIndicatorInput, procedureId: string) => ({
+    procedureId,
+    name: item.name,
+    description: item.description,
+    frequency: item.frequency,
+    target: item.target,
+    formula: item.formula,
+    dataSource: item.dataSource,
+    unit: item.unit,
+    reportResponsibleId: item.reportResponsibleId ?? null,
+    monitorResponsibleId: item.monitorResponsibleId ?? null,
+    greenThreshold: item.greenThreshold ?? null,
+    yellowThreshold: item.yellowThreshold ?? null,
+    redThreshold: item.redThreshold ?? null,
+    baselineValue: item.baselineValue ?? null,
+    measurementMethod: item.measurementMethod ?? null,
+    deadline: item.deadline ?? null,
+  })
+  const procedureIndicatorUpdateDataOf = (item: z.infer<typeof procedureIndicatorUpdateSchema>) => ({
+    ...(item.name !== undefined ? { name: item.name } : {}),
+    ...(item.description !== undefined ? { description: item.description } : {}),
+    ...(item.frequency !== undefined ? { frequency: item.frequency } : {}),
+    ...(item.target !== undefined ? { target: item.target } : {}),
+    ...(item.formula !== undefined ? { formula: item.formula } : {}),
+    ...(item.dataSource !== undefined ? { dataSource: item.dataSource } : {}),
+    ...(item.unit !== undefined ? { unit: item.unit } : {}),
+    ...(item.reportResponsibleId !== undefined ? { reportResponsibleId: item.reportResponsibleId } : {}),
+    ...(item.monitorResponsibleId !== undefined ? { monitorResponsibleId: item.monitorResponsibleId } : {}),
+    ...(item.greenThreshold !== undefined ? { greenThreshold: item.greenThreshold } : {}),
+    ...(item.yellowThreshold !== undefined ? { yellowThreshold: item.yellowThreshold } : {}),
+    ...(item.redThreshold !== undefined ? { redThreshold: item.redThreshold } : {}),
+    ...(item.baselineValue !== undefined ? { baselineValue: item.baselineValue } : {}),
+    ...(item.measurementMethod !== undefined ? { measurementMethod: item.measurementMethod } : {}),
+    ...(item.deadline !== undefined ? { deadline: item.deadline } : {}),
+  })
+  const assertUniqueProcedureIndicatorName = async (client: PrismaClient | Prisma.TransactionClient, procedureId: string, name: string, exceptId?: string) => {
+    const indicators = await client.procedureIndicator.findMany({ where: { procedureId }, select: { id: true, name: true } })
+    if (indicators.some((indicator) => indicator.id !== exceptId && normalizeProcedureIndicatorName(indicator.name) === normalizeProcedureIndicatorName(name))) {
+      throw new UserAssignmentError(409, `An indicator named "${name}" already exists in this procedure`)
+    }
+  }
+  const syncProcedureIndicators = async (client: PrismaClient | Prisma.TransactionClient, procedureId: string, companyId: string, inputs: ProcedureIndicatorInput[]) => {
+    const usedNames = new Set<string>()
+    for (const item of inputs) {
+      const normalizedName = normalizeProcedureIndicatorName(item.name)
+      if (usedNames.has(normalizedName)) throw new UserAssignmentError(409, `An indicator named "${item.name}" already exists in this procedure`)
+      usedNames.add(normalizedName)
+      if (item.reportResponsibleId) await assertActiveAssignmentUser(client, item.reportResponsibleId, companyId, 'Responsible')
+      if (item.monitorResponsibleId) await assertActiveAssignmentUser(client, item.monitorResponsibleId, companyId, 'Responsible')
+      await client.procedureIndicator.create({ data: procedureIndicatorCreateDataOf(item, procedureId), include: procedureIndicatorInclude })
+    }
+  }
+
   /** El nombre identifica el proceso dentro de la empresa, y solo dentro de ella. */
   const duplicateProcessName = async (companyId: string, name: string, exceptId?: string) => db.process.findFirst({
     where: { companyId, name, ...(exceptId ? { NOT: { id: exceptId } } : {}) },
@@ -5095,6 +5308,16 @@ response.json({
     response.json({ procedures: procedures.map(procedureView) })
   }))
 
+  app.get('/api/processes/:processId/procedures/next-code', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const existing = await db.procedure.findMany({ where: { process: { companyId: process.companyId } }, select: { code: true } })
+    response.json({ code: nextProcedureCode(existing.map((procedure) => procedure.code)) })
+  }))
+
   app.post('/api/processes/:processId/procedures', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
     const parsed = procedureCreateSchema.safeParse(request.body)
     if (!parsed.success) {
@@ -5106,28 +5329,33 @@ response.json({
       response.status(404).json({ error: 'Process not found' })
       return
     }
+    if (parsed.data.steps?.some((step) => step.id)) {
+      response.status(400).json({ error: 'New procedure steps cannot include ids' })
+      return
+    }
     const responsible = await resolveResponsible(parsed.data.responsibleId, process.companyId)
     if (!responsible.ok) {
       response.status(responsible.status).json({ error: responsible.error })
       return
     }
-    // El código identifica el documento dentro de la empresa, y solo dentro de ella; el índice
-    // único por proceso queda como red de seguridad interna.
-    const duplicateCode = await db.procedure.findFirst({
-      where: { code: parsed.data.code, process: { companyId: process.companyId } },
-      select: { id: true },
-    })
-    if (duplicateCode) {
-      response.status(409).json({ error: 'A procedure with this code already exists in your company' })
-      return
-    }
     const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
-    const procedure = await db.$transaction(async (tx) => {
+    const procedure = await withProcedureCodeLock(process.companyId, () => db.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`
+          WITH advisory_lock AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(hashtext(${`procedure-code:${process.companyId}`}))
+          )
+          SELECT true AS locked
+          FROM advisory_lock
+        `
+      }
+      const existing = await tx.procedure.findMany({ where: { process: { companyId: process.companyId } }, select: { code: true } })
+      const code = nextProcedureCode(existing.map((item) => item.code))
       if (responsible.responsibleId) await assertActiveAssignmentUser(tx, responsible.responsibleId, process.companyId, 'Responsible')
       const created = await tx.procedure.create({
         data: {
           processId: process.id,
-          code: parsed.data.code,
+          code,
           name: parsed.data.name,
           objective: parsed.data.objective,
           scope: parsed.data.scope,
@@ -5136,12 +5364,14 @@ response.json({
         },
         include: procedureInclude,
       })
-      await procedureHistoryWrite(tx, { procedure: created, action: 'CREATED', actor, snapshot: procedureSnapshot(created) })
-       if (parsed.data.kpis && parsed.data.kpis.length > 0) await syncProcedureKpis(tx, created.id, process, parsed.data.kpis)
-       return parsed.data.kpis
-         ? (await tx.procedure.findUnique({ where: { id: created.id }, include: procedureInclude })) ?? created
-         : created
-    })
+      if (parsed.data.steps) await syncProcedureSteps(tx, created.id, process.companyId, parsed.data.steps)
+      if (parsed.data.indicators) await syncProcedureIndicators(tx, created.id, process.companyId, parsed.data.indicators)
+      if (parsed.data.kpis && parsed.data.kpis.length > 0) await syncProcedureKpis(tx, created.id, process, parsed.data.kpis)
+      const complete = await tx.procedure.findUnique({ where: { id: created.id }, include: procedureInclude })
+      if (!complete) throw new Error('Procedure not found after creation')
+      await procedureHistoryWrite(tx, { procedure: complete, action: 'CREATED', actor, snapshot: procedureSnapshot(complete) })
+      return complete
+    }))
     response.status(201).json({ procedure: procedureView(procedure) })
   }))
 
@@ -5167,18 +5397,11 @@ response.json({
       response.status(409).json({ error: 'Only a draft procedure can be edited' })
       return
     }
-    if (parsed.data.code !== undefined && parsed.data.code !== existing.code) {
-      const duplicateCode = await db.procedure.findFirst({
-        where: { code: parsed.data.code, process: { companyId: process.companyId }, NOT: { id: existing.id } },
-        select: { id: true },
-      })
-      if (duplicateCode) {
-        response.status(409).json({ error: 'A procedure with this code already exists in your company' })
-        return
-      }
+    if (parsed.data.code !== undefined && parsed.data.code !== null && parsed.data.code !== existing.code) {
+      response.status(409).json({ error: 'Procedure codes are generated by the server and cannot be changed' })
+      return
     }
     const data: Prisma.ProcedureUncheckedUpdateInput = {}
-    if (parsed.data.code !== undefined) data.code = parsed.data.code
     if (parsed.data.name !== undefined) data.name = parsed.data.name
     if (parsed.data.objective !== undefined) data.objective = parsed.data.objective
     if (parsed.data.scope !== undefined) data.scope = parsed.data.scope
@@ -5193,21 +5416,181 @@ response.json({
     }
     const changes = updatedProcedureChanges(existing, data)
     // Sin cambios reales no se escribe historial (mismo criterio que updateProcessWithVersion).
-    if (changes.length === 0 && parsed.data.kpis === undefined) {
+    const collectionChanges: ProcessChangeItem[] = [
+      ...(parsed.data.steps !== undefined ? [{ field: 'steps', label: 'Pasos', previousValue: existing.steps.length, newValue: parsed.data.steps.length }] : []),
+      ...(parsed.data.kpis !== undefined ? [{ field: 'kpis', label: 'KPI vinculados', previousValue: existing.kpis.length, newValue: parsed.data.kpis.length }] : []),
+    ]
+    if (changes.length === 0 && collectionChanges.length === 0) {
       response.json({ procedure: procedureView(existing) })
       return
     }
     const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
     const procedure = await db.$transaction(async (tx) => {
       if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, process.companyId, 'Responsible')
-      const updated = changes.length > 0 ? await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude }) : existing
-      if (changes.length > 0) await procedureHistoryWrite(tx, { procedure: updated, action: 'UPDATED', actor, changes, snapshot: procedureSnapshot(updated) })
-       if (parsed.data.kpis !== undefined) await syncProcedureKpis(tx, existing.id, process, parsed.data.kpis)
-       return parsed.data.kpis !== undefined
-         ? (await tx.procedure.findUnique({ where: { id: existing.id }, include: procedureInclude })) ?? updated
-         : updated
+      if (changes.length > 0) await tx.procedure.update({ where: { id: existing.id }, data, include: procedureInclude })
+      if (parsed.data.steps !== undefined) await syncProcedureSteps(tx, existing.id, process.companyId, parsed.data.steps)
+      if (parsed.data.kpis !== undefined) await syncProcedureKpis(tx, existing.id, process, parsed.data.kpis)
+      const complete = await tx.procedure.findUnique({ where: { id: existing.id }, include: procedureInclude })
+      if (!complete) throw new Error('Procedure not found after update')
+      await procedureHistoryWrite(tx, { procedure: complete, action: 'UPDATED', actor, changes: [...changes, ...collectionChanges], snapshot: procedureSnapshot(complete) })
+      return complete
     })
     response.json({ procedure: procedureView(procedure) })
+  }))
+
+  app.get('/api/processes/:processId/procedures/:procedureId/indicators', authMiddleware, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const procedure = await db.procedure.findUnique({ where: { id: String(request.params.procedureId) }, include: procedureInclude })
+    if (!procedure || procedure.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    response.json({ indicators: procedure.indicators.map(procedureIndicatorView) })
+  }))
+
+  app.post('/api/processes/:processId/procedures/:procedureId/indicators', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = procedureIndicatorCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid procedure indicator data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const procedureId = String(request.params.procedureId)
+    const existing = await db.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    if (existing.status !== ProcedureStatus.DRAFT) {
+      response.status(409).json({ error: 'Only a draft procedure can be edited' })
+      return
+    }
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    const indicator = await db.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Procedure" WHERE "id" = ${procedureId} FOR UPDATE`
+      const current = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!current || current.processId !== process.id) throw new UserAssignmentError(404, 'Procedure not found')
+      if (current.status !== ProcedureStatus.DRAFT) throw new UserAssignmentError(409, 'Only a draft procedure can be edited')
+      if (parsed.data.reportResponsibleId) await assertActiveAssignmentUser(tx, parsed.data.reportResponsibleId, process.companyId, 'Responsible')
+      if (parsed.data.monitorResponsibleId) await assertActiveAssignmentUser(tx, parsed.data.monitorResponsibleId, process.companyId, 'Responsible')
+      await assertUniqueProcedureIndicatorName(tx, procedureId, parsed.data.name)
+      const created = await tx.procedureIndicator.create({ data: procedureIndicatorCreateDataOf(parsed.data, procedureId), include: procedureIndicatorInclude })
+      const complete = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!complete) throw new Error('Procedure not found after indicator creation')
+      await procedureHistoryWrite(tx, {
+        procedure: complete,
+        action: 'UPDATED',
+        actor,
+        changes: [{ field: 'indicators', label: 'Indicadores propios', previousValue: current.indicators.length, newValue: complete.indicators.length }],
+        snapshot: procedureSnapshot(complete),
+      })
+      return created
+    })
+    response.status(201).json({ indicator: procedureIndicatorView(indicator) })
+  }))
+
+  app.patch('/api/processes/:processId/procedures/:procedureId/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = procedureIndicatorUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid procedure indicator data', details: parsed.error.issues })
+      return
+    }
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const procedureId = String(request.params.procedureId)
+    const indicatorId = String(request.params.indicatorId)
+    const existing = await db.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    const currentIndicator = existing.indicators.find((item) => item.id === indicatorId)
+    if (!currentIndicator) {
+      response.status(404).json({ error: 'Procedure indicator not found' })
+      return
+    }
+    if (existing.status !== ProcedureStatus.DRAFT) {
+      response.status(409).json({ error: 'Only a draft procedure can be edited' })
+      return
+    }
+    const data = procedureIndicatorUpdateDataOf(parsed.data)
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    const indicator = await db.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Procedure" WHERE "id" = ${procedureId} FOR UPDATE`
+      const current = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!current || current.processId !== process.id) throw new UserAssignmentError(404, 'Procedure not found')
+      if (current.status !== ProcedureStatus.DRAFT) throw new UserAssignmentError(409, 'Only a draft procedure can be edited')
+      if (data.name !== undefined) await assertUniqueProcedureIndicatorName(tx, procedureId, data.name, indicatorId)
+      if (data.reportResponsibleId) await assertActiveAssignmentUser(tx, data.reportResponsibleId, process.companyId, 'Responsible')
+      if (data.monitorResponsibleId) await assertActiveAssignmentUser(tx, data.monitorResponsibleId, process.companyId, 'Responsible')
+      await tx.procedureIndicator.update({ where: { id: indicatorId }, data, include: procedureIndicatorInclude })
+      const complete = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!complete) throw new Error('Procedure not found after indicator update')
+      await procedureHistoryWrite(tx, {
+        procedure: complete,
+        action: 'UPDATED',
+        actor,
+        changes: [{ field: 'indicators', label: 'Indicadores propios', previousValue: current.indicators.length, newValue: complete.indicators.length }],
+        snapshot: procedureSnapshot(complete),
+      })
+      const updated = complete.indicators.find((item) => item.id === indicatorId)
+      if (!updated) throw new Error('Procedure indicator not found after update')
+      return updated
+    })
+    response.json({ indicator: procedureIndicatorView(indicator) })
+  }))
+
+  app.delete('/api/processes/:processId/procedures/:procedureId/indicators/:indicatorId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const process = await findAccessibleProcess(request, String(request.params.processId))
+    if (!process) {
+      response.status(404).json({ error: 'Process not found' })
+      return
+    }
+    const procedureId = String(request.params.procedureId)
+    const indicatorId = String(request.params.indicatorId)
+    const existing = await db.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+    if (!existing || existing.processId !== process.id) {
+      response.status(404).json({ error: 'Procedure not found' })
+      return
+    }
+    if (!existing.indicators.some((item) => item.id === indicatorId)) {
+      response.status(404).json({ error: 'Procedure indicator not found' })
+      return
+    }
+    if (existing.status !== ProcedureStatus.DRAFT) {
+      response.status(409).json({ error: 'Only a draft procedure can be edited' })
+      return
+    }
+    const actor = request.user ? { id: request.user.id, name: request.user.name, email: request.user.email } : null
+    await db.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Procedure" WHERE "id" = ${procedureId} FOR UPDATE`
+      const current = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!current || current.processId !== process.id) throw new UserAssignmentError(404, 'Procedure not found')
+      if (current.status !== ProcedureStatus.DRAFT) throw new UserAssignmentError(409, 'Only a draft procedure can be edited')
+      if (!current.indicators.some((item) => item.id === indicatorId)) throw new UserAssignmentError(404, 'Procedure indicator not found')
+      await tx.procedureIndicator.delete({ where: { id: indicatorId } })
+      const complete = await tx.procedure.findUnique({ where: { id: procedureId }, include: procedureInclude })
+      if (!complete) throw new Error('Procedure not found after indicator deletion')
+      await procedureHistoryWrite(tx, {
+        procedure: complete,
+        action: 'UPDATED',
+        actor,
+        changes: [{ field: 'indicators', label: 'Indicadores propios', previousValue: current.indicators.length, newValue: complete.indicators.length }],
+        snapshot: procedureSnapshot(complete),
+      })
+    })
+    response.status(204).send()
   }))
 
   app.post('/api/processes/:processId/procedures/:procedureId/status', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {

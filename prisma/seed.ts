@@ -2,9 +2,8 @@ import 'dotenv/config'
 import { Pool } from 'pg'
 import bcrypt from 'bcryptjs'
 
-const connectionString =
-  process.env.DATABASE_URL ??
-  'postgresql://postgres:postgres@localhost:5432/kanban_consultoria'
+const connectionString = process.env.DATABASE_URL
+if (!connectionString) throw new Error('DATABASE_URL is required to run the seed')
 
 const pool = new Pool({
   connectionString,

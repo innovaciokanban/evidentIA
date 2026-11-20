@@ -898,7 +898,7 @@ describe('environment validation', () => {
   })
 
   it('requires R2 credentials whenever the R2 evidence provider is selected', () => {
-    const result = envSchema.safeParse({ EVIDENCE_STORAGE_PROVIDER: 'r2' })
+    const result = envSchema.safeParse({ DATABASE_URL: 'postgresql://user:pass@localhost:5432/EvidentIA', EVIDENCE_STORAGE_PROVIDER: 'r2' })
     expect(result.success).toBe(false)
     expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['R2_ENDPOINT', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']))
   })

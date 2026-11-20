@@ -27,9 +27,8 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import type { PoolConfig } from 'pg'
 import bcrypt from 'bcryptjs'
 
-const connectionString =
-  process.env.DATABASE_URL ??
-  'postgresql://postgres:postgres@localhost:5432/kanban_consultoria'
+const connectionString = process.env.DATABASE_URL
+if (!connectionString) throw new Error('DATABASE_URL is required to run the demo seed')
 
 const adapter = new PrismaPg({ connectionString, pipeline: true } as PoolConfig)
 const prisma = new PrismaClient({ adapter })

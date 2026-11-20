@@ -656,6 +656,41 @@ export type ProcedureStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'OBSOLETE'
 
 export type ProcedureHistoryAction = 'CREATED' | 'UPDATED' | 'STATUS_CHANGED'
 
+export type ProcedureStep = {
+  id: string
+  procedureId: string
+  position: number
+  title: string
+  instruction: string
+  criteria: string | null
+  responsibleIds: string[]
+  responsibles: Pick<User, 'id' | 'name' | 'isActive'>[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProcedureIndicator = {
+  id: string
+  procedureId: string
+  name: string
+  description: string
+  frequency: string
+  target: string
+  formula: string
+  dataSource: string
+  unit: string
+  reportResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  monitorResponsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  greenThreshold: string | null
+  yellowThreshold: string | null
+  redThreshold: string | null
+  baselineValue: string | null
+  measurementMethod: string | null
+  deadline: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export type Procedure = {
   id: string
   processId: string
@@ -666,6 +701,8 @@ export type Procedure = {
   scope: string
   description: string | null
   responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  steps: ProcedureStep[]
+  indicators: ProcedureIndicator[]
   kpis: ProcessKpi[]
   status: ProcedureStatus
   version: string

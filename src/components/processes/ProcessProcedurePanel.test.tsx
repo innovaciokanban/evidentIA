@@ -53,7 +53,7 @@ describe('ProcessProcedurePanel', () => {
 
   it('describe el flujo documental en el panel de listado', () => {
     const markup = render(true)
-    expect(markup).toContain('Flujo de revisión y aprobación')
+    expect(markup).toContain('Documentos operativos del proceso')
     expect(markup).toContain('Documenta, revisa y aprueba los procedimientos')
   })
 })

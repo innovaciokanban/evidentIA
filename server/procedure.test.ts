@@ -2,14 +2,15 @@ import bcrypt from 'bcryptjs'
 import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
-import { createApp } from './app.js'
+import { createApp, nextProcedureCode } from './app.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
 const processId = 'cmprocess000000000000000001'
-const admin = { id: 'cmadmin000000000000000001', email: 'admin@procedure.test', name: 'Procedure Admin', role: 'COMPANY_ADMIN' as Role, companyId }
-const companyUser = { id: 'cmuser0000000000000000001', email: 'user@procedure.test', name: 'Procedure User', role: 'COMPANY_USER' as Role, companyId }
-const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@procedure.test', name: 'Foreign Admin', role: 'COMPANY_ADMIN' as Role, companyId: otherCompanyId }
+const admin = { id: 'cmadmin000000000000000001', email: 'admin@procedure.test', name: 'Procedure Admin', role: 'COMPANY_ADMIN' as Role, companyId, isActive: true }
+const companyUser = { id: 'cmuser0000000000000000001', email: 'user@procedure.test', name: 'Procedure User', role: 'COMPANY_USER' as Role, companyId, isActive: true }
+const inactiveUser = { id: 'cminactive00000000000000001', email: 'inactive@procedure.test', name: 'Inactive User', role: 'COMPANY_USER' as Role, companyId, isActive: false }
+const foreignAdmin = { id: 'cmforeign00000000000000001', email: 'foreign@procedure.test', name: 'Foreign Admin', role: 'COMPANY_ADMIN' as Role, companyId: otherCompanyId, isActive: true }
 const process = { id: processId, companyId, name: 'Gestión Comercial', code: 'PROC-01' }
 
 const payload = {
@@ -37,7 +38,7 @@ const kpiPayload = (name: string, target = '95%') => ({
 })
 
 function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
-  const users = [admin, companyUser, foreignAdmin]
+  const users = [admin, companyUser, inactiveUser, foreignAdmin]
   const currentUser = users.find((user) => user.role === role && user.companyId === userCompanyId) ?? { ...admin, role, companyId: userCompanyId }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
   let sessionActive = false
@@ -45,13 +46,16 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
   const storedKpis: Array<Record<string, unknown>> = []
   const storedProcessKpis: Array<{ processId: string; kpiId: string }> = []
   const storedProcedureKpis: Array<{ procedureId: string; kpiId: string }> = []
+  const storedSteps: Array<Record<string, unknown>> = []
+  const storedStepResponsibles: Array<{ stepId: string; userId: string }> = []
+  const storedIndicators: Array<Record<string, unknown>> = []
   const storedVersions: Array<Record<string, unknown>> = []
   let procedureSeq = 0
   let versionSeq = 0
 
   const userView = (id: unknown) => {
     const user = users.find((item) => item.id === id)
-    return user ? { id: user.id, name: user.name } : null
+     return user ? { id: user.id, name: user.name, isActive: user.isActive } : null
   }
   const kpiView = (kpi: Record<string, unknown>) => ({
     ...kpi,
@@ -63,6 +67,15 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
     ...procedure,
     process: { id: processId, companyId: process.companyId, name: process.name, code: process.code },
     responsible: userView(procedure.responsibleId),
+    steps: storedSteps.filter((step) => step.procedureId === procedure.id).sort((a, b) => Number(a.position) - Number(b.position)).map((step) => {
+       const links = storedStepResponsibles.filter((link) => link.stepId === step.id).sort((a, b) => a.userId.localeCompare(b.userId))
+       return { ...step, responsibles: links.map((link) => ({ userId: link.userId, user: userView(link.userId) })) }
+     }),
+    indicators: storedIndicators.filter((indicator) => indicator.procedureId === procedure.id).map((indicator) => ({
+      ...indicator,
+      reportResponsible: userView(indicator.reportResponsibleId),
+      monitorResponsible: userView(indicator.monitorResponsibleId),
+    })),
     kpis: storedProcedureKpis
       .filter((link) => link.procedureId === procedure.id)
       .map((link) => ({ kpi: kpiView(storedKpis.find((kpi) => kpi.id === link.kpiId)!) })),
@@ -181,6 +194,79 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         const index = storedProcedures.findIndex((item) => item.id === where.id)
         if (index >= 0) storedProcedures.splice(index, 1)
+        for (let stepIndex = storedSteps.length - 1; stepIndex >= 0; stepIndex -= 1) {
+          if (storedSteps[stepIndex].procedureId === where.id) {
+            const stepId = String(storedSteps[stepIndex].id)
+            storedSteps.splice(stepIndex, 1)
+            for (let linkIndex = storedStepResponsibles.length - 1; linkIndex >= 0; linkIndex -= 1) if (storedStepResponsibles[linkIndex].stepId === stepId) storedStepResponsibles.splice(linkIndex, 1)
+          }
+        }
+        for (let indicatorIndex = storedIndicators.length - 1; indicatorIndex >= 0; indicatorIndex -= 1) {
+          if (storedIndicators[indicatorIndex].procedureId === where.id) storedIndicators.splice(indicatorIndex, 1)
+        }
+        return { id: where.id }
+      }),
+    },
+    procedureStep: {
+      findMany: vi.fn(async ({ where }: { where?: { procedureId?: string }; select?: { id?: boolean } } = {}) => storedSteps.filter((step) => !where?.procedureId || step.procedureId === where.procedureId).map((step) => ({ ...step, responsibles: storedStepResponsibles.filter((link) => link.stepId === step.id).map((link) => ({ userId: link.userId })) }))),
+      updateMany: vi.fn(async ({ where, data }: { where: { procedureId: string }; data: { position: { increment: number } } }) => {
+        const matches = storedSteps.filter((step) => step.procedureId === where.procedureId)
+        matches.forEach((step) => { step.position = Number(step.position) + data.position.increment })
+        return { count: matches.length }
+      }),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const step = { id: `c${String(storedSteps.length + 1).padStart(24, '0')}`, createdAt: new Date(), updatedAt: new Date(), ...data }
+        storedSteps.push(step)
+        return step
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const step = storedSteps.find((item) => item.id === where.id)
+        if (!step) throw new Error('Procedure step not found')
+        Object.assign(step, data, { updatedAt: new Date() })
+        return step
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: { procedureId: string; id?: { notIn: string[] } } }) => {
+        const before = storedSteps.length
+        for (let index = storedSteps.length - 1; index >= 0; index -= 1) {
+          const step = storedSteps[index]
+          if (step.procedureId === where.procedureId && (!where.id || !where.id.notIn.includes(String(step.id)))) {
+            const stepId = String(step.id)
+            storedSteps.splice(index, 1)
+            for (let linkIndex = storedStepResponsibles.length - 1; linkIndex >= 0; linkIndex -= 1) if (storedStepResponsibles[linkIndex].stepId === stepId) storedStepResponsibles.splice(linkIndex, 1)
+          }
+        }
+        return { count: before - storedSteps.length }
+      }),
+    },
+    procedureStepResponsible: {
+      deleteMany: vi.fn(async ({ where }: { where: { stepId: string } }) => {
+        const before = storedStepResponsibles.length
+        for (let index = storedStepResponsibles.length - 1; index >= 0; index -= 1) if (storedStepResponsibles[index].stepId === where.stepId) storedStepResponsibles.splice(index, 1)
+        return { count: before - storedStepResponsibles.length }
+      }),
+      createMany: vi.fn(async ({ data }: { data: Array<{ stepId: string; userId: string }> }) => {
+        storedStepResponsibles.push(...data)
+        return { count: data.length }
+      }),
+    },
+    procedureIndicator: {
+      findMany: vi.fn(async ({ where }: { where?: { procedureId?: string }; select?: { id?: boolean; name?: boolean } } = {}) => storedIndicators
+        .filter((indicator) => !where?.procedureId || indicator.procedureId === where.procedureId)
+        .map((indicator) => ({ id: indicator.id, name: indicator.name }))),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const indicator = { id: `cmi${String(storedIndicators.length + 1).padStart(22, '0')}`, createdAt: new Date(), updatedAt: new Date(), ...data }
+        storedIndicators.push(indicator)
+        return indicator
+      }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const indicator = storedIndicators.find((item) => item.id === where.id)
+        if (!indicator) throw new Error('Procedure indicator not found')
+        Object.assign(indicator, data, { updatedAt: new Date() })
+        return indicator
+      }),
+      delete: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const index = storedIndicators.findIndex((item) => item.id === where.id)
+        if (index >= 0) storedIndicators.splice(index, 1)
         return { id: where.id }
       }),
     },
@@ -208,7 +294,7 @@ function makeProcedureDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId
   }
   // Misma convención que el resto de arneses: la transacción ejecuta sobre el propio mock.
   db.$transaction = vi.fn(async (fn: (client: Record<string, unknown>) => Promise<unknown>) => fn(db))
-  return { db: db as unknown as PrismaClient, storedProcedures, storedKpis, storedProcessKpis, storedProcedureKpis, storedVersions }
+  return { db: db as unknown as PrismaClient, storedProcedures, storedKpis, storedProcessKpis, storedProcedureKpis, storedSteps, storedStepResponsibles, storedIndicators, storedVersions }
 }
 
 async function loggedIn(db: PrismaClient, email = admin.email) {
@@ -232,6 +318,46 @@ type WhereClause = {
 }
 
 describe('process procedure API', () => {
+  it('generates the next procedure code without reusing legacy codes', () => {
+    expect(nextProcedureCode(['PRO-EST-001', 'PROC-01', 'PROC-03'])).toBe('PROC-04')
+    expect(nextProcedureCode(['PRO-EST-001'])).toBe('PROC-01')
+  })
+
+  it('previews the next company code without reserving it and enforces access', async () => {
+    const { db, storedProcedures } = makeProcedureDb()
+    const agent = await loggedIn(db)
+
+    const preview = await agent.get(`${listPath}/next-code`)
+    expect(preview.status).toBe(200)
+    expect(preview.body).toEqual({ code: 'PROC-01' })
+    expect(storedProcedures).toHaveLength(0)
+
+    const created = await agent.post(listPath).send(payload)
+    expect(created.body.procedure.code).toBe('PROC-01')
+    expect((await agent.get(`${listPath}/next-code`)).body).toEqual({ code: 'PROC-02' })
+
+    const readOnly = makeProcedureDb('COMPANY_USER')
+    const readOnlyAgent = await loggedIn(readOnly.db, companyUser.email)
+    expect((await readOnlyAgent.get(`${listPath}/next-code`)).body).toEqual({ code: 'PROC-01' })
+
+    const foreign = makeProcedureDb('COMPANY_ADMIN', otherCompanyId)
+    const foreignAgent = await loggedIn(foreign.db, foreignAdmin.email)
+    expect((await foreignAgent.get(`${listPath}/next-code`)).status).toBe(404)
+  })
+
+  it('assigns distinct codes when creations race for the same company', async () => {
+    const { db } = makeProcedureDb()
+    const agent = await loggedIn(db)
+
+    const [first, second] = await Promise.all([
+      agent.post(listPath).send(payload),
+      agent.post(listPath).send({ ...payload, name: 'Seguimiento de solicitudes' }),
+    ])
+
+    expect([first.status, second.status]).toEqual([201, 201])
+    expect([first.body.procedure.code, second.body.procedure.code].sort()).toEqual(['PROC-01', 'PROC-02'])
+  })
+
   it('creates, reads, updates and deletes a procedure with its version history', async () => {
     const { db, storedVersions } = makeProcedureDb()
     const agent = await loggedIn(db)
@@ -242,12 +368,12 @@ describe('process procedure API', () => {
       id: expect.any(String),
       processId,
       companyId,
-      code: payload.code,
+       code: 'PROC-01',
       name: payload.name,
       status: 'DRAFT',
       version: '1.0',
     })
-    expect(created.body.procedure.responsible).toEqual({ id: admin.id, name: admin.name })
+    expect(created.body.procedure.responsible).toEqual({ id: admin.id, name: admin.name, isActive: true })
     const procedureId = created.body.procedure.id as string
     expect(storedVersions).toHaveLength(1)
     expect(storedVersions[0]).toMatchObject({ action: 'CREATED', status: 'DRAFT', version: '1.0', changedById: admin.id, changedByName: admin.name })
@@ -271,6 +397,94 @@ describe('process procedure API', () => {
     expect(removed.status).toBe(204)
     expect((await agent.get(listPath)).body.procedures).toHaveLength(0)
     expect(storedVersions).toHaveLength(0)
+  })
+
+  it('creates, reorders and removes steps, and creates independent procedure indicators transactionally', async () => {
+    const { db, storedSteps, storedStepResponsibles, storedIndicators, storedVersions } = makeProcedureDb()
+    const agent = await loggedIn(db)
+    const created = await agent.post(listPath).send({
+      ...payload,
+      steps: [
+        { position: 0, title: 'Recibir solicitud', instruction: 'Registrar la solicitud.', criteria: 'Canal oficial.', responsibleIds: [admin.id, companyUser.id] },
+        { position: 1, title: 'Cerrar solicitud', instruction: 'Confirmar el cierre.', criteria: null },
+      ],
+      indicators: [kpiPayload('Cumplimiento operativo')],
+    })
+    expect(created.status).toBe(201)
+    expect(created.body.procedure.code).toBe('PROC-01')
+    expect(created.body.procedure.steps.map((step: { title: string }) => step.title)).toEqual(['Recibir solicitud', 'Cerrar solicitud'])
+    expect(created.body.procedure.indicators).toHaveLength(1)
+    expect(storedSteps).toHaveLength(2)
+    expect(storedStepResponsibles).toEqual(expect.arrayContaining([{ stepId: created.body.procedure.steps[0].id, userId: admin.id }, { stepId: created.body.procedure.steps[0].id, userId: companyUser.id }]))
+    expect(created.body.procedure.steps[0].responsibleIds).toEqual([admin.id, companyUser.id].sort())
+    expect(storedIndicators).toHaveLength(1)
+    expect(storedVersions[0].snapshot).toMatchObject({
+      steps: expect.arrayContaining([expect.objectContaining({ position: 0, title: 'Recibir solicitud', responsibleIds: [admin.id, companyUser.id] })]),
+      indicators: expect.arrayContaining([expect.objectContaining({ name: 'Cumplimiento operativo' })]),
+    })
+    expect(created.body.procedure.steps[0].responsibles).toEqual([
+      { id: admin.id, name: admin.name, isActive: true },
+      { id: companyUser.id, name: companyUser.name, isActive: true },
+    ])
+    expect(created.body.procedure.steps[0].responsibles[0]).not.toHaveProperty('email')
+
+    const procedureId = created.body.procedure.id as string
+    const [firstStep, secondStep] = created.body.procedure.steps
+    const reordered = await agent.patch(`${listPath}/${procedureId}`).send({
+      steps: [
+        { id: secondStep.id, position: 0, title: 'Cerrar solicitud actualizada', instruction: secondStep.instruction, criteria: secondStep.criteria },
+        { id: firstStep.id, position: 1, title: firstStep.title, instruction: firstStep.instruction, criteria: firstStep.criteria },
+      ],
+    })
+    expect(reordered.status).toBe(200)
+    expect(reordered.body.procedure.steps.map((step: { title: string }) => step.title)).toEqual(['Cerrar solicitud actualizada', 'Recibir solicitud'])
+    expect(reordered.body.procedure.steps.find((step: { id: string }) => step.id === firstStep.id).responsibleIds).toEqual([admin.id, companyUser.id].sort())
+
+    const indicatorId = created.body.procedure.indicators[0].id as string
+    const editedIndicator = await agent.patch(`${listPath}/${procedureId}/indicators/${indicatorId}`).send({ target: '98%' })
+    expect(editedIndicator.status).toBe(200)
+    expect(editedIndicator.body.indicator.target).toBe('98%')
+    expect((await agent.delete(`${listPath}/${procedureId}/indicators/${indicatorId}`)).status).toBe(204)
+    expect((await agent.get(`${listPath}/${procedureId}/indicators`)).body.indicators).toHaveLength(0)
+
+    const removedStep = await agent.patch(`${listPath}/${procedureId}`).send({ steps: [{ id: secondStep.id, position: 0, title: 'Cerrar solicitud actualizada', instruction: secondStep.instruction, criteria: secondStep.criteria }] })
+    expect(removedStep.status).toBe(200)
+    expect(removedStep.body.procedure.steps).toHaveLength(1)
+    expect(storedVersions.length).toBeGreaterThan(3)
+  })
+
+  it('replaces step responsible links only when responsibleIds is supplied', async () => {
+    const { db, storedStepResponsibles } = makeProcedureDb()
+    const agent = await loggedIn(db)
+    const created = await agent.post(listPath).send({ ...payload, steps: [{ position: 0, title: 'Validar solicitud', instruction: 'Validar los datos.', responsibleIds: [admin.id, companyUser.id] }] })
+    const procedureId = created.body.procedure.id as string
+    const step = created.body.procedure.steps[0]
+
+    const preserved = await agent.patch(`${listPath}/${procedureId}`).send({ steps: [{ id: step.id, position: 0, title: step.title, instruction: step.instruction }] })
+    expect(preserved.status).toBe(200)
+    expect(preserved.body.procedure.steps[0].responsibleIds).toEqual([admin.id, companyUser.id].sort())
+
+    const cleared = await agent.patch(`${listPath}/${procedureId}`).send({ steps: [{ id: step.id, position: 0, title: step.title, instruction: step.instruction, responsibleIds: [] }] })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.procedure.steps[0].responsibleIds).toEqual([])
+    expect(storedStepResponsibles).toEqual([])
+  })
+
+  it('rejects duplicate, foreign-company and inactive step responsible users', async () => {
+    const duplicateDb = makeProcedureDb()
+    const duplicateAgent = await loggedIn(duplicateDb.db)
+    const duplicate = await duplicateAgent.post(listPath).send({ ...payload, steps: [{ position: 0, title: 'Validar solicitud', instruction: 'Validar los datos.', responsibleIds: [admin.id, admin.id] }] })
+    expect(duplicate.status).toBe(400)
+
+    const foreignDb = makeProcedureDb()
+    const foreignAgent = await loggedIn(foreignDb.db)
+    const foreign = await foreignAgent.post(listPath).send({ ...payload, steps: [{ position: 0, title: 'Validar solicitud', instruction: 'Validar los datos.', responsibleIds: [foreignAdmin.id] }] })
+    expect(foreign.status).toBe(403)
+
+    const inactiveDb = makeProcedureDb()
+    const inactiveAgent = await loggedIn(inactiveDb.db)
+    const inactive = await inactiveAgent.post(listPath).send({ ...payload, steps: [{ position: 0, title: 'Validar solicitud', instruction: 'Validar los datos.', responsibleIds: [inactiveUser.id] }] })
+    expect(inactive.status).toBe(409)
   })
 
   it('creates and edits multiple embedded KPIs without deleting the process KPIs', async () => {
@@ -338,7 +552,7 @@ describe('process procedure API', () => {
     const history = await agent.get(`${listPath}/${procedureId}/history`)
     const approvedEntry = history.body.versions.find((entry: { action: string; status: string }) => entry.action === 'STATUS_CHANGED' && entry.status === 'APPROVED')
     expect(approvedEntry).toBeTruthy()
-    expect(approvedEntry.snapshot).toMatchObject({ status: 'APPROVED', version: '2.0', code: payload.code })
+     expect(approvedEntry.snapshot).toMatchObject({ status: 'APPROVED', version: '2.0', code: 'PROC-01' })
     expect(approvedEntry.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'status', previousValue: 'IN_REVIEW', newValue: 'APPROVED' }),
       expect.objectContaining({ field: 'comment', newValue: 'Cumple con la política documental.' }),
@@ -388,10 +602,10 @@ describe('process procedure API', () => {
     await agent.post(listPath).send({ ...payload, code: 'PRO-LOG-01', name: 'Logística de almacén' })
     await agent.post(`${listPath}/${first.body.procedure.id}/status`).send({ status: 'IN_REVIEW' })
 
-    const byCode = await agent.get(`${listPath}?search=pro-com`)
+     const byCode = await agent.get(`${listPath}?search=proc-01`)
     expect(byCode.status).toBe(200)
     expect(byCode.body.procedures).toHaveLength(1)
-    expect(byCode.body.procedures[0].code).toBe('PRO-COM-01')
+     expect(byCode.body.procedures[0].code).toBe('PROC-01')
 
     const byName = await agent.get(`${listPath}?search=log%C3%ADstica`)
     expect(byName.status).toBe(200)
@@ -441,13 +655,13 @@ describe('process procedure API', () => {
     const crossCompanyResponsible = await ownAgent.post(listPath).send({ ...payload, code: 'PRO-COM-09', responsibleId: foreignAdmin.id })
     expect(crossCompanyResponsible.status).toBe(403)
 
-    const duplicated = await ownAgent.post(listPath).send(payload)
-    expect(duplicated.status).toBe(409)
-    const renamed = await ownAgent.patch(`${listPath}/${procedureId}`).send({ code: payload.code })
-    expect(renamed.status).toBe(200)
-    const second = await ownAgent.post(listPath).send({ ...payload, code: 'PRO-COM-10' })
-    const renameConflict = await ownAgent.patch(`${listPath}/${second.body.procedure.id}`).send({ code: payload.code })
-    expect(renameConflict.status).toBe(409)
+     const secondGenerated = await ownAgent.post(listPath).send(payload)
+     expect(secondGenerated.status).toBe(201)
+     expect(secondGenerated.body.procedure.code).toBe('PROC-02')
+     const renamed = await ownAgent.patch(`${listPath}/${procedureId}`).send({ code: 'PROC-01' })
+     expect(renamed.status).toBe(200)
+     const attemptedRename = await ownAgent.patch(`${listPath}/${procedureId}`).send({ code: 'PROC-99' })
+     expect(attemptedRename.status).toBe(409)
   })
 
   it('rejects malformed payloads, statuses and ids with 400', async () => {
@@ -472,6 +686,7 @@ describe('process procedure API', () => {
     const { db } = makeProcedureDb()
     const anonymous = request.agent(createApp(db))
     expect((await anonymous.get(listPath)).status).toBe(401)
+    expect((await anonymous.get(`${listPath}/next-code`)).status).toBe(401)
     expect((await anonymous.post(listPath).send(payload)).status).toBe(401)
   })
 })
