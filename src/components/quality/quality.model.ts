@@ -143,6 +143,38 @@ export const auditEventLabels: Record<AuditEventType, string> = {
   ACTION_UPDATED: 'Acción correctiva actualizada',
   ACTION_STATUS_CHANGED: 'Estado de la acción',
   ACTION_PROGRESS_ADDED: 'Avance registrado',
+  TEAM_MEMBER_ASSIGNED: 'Integrante asignado',
+  TEAM_MEMBER_UPDATED: 'Equipo auditor actualizado',
+  TEAM_MEMBER_REMOVED: 'Integrante retirado',
+  INDEPENDENCE_EVALUATED: 'Independencia evaluada',
+  AUDIT_PLAN_ACTIVITY_EXECUTION_STARTED: 'Actividad iniciada',
+  AUDIT_PLAN_ACTIVITY_EXECUTION_UPDATED: 'Avance de actividad actualizado',
+  AUDIT_PLAN_ACTIVITY_EXECUTION_COMPLETED: 'Actividad completada',
+  AUDIT_PLAN_ACTIVITY_EXECUTION_CANCELLED: 'Actividad cancelada',
+  AUDIT_PLAN_ACTIVITY_RESOURCE_LINKED: 'Recurso vinculado',
+  AUDIT_PLAN_ACTIVITY_RESOURCE_UNLINKED: 'Recurso desvinculado',
+  IMMEDIATE_CORRECTION_CREATED: 'Corrección inmediata registrada',
+  IMMEDIATE_CORRECTION_UPDATED: 'Corrección inmediata actualizada',
+  IMMEDIATE_CORRECTION_STATUS_CHANGED: 'Estado de corrección inmediata',
+  ROOT_CAUSE_ANALYSIS_CREATED: 'Análisis de causa raíz creado',
+  ROOT_CAUSE_ANALYSIS_UPDATED: 'Análisis de causa raíz actualizado',
+  ROOT_CAUSE_ANALYSIS_STATUS_CHANGED: 'Estado del análisis de causa raíz',
+  ROOT_CAUSE_CREATED: 'Causa raíz creada',
+  ROOT_CAUSE_UPDATED: 'Causa raíz actualizada',
+  ROOT_CAUSE_STATUS_CHANGED: 'Estado de la causa raíz',
+  ROOT_CAUSE_FIVE_WHY_STEP_CREATED: 'Paso de Five Whys creado',
+  ROOT_CAUSE_FIVE_WHY_STEP_UPDATED: 'Paso de Five Whys actualizado',
+  ROOT_CAUSE_FIVE_WHY_STEP_DELETED: 'Paso de Five Whys eliminado',
+  CORRECTIVE_ACTION_CAUSE_LINKED: 'Causa vinculada a acción correctiva',
+  CORRECTIVE_ACTION_CAUSE_UNLINKED: 'Causa desvinculada de acción correctiva',
+  EFFICACY_EVALUATION_CREATED: 'Evaluación de eficacia planificada',
+  EFFICACY_EVALUATION_UPDATED: 'Evaluación de eficacia actualizada',
+  EFFICACY_EVALUATION_PROGRESS_ADDED: 'Avance de eficacia registrado',
+  EFFICACY_EVALUATION_STARTED: 'Evaluación de eficacia iniciada',
+  EFFICACY_EVALUATION_COMPLETED: 'Evaluación de eficacia finalizada',
+  EFFICACY_EVALUATION_CANCELLED: 'Evaluación de eficacia cancelada',
+  EFFICACY_EVALUATION_EVIDENCE_LINKED: 'Evidencia de eficacia vinculada',
+  EFFICACY_EVALUATION_EVIDENCE_UNLINKED: 'Evidencia de eficacia desvinculada',
 }
 
 export const auditModuleLabels = {
@@ -245,6 +277,29 @@ export type ChecklistDraft = { name: string }
 export const emptyChecklistDraft: ChecklistDraft = { name: '' }
 
 export type ChecklistItemOrigin = 'MANUAL' | 'CHECKY'
+export type AuditChecklistItemContext = {
+  verification: string
+  source: string
+  dimension: string
+  origin: ChecklistItemOrigin
+}
+
+export const checklistItemContext = (criteria: string): AuditChecklistItemContext => {
+  const lines = criteria.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const valueFor = (prefix: string) => lines.find((line) => line.toLowerCase().startsWith(prefix.toLowerCase()))?.slice(prefix.length).trim() || null
+  const expectedEvidence = valueFor('Evidencia esperada:')
+  const source = valueFor('Fuente:')
+  const dimension = valueFor('Dimensión:')
+  const origin = valueFor('Origen:')
+  const contentLines = lines.filter((line) => !['evidencia esperada:', 'fuente:', 'dimensión:', 'origen:'].some((prefix) => line.toLowerCase().startsWith(prefix)))
+  return {
+    verification: (expectedEvidence ?? contentLines.join('\n')) || criteria,
+    source: source ?? 'No especificada',
+    dimension: dimension ?? 'No especificada',
+    origin: origin?.toLowerCase() === 'checky' || Boolean(expectedEvidence) ? 'CHECKY' : 'MANUAL',
+  }
+}
+
 export type ChecklistItemDraft = {
   description: string
   criteria: string
@@ -257,6 +312,7 @@ export type ChecklistItemDraft = {
 export const emptyChecklistItemDraft: ChecklistItemDraft = { description: '', criteria: '', source: '', dimension: '', origin: 'MANUAL', required: true }
 
 export type AuditChecklistAIDimension = 'COMPLIANCE' | 'IMPLEMENTATION' | 'EFFECTIVENESS'
+export type AuditChecklistAIContextSelection = { activityId: string; dimension: AuditChecklistAIDimension | '' }
 export type AuditChecklistAIProposal = {
   id: string
   question: string
@@ -309,6 +365,59 @@ export const auditChecklistAIDimensionLabels: Record<AuditChecklistAIDimension, 
   EFFECTIVENESS: 'Eficacia',
 }
 
+export const auditChecklistAIGenerationPayload = (context?: AuditChecklistAIContextSelection | null): Record<string, string> => {
+  if (!context?.activityId) return {}
+  return {
+    activityId: context.activityId,
+    ...(context.dimension ? { dimension: context.dimension } : {}),
+  }
+}
+
+export const checklistCriteriaFromAIProposal = (proposal: Pick<AuditChecklistAIProposal, 'expectedEvidence' | 'source' | 'dimension'>): string => [
+  `Evidencia esperada: ${proposal.expectedEvidence.trim()}`,
+  `Fuente: ${proposal.source.trim()}`,
+  `Dimensión: ${auditChecklistAIDimensionLabels[proposal.dimension]}`,
+  'Origen: Checky',
+].join('\n')
+
+export const mergeAuditChecklistActivityItemIds = (existingIds: string[], createdIds: string[]): string[] => [...new Set([...existingIds, ...createdIds])]
+
+export const mergeAuditFindingActivityIds = (existingIds: string[], findingId: string): string[] => [...new Set([...existingIds, findingId])]
+
+export const mergeAuditEvidenceActivityIds = (existingIds: string[], evidenceId: string): string[] => [...new Set([...existingIds, evidenceId])]
+
+export const auditEvidenceActivityLinkRequest = (kind: 'url' | 'pdf', existingIds: string[], evidenceId: string) => ({
+  endpoint: kind === 'url' ? 'evidences' : 'evidence-files',
+  field: kind === 'url' ? 'evidenceIds' : 'evidenceFileIds',
+  ids: mergeAuditEvidenceActivityIds(existingIds, evidenceId),
+})
+
+export const auditEvidenceActivityLinkErrorMessage = (status: number, reason: string | undefined, serverMessage: string, fallback: string): string => {
+  if (reason === 'EVIDENCE_LINKED_TO_ACTIVITY') return 'Esta evidencia no puede eliminarse porque está vinculada o tiene vínculos históricos con actividades de auditoría.'
+  if (reason === 'EVIDENCE_FILE_LINKED_TO_ACTIVITY') return 'Este archivo no puede eliminarse porque está vinculado o tiene vínculos históricos con actividades de auditoría.'
+  if (status === 409) return 'La evidencia oficial permanece guardada, pero la actividad ya no permite nuevos vínculos. Puedes reintentar la asociación si vuelve a estar disponible.'
+  return serverMessage || fallback
+}
+
+export const auditFindingActivityLinkErrorMessage = (status: number, reason: string | undefined, serverMessage: string, fallback: string): string => {
+  if (reason === 'FINDING_LINKED_TO_ACTIVITY') return 'El hallazgo ya está vinculado a una actividad; no se modificaron los vínculos existentes.'
+  if (status === 409) return 'La actividad ya no permite cambios. El hallazgo oficial permanece guardado y puedes reintentar cuando corresponda.'
+  return serverMessage || fallback
+}
+
+export const auditChecklistAIErrorMessage = (status: number, serverMessage: string, fallback: string): string => {
+  if (status === 400) return 'La solicitud de Checky no es válida. Revisa la dimensión seleccionada.'
+  if (status === 403) return 'No tienes permisos para solicitar preguntas a Checky en esta auditoría.'
+  if (status === 404) return 'La actividad de origen ya no existe o no pertenece a esta auditoría.'
+  if (status === 409) return 'El plan o la actividad ya no permite generar o vincular preguntas.'
+  if (status === 429) return 'Se alcanzó el límite temporal de solicitudes a Checky. Espera un momento e inténtalo de nuevo.'
+  if (status === 502) return 'Checky devolvió una respuesta inconsistente. No se guardó ninguna pregunta automáticamente.'
+  if (status === 503 && /cr[eé]ditos/i.test(serverMessage)) return 'Checky no tiene créditos disponibles para generar propuestas.'
+  if (status === 503) return 'Checky no está disponible en este momento. Inténtalo de nuevo más tarde.'
+  if (status === 413) return 'La documentación de la auditoría es demasiado grande para analizarla de una vez.'
+  return fallback
+}
+
 export const normalizeChecklistQuestion = (value: string): string => value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
 
 export const dedupeAuditChecklistAIProposals = <T extends { question: string }>(existingQuestions: string[], proposals: T[]): T[] => {
@@ -340,7 +449,7 @@ export const formatBytes = (size: number): string => {
 // ---- Espacio de ejecución de la auditoría (resumen, checklist, cierre guiado) ----
 
 /** Secciones del espacio de trabajo del detalle; espejo de las pestañas renderizadas. */
-export type AuditWorkspaceSection = 'resumen' | 'checklist' | 'hallazgos' | 'evidencias' | 'acciones' | 'historial'
+export type AuditWorkspaceSection = 'resumen' | 'plan' | 'equipo' | 'checklist' | 'hallazgos' | 'evidencias' | 'acciones' | 'informe' | 'seguimiento' | 'historial'
 
 export type AuditCloseBlocker = {
   reason: 'CHECKLIST_PENDING' | 'CHECKLIST_FINDING_MISSING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING' | 'EVIDENCE_PENDING' | 'EVIDENCE_FAILED' | 'EVIDENCE_DELETE_PENDING'

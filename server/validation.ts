@@ -376,6 +376,195 @@ const auditText = (max: number) => z.string().trim().min(1).max(max)
 const auditUserId = z.string().trim().min(1).max(64).nullable().optional()
 const auditIdList = z.array(idReference).max(50)
 
+export const auditProgramStatusSchema = z.enum(['DRAFT', 'ACTIVE', 'COMPLETED', 'CANCELLED'])
+
+const auditProgramFields = {
+  // Solo SUPERUSER puede escoger una empresa; los administradores de empresa usan su tenant.
+  companyId: idReference.optional(),
+  name: auditText(160).refine((value) => value.length >= 3, 'Program name must have at least 3 characters'),
+  objective: auditText(2000),
+  scope: auditText(2000),
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+  responsibleId: auditUserId,
+  criteria: auditText(2000),
+  resources: z.string().trim().max(5000).nullable().optional(),
+  risks: z.string().trim().max(5000).nullable().optional(),
+  notes: z.string().trim().max(10000).nullable().optional(),
+}
+
+const validateAuditProgramPeriod = (value: { startDate?: Date; endDate?: Date }, context: z.RefinementCtx) => {
+  if (value.startDate && value.endDate && value.startDate > value.endDate) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'Program end date must be on or after the start date' })
+  }
+}
+
+export const auditProgramCreateSchema = z.object(auditProgramFields).strict().superRefine(validateAuditProgramPeriod)
+export const auditProgramUpdateSchema = z.object(auditProgramFields).omit({ companyId: true }).partial().strict().superRefine(validateAuditProgramPeriod)
+export const auditProgramQuerySchema = z.object({
+  companyId: idReference.optional(),
+  search: z.string().trim().max(120).optional(),
+  status: auditProgramStatusSchema.optional(),
+})
+export const auditProgramCodeQuerySchema = z.object({ companyId: idReference.optional() })
+export const auditProgramStatusChangeSchema = z.object({ status: auditProgramStatusSchema })
+export const auditProgramAuditLinkSchema = z.object({ auditId: idReference }).strict()
+
+const auditProgramPriorityCriterionSchema = z.number().int().min(1).max(3)
+const auditProgramProcessPriorityFields = {
+  processId: idReference,
+  criticality: auditProgramPriorityCriterionSchema,
+  recentChanges: auditProgramPriorityCriterionSchema,
+  previousUnfavorableResults: auditProgramPriorityCriterionSchema,
+  manualPriority: priorityLevelSchema.nullable().optional(),
+  manualJustification: z.string().trim().max(2000).nullable().optional(),
+  observations: z.string().trim().max(5000).nullable().optional(),
+}
+
+const validateManualAuditProgramPriority = (value: { manualPriority?: string | null; manualJustification?: string | null }, context: z.RefinementCtx) => {
+  if (value.manualPriority && !value.manualJustification?.trim()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['manualJustification'], message: 'A justification is required for a manual priority' })
+  }
+  if (!value.manualPriority && value.manualJustification?.trim()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['manualPriority'], message: 'Manual justification requires a manual priority' })
+  }
+}
+
+export const auditProgramProcessPriorityCreateSchema = z.object(auditProgramProcessPriorityFields).strict().superRefine(validateManualAuditProgramPriority)
+export const auditProgramProcessPriorityUpdateSchema = z.object(auditProgramProcessPriorityFields).omit({ processId: true }).partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one process priority field is required',
+)
+
+export const auditorTypeSchema = z.enum(['INTERNAL', 'EXTERNAL'])
+export const auditorStatusSchema = z.enum(['AVAILABLE', 'UNAVAILABLE', 'INACTIVE'])
+
+const auditorOptionalText = (max: number) => z.string().trim().max(max).nullable().optional()
+const auditorFields = {
+  companyId: idReference.optional(),
+  name: z.string().trim().min(2).max(160),
+  email: z.string().trim().toLowerCase().email().max(320),
+  phone: auditorOptionalText(40),
+  type: auditorTypeSchema,
+  position: auditorOptionalText(160),
+  organization: auditorOptionalText(200),
+  experience: auditorOptionalText(5000),
+  status: auditorStatusSchema.optional(),
+  observations: auditorOptionalText(5000),
+}
+
+export const auditorCreateSchema = z.object(auditorFields).strict()
+export const auditorUpdateSchema = z.object(auditorFields).omit({ companyId: true }).partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one auditor field is required',
+)
+export const auditorQuerySchema = z.object({
+  companyId: idReference.optional(),
+  search: z.string().trim().max(160).optional(),
+  type: auditorTypeSchema.optional(),
+  status: auditorStatusSchema.optional(),
+})
+
+const auditorCompetencyFields = {
+  name: z.string().trim().min(2).max(160),
+  level: z.number().int().min(1).max(5),
+  evidence: auditorOptionalText(5000),
+}
+
+export const auditorCompetencyCreateSchema = z.object(auditorCompetencyFields).strict()
+export const auditorCompetencyUpdateSchema = z.object(auditorCompetencyFields).partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one competency field is required',
+)
+
+export const auditTeamRoleSchema = z.enum(['LEAD', 'MEMBER'])
+export const auditIndependenceStatusSchema = z.enum(['PENDING', 'CLEAR', 'CONFLICT', 'MITIGATED'])
+
+const auditTeamOptionalText = (max: number) => z.string().trim().max(max).nullable().optional()
+
+export const auditTeamAssignmentCreateSchema = z.object({
+  auditorId: idReference,
+  role: auditTeamRoleSchema.optional().default('MEMBER'),
+  observations: auditTeamOptionalText(5000),
+}).strict()
+
+export const auditTeamAssignmentUpdateSchema = z.object({
+  role: auditTeamRoleSchema.optional(),
+  observations: auditTeamOptionalText(5000),
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one team member field is required')
+
+export const auditTeamIndependenceSchema = z.object({
+  status: auditIndependenceStatusSchema,
+  declaration: auditTeamOptionalText(5000),
+  conflictDescription: auditTeamOptionalText(5000),
+  mitigationMeasures: auditTeamOptionalText(5000),
+}).strict()
+
+export const auditPlanStatusSchema = z.enum(['DRAFT', 'READY', 'APPROVED', 'CANCELLED'])
+export const auditPlanActivityTypeSchema = z.enum(['OPENING_MEETING', 'DOCUMENT_REVIEW', 'INTERVIEW', 'PROCESS_REVIEW', 'CLOSING_MEETING', 'OTHER'])
+export const auditPlanActivityStatusSchema = z.enum(['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'])
+export const auditActivityResultSchema = z.enum(['SATISFACTORY', 'PARTIAL', 'ISSUE', 'NOT_APPLICABLE'])
+
+const auditPlanOptionalText = (max: number) => z.string().trim().max(max).nullable().optional()
+const validateActivityPeriod = (value: { scheduledStart?: Date; scheduledEnd?: Date }, context: z.RefinementCtx) => {
+  if (value.scheduledStart && value.scheduledEnd && value.scheduledStart >= value.scheduledEnd) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['scheduledEnd'], message: 'Activity end must be after its start' })
+  }
+}
+
+export const auditPlanCreateSchema = z.object({
+  methodology: auditText(5000),
+  samplingMethod: auditPlanOptionalText(5000),
+  resources: auditPlanOptionalText(5000),
+  notes: auditPlanOptionalText(10000),
+}).strict()
+
+export const auditPlanUpdateSchema = auditPlanCreateSchema.partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one audit plan field is required',
+)
+
+export const auditPlanStatusChangeSchema = z.object({ status: auditPlanStatusSchema }).strict()
+
+const auditPlanActivityFields = {
+  position: z.coerce.number().int().min(0).max(10000).optional(),
+  type: auditPlanActivityTypeSchema.optional(),
+  title: auditText(200).refine((value) => value.length >= 3, 'Activity title must have at least 3 characters'),
+  description: auditPlanOptionalText(5000),
+  scheduledStart: z.coerce.date(),
+  scheduledEnd: z.coerce.date(),
+  location: auditPlanOptionalText(500),
+  responsibleId: idReference.nullable().optional(),
+  processId: idReference.nullable().optional(),
+  status: auditPlanActivityStatusSchema.optional(),
+  notes: auditPlanOptionalText(5000),
+}
+
+export const auditPlanActivityCreateSchema = z.object(auditPlanActivityFields).omit({ status: true }).strict().superRefine(validateActivityPeriod)
+export const auditPlanActivityUpdateSchema = z.object(auditPlanActivityFields).partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one audit plan activity field is required',
+).superRefine(validateActivityPeriod)
+export const auditPlanActivityAuditorsSchema = z.object({
+  auditTeamMemberIds: z.array(idReference).max(50).refine((ids) => new Set(ids).size === ids.length, 'Duplicate audit team members are not allowed'),
+}).strict()
+
+export const auditActivityExecutionStartSchema = z.object({}).strict()
+export const auditActivityExecutionUpdateSchema = z.object({
+  executionResult: auditActivityResultSchema.nullable().optional(),
+  executionObservations: z.string().trim().max(10000).nullable().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one execution field is required')
+export const auditActivityExecutionCompleteSchema = z.object({
+  executionResult: auditActivityResultSchema,
+  executionObservations: z.string().trim().max(10000).nullable().optional(),
+}).strict()
+export const auditActivityExecutionCancelSchema = z.object({
+  executionObservations: z.string().trim().max(10000).nullable().optional(),
+}).strict()
+export const auditActivityResourceLinkSchema = (field: string) => z.object({
+  [field]: z.array(idReference).max(200).refine((ids) => new Set(ids).size === ids.length, 'Duplicate resource ids are not allowed'),
+}).strict()
+
 const auditFields = {
   title: auditText(160).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
   auditType: auditKindSchema,
@@ -475,6 +664,7 @@ export const auditEvidenceCreateSchema = z.object({
   // Hallazgo al que se ancla la evidencia (opcional). La ruta comprueba que pertenezca a esta misma
   // auditoría: no se admiten referencias cruzadas entre empresas o auditorías.
   findingId: z.string().trim().min(1).max(64).nullable().optional(),
+  actionId: z.string().trim().min(1).max(64).nullable().optional(),
 })
 export const auditEvidenceUpdateSchema = auditEvidenceCreateSchema.partial().refine(
   (value) => Object.keys(value).length > 0,
@@ -519,6 +709,8 @@ export const auditChecklistAIDimensionSchema = z.enum(['COMPLIANCE', 'IMPLEMENTA
 export const auditChecklistAISourceTypeSchema = z.enum(['PROCESS', 'PROCEDURE', 'SIPOC', 'RISK', 'CONTROL'])
 export const auditChecklistAIGenerationRequestSchema = z.object({
   maxQuestions: z.coerce.number().int().min(1).max(20).optional(),
+  activityId: idReference.optional(),
+  dimension: auditChecklistAIDimensionSchema.optional(),
 }).strict()
 export const auditChecklistAIGenerationSchema = z.object({
   proposals: z.array(z.object({
@@ -534,12 +726,209 @@ export const auditChecklistAIGenerationSchema = z.object({
 
 // ---- Acciones correctivas ----
 
+export const auditImmediateCorrectionStatusSchema = z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'])
+
+const auditImmediateCorrectionOptionalText = (max: number) => z.string().trim().max(max).nullable().optional()
+const auditImmediateCorrectionFields = {
+  description: auditText(5000),
+  containmentMeasures: auditImmediateCorrectionOptionalText(5000),
+  consequencesIdentified: auditImmediateCorrectionOptionalText(5000),
+  consequencesTreatment: auditImmediateCorrectionOptionalText(5000),
+  responsibleId: auditUserId,
+  plannedDate: z.coerce.date().nullable().optional(),
+  observations: auditImmediateCorrectionOptionalText(5000),
+}
+
+export const auditImmediateCorrectionCreateSchema = z.object(auditImmediateCorrectionFields).strict()
+export const auditImmediateCorrectionUpdateSchema = z.object(auditImmediateCorrectionFields).partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one immediate correction field is required',
+)
+export const auditImmediateCorrectionStartSchema = z.object({}).strict()
+export const auditImmediateCorrectionCompleteSchema = z.object({
+  observations: auditText(5000),
+}).strict()
+export const auditImmediateCorrectionCancelSchema = z.object({
+  justification: auditText(5000),
+}).strict()
+
+// ---- Analisis de causa raiz ----
+
+export const auditCheckySuggestionKindSchema = z.enum(['ROOT_CAUSE', 'ROOT_CAUSE_ANALYSIS', 'CORRECTIVE_ACTION'])
+export const auditRootCauseAnalysisMethodSchema = z.enum(['MANUAL', 'FIVE_WHYS', 'ISHIKAWA'])
+export const auditEfficacyMethodologySchema = z.enum([
+  'DOCUMENTARY_SAMPLING', 'INDICATOR_MONITORING', 'DIRECT_OBSERVATION', 'INTERVIEWS', 'RECORD_REVIEW', 'FOLLOW_UP_AUDIT', 'OTHER',
+])
+const auditCheckyNullableText = (max: number) => z.string().trim().max(max).nullable()
+const auditCheckyDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Due date must be a valid YYYY-MM-DD date').nullable()
+
+const auditCheckyAcceptanceCriterionSchema = z.object({
+  type: z.enum(['IMPLEMENTATION', 'EFFECTIVENESS']),
+  description: auditText(2000),
+  expectedResult: auditText(3000),
+  required: z.boolean(),
+}).strict()
+
+export const auditCheckyRootCausePayloadSchema = z.object({
+  kind: z.literal('ROOT_CAUSE'),
+  analysisId: idReference,
+  description: auditText(5000),
+  justification: auditCheckyNullableText(5000),
+  supportingEvidence: auditCheckyNullableText(5000),
+  ishikawaCategory: auditCheckyNullableText(160),
+  position: z.number().int().min(0).max(10000),
+}).strict()
+
+export const auditCheckyRootCauseAnalysisPayloadSchema = z.object({
+  kind: z.literal('ROOT_CAUSE_ANALYSIS'),
+  methodology: auditRootCauseAnalysisMethodSchema,
+  problemDescription: auditText(5000),
+  responsibleId: idReference.nullable(),
+}).strict()
+
+export const auditCheckyCorrectiveActionPayloadSchema = z.object({
+  kind: z.literal('CORRECTIVE_ACTION'),
+  title: auditText(200).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
+  description: auditText(5000),
+  objective: auditCheckyNullableText(5000),
+  implementationPlan: auditCheckyNullableText(10000),
+  resources: auditCheckyNullableText(5000),
+  observations: auditCheckyNullableText(5000),
+  responsibleId: idReference.nullable(),
+  priority: auditCorrectiveActionPrioritySchema,
+  required: z.boolean(),
+  evidenceRequired: z.boolean(),
+  dueDate: auditCheckyDate,
+  acceptanceCriteria: z.array(auditCheckyAcceptanceCriterionSchema).max(50).default([]),
+  causeIds: z.array(idReference).max(100).default([]).superRefine((values, context) => {
+    if (new Set(values).size !== values.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Cause ids must be unique' })
+  }),
+  methodology: auditEfficacyMethodologySchema.nullable().default(null),
+  observationPeriod: auditCheckyNullableText(500).default(null),
+}).strict()
+
+export const auditCheckySuggestionPayloadSchema = z.discriminatedUnion('kind', [
+  auditCheckyRootCausePayloadSchema,
+  auditCheckyRootCauseAnalysisPayloadSchema,
+  auditCheckyCorrectiveActionPayloadSchema,
+])
+
+export const auditCheckySuggestionRequestSchema = z.object({
+  kinds: z.array(auditCheckySuggestionKindSchema).min(1).max(3).default(['ROOT_CAUSE_ANALYSIS', 'ROOT_CAUSE', 'CORRECTIVE_ACTION']),
+  analysisId: idReference.optional(),
+}).strict()
+
+export const auditCheckySuggestionUpdateSchema = z.object({
+  editablePayload: auditCheckySuggestionPayloadSchema,
+}).strict()
+
+export const auditCheckySuggestionRejectionSchema = z.object({
+  decisionNote: z.string().trim().min(1).max(1000).optional(),
+}).strict()
+
+export const auditCheckySuggestionAcceptanceSchema = z.object({}).strict()
+
+const auditCheckyAISuggestionSchema = z.object({
+  kind: auditCheckySuggestionKindSchema,
+  payload: z.unknown(),
+  evidenceIds: z.array(idReference).max(8).default([]),
+}).strict()
+
+export const auditCheckyAIGenerationSchema = z.object({
+  suggestions: z.array(auditCheckyAISuggestionSchema).max(3),
+  missingInformation: z.array(z.string().trim().min(1).max(1000)).max(20),
+}).strict()
+
+export function buildAuditCheckySuggestionSchema(allowedAnalysisIds: Set<string>, allowedEvidenceIds: Set<string>) {
+  return z.object({
+    suggestions: z.array(z.object({
+      kind: auditCheckySuggestionKindSchema,
+      payload: z.unknown(),
+      evidenceIds: z.array(z.string().refine((value) => allowedEvidenceIds.has(value), 'Evidence must belong to this finding')).max(8),
+    }).strict()).max(3),
+    missingInformation: z.array(z.string().trim().min(1).max(1000)).max(20),
+  }).strict().superRefine((result, context) => {
+    result.suggestions.forEach((suggestion, index) => {
+      const payload = auditCheckySuggestionPayloadSchema.safeParse(suggestion.payload)
+      if (!payload.success) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['suggestions', index, 'payload'], message: 'Invalid Checky suggestion payload' })
+        return
+      }
+      if (payload.data.kind !== suggestion.kind) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['suggestions', index, 'kind'], message: 'Suggestion kind does not match its payload' })
+      }
+      if (payload.data.kind === 'ROOT_CAUSE' && !allowedAnalysisIds.has(payload.data.analysisId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['suggestions', index, 'payload', 'analysisId'], message: 'Analysis must belong to this finding' })
+      }
+    })
+  })
+}
+
+export const auditRootCauseAnalysisStatusChangeSchema = z.object({
+  status: z.literal('CONFIRMED'),
+}).strict()
+
+const auditRootCauseOptionalText = (max: number) => z.string().trim().max(max).nullable().optional()
+export const auditRootCauseAnalysisCreateSchema = z.object({
+  methodology: auditRootCauseAnalysisMethodSchema,
+  problemDescription: auditText(5000),
+  responsibleId: auditUserId,
+  // The server always persists MANUAL; CHECKY is not a client-created origin.
+  origin: z.literal('MANUAL').optional(),
+}).strict()
+
+export const auditRootCauseAnalysisUpdateSchema = z.object({
+  methodology: auditRootCauseAnalysisMethodSchema.optional(),
+  problemDescription: auditText(5000).optional(),
+  responsibleId: auditUserId,
+}).strict().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one root cause analysis field is required',
+)
+
+export const auditRootCauseCreateSchema = z.object({
+  description: auditText(5000),
+  justification: auditRootCauseOptionalText(5000),
+  supportingEvidence: auditRootCauseOptionalText(5000),
+  ishikawaCategory: auditRootCauseOptionalText(160),
+  position: z.coerce.number().int().min(0).max(10000).optional(),
+}).strict()
+
+export const auditRootCauseUpdateSchema = auditRootCauseCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one root cause field is required',
+)
+
+export const auditRootCauseStatusChangeSchema = z.object({
+  status: z.enum(['CONFIRMED', 'DISCARDED']),
+}).strict()
+
+export const auditRootCauseFiveWhyStepCreateSchema = z.object({
+  sequence: z.coerce.number().int().min(1).max(100),
+  question: auditText(2000),
+  answer: auditText(5000),
+}).strict()
+
+export const auditRootCauseFiveWhyStepUpdateSchema = auditRootCauseFiveWhyStepCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one Five Whys step field is required',
+)
+
 export const auditCorrectiveActionCreateSchema = z.object({
   title: auditText(200).refine((value) => value.length >= 3, 'Title must have at least 3 characters'),
   description: auditText(5000),
+  objective: auditText(5000).nullable().optional(),
+  implementationPlan: auditText(10000).nullable().optional(),
+  resources: auditText(5000).nullable().optional(),
+  observations: auditText(5000).nullable().optional(),
   responsibleId: auditUserId,
   priority: auditCorrectiveActionPrioritySchema.optional(),
   required: z.boolean().optional(),
+  evidenceRequired: z.boolean().optional(),
+  efficacyEvaluationId: idReference.nullable().optional(),
+  followUpId: idReference.nullable().optional(),
+  followUpReason: z.enum(['EFFICACY_INEFFECTIVE', 'RECURRENCE', 'ADDITIONAL_TREATMENT', 'OTHER']).nullable().optional(),
+  followUpJustification: auditText(5000).nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
 })
 
@@ -552,12 +941,103 @@ export const auditCorrectiveActionUpdateSchema = auditCorrectiveActionCreateSche
 // finales, con reapertura limitada) se valida en el servidor con el estado guardado.
 export const auditCorrectiveActionStatusChangeSchema = z.object({
   status: auditCorrectiveActionStatusSchema,
+  observations: auditText(5000).nullable().optional(),
 })
 
 export const auditActionProgressCreateSchema = z.object({
-  note: auditText(2000),
+  note: auditText(2000).optional(),
+  activities: auditText(3000).nullable().optional(),
+  results: auditText(3000).nullable().optional(),
+  difficulties: auditText(3000).nullable().optional(),
+  pendingActivities: auditText(3000).nullable().optional(),
+  observations: auditText(3000).nullable().optional(),
   percent: z.coerce.number().int().min(0).max(100).nullable().optional(),
+}).refine((value) => Boolean(value.note?.trim() || value.activities?.trim() || value.results?.trim() || value.difficulties?.trim() || value.pendingActivities?.trim() || value.observations?.trim()), 'At least one progress detail is required')
+
+export const auditEfficacyOutcomeSchema = z.enum(['PENDING', 'EFFECTIVE', 'PARTIALLY_EFFECTIVE', 'INEFFECTIVE'])
+export const auditEfficacyEvaluationStatusSchema = z.enum(['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'])
+
+const auditEfficacyPlanningFields = {
+  responsibleId: idReference,
+  scheduledDate: z.coerce.date().nullable().optional(),
+  methodology: auditEfficacyMethodologySchema,
+  methodologyOther: auditText(2000).nullable().optional(),
+  observationPeriod: auditText(500).nullable().optional(),
+  observationStartDate: z.coerce.date().nullable().optional(),
+  observationEndDate: z.coerce.date().nullable().optional(),
+  scope: auditText(5000),
+  observations: auditText(5000).nullable().optional(),
+}
+
+const validateEfficacyPlanning = <T extends { methodology?: string; methodologyOther?: string | null; observationStartDate?: Date | null; observationEndDate?: Date | null }>(value: T, context: z.RefinementCtx) => {
+  if (value.methodology === 'OTHER' && !value.methodologyOther?.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ['methodologyOther'], message: 'Justify the other efficacy methodology' })
+  if (value.observationStartDate && value.observationEndDate && value.observationStartDate > value.observationEndDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['observationEndDate'], message: 'Observation end date cannot precede its start date' })
+}
+
+export const auditEfficacyEvaluationCreateSchema = z.object({
+  actionId: idReference,
+  ...auditEfficacyPlanningFields,
+}).strict().superRefine(validateEfficacyPlanning)
+
+export const auditEfficacyEvaluationUpdateSchema = z.object(auditEfficacyPlanningFields).partial().extend({
+  recurrenceDetected: z.boolean().optional(),
+  recurrenceDescription: auditText(5000).nullable().optional(),
+}).strict().superRefine(validateEfficacyPlanning)
+
+export const auditEfficacyEvaluationStatusChangeSchema = z.object({
+  status: auditEfficacyEvaluationStatusSchema,
+  outcome: auditEfficacyOutcomeSchema.optional(),
+  conclusion: auditText(10000).nullable().optional(),
+  recurrenceDetected: z.boolean().optional(),
+  recurrenceDescription: auditText(5000).nullable().optional(),
+  justification: auditText(5000).nullable().optional(),
+}).strict().superRefine((value, context) => {
+  if (value.status === 'CANCELLED' && !value.justification?.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ['justification'], message: 'A cancellation justification is required' })
 })
+
+export const auditEfficacyCriterionResultUpdateSchema = z.object({
+  resultObtained: auditText(5000).nullable().optional(),
+  measuredValue: auditText(500).nullable().optional(),
+  measurementUnit: auditText(120).nullable().optional(),
+  sampleSize: z.coerce.number().int().positive().nullable().optional(),
+  isMet: z.boolean().nullable().optional(),
+  observations: auditText(3000).nullable().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one efficacy criterion result field is required')
+
+export const auditEfficacyEvaluationProgressCreateSchema = z.object({
+  note: auditText(3000),
+  results: auditText(5000).nullable().optional(),
+  difficulties: auditText(5000).nullable().optional(),
+  pendingActivities: auditText(5000).nullable().optional(),
+  percent: z.coerce.number().int().min(0).max(100).nullable().optional(),
+}).strict()
+
+export const auditEfficacyEvidenceLinkSchema = z.object({ evidenceId: idReference }).strict()
+export const auditEfficacyEvidenceFileLinkSchema = z.object({ evidenceFileId: idReference }).strict()
+
+export const auditActionAcceptanceCriterionCreateSchema = z.object({
+  type: z.enum(['IMPLEMENTATION', 'EFFECTIVENESS']).optional(),
+  description: auditText(2000),
+  expectedResult: auditText(3000),
+  required: z.boolean().optional(),
+  isMet: z.boolean().optional(),
+  observations: auditText(3000).nullable().optional(),
+}).strict()
+
+export const auditActionAcceptanceCriterionUpdateSchema = auditActionAcceptanceCriterionCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one acceptance criterion field is required',
+)
+
+export const auditCorrectiveActionCauseLinkSchema = z.object({
+  causeIds: z.array(idReference).min(1).max(100),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.causeIds).size !== value.causeIds.length) context.addIssue({ code: z.ZodIssueCode.custom, path: ['causeIds'], message: 'Cause ids must be unique' })
+})
+
+export const auditCorrectiveActionCauseQuerySchema = z.object({
+  history: z.coerce.boolean().default(false),
+}).strict()
 
 // Consulta paginada del historial de una auditoría, mismo formato que riskAuditQuerySchema. El
 // listado de tipos es cerrado: solo el backend los emite, el cliente solo puede filtrar.
@@ -568,8 +1048,22 @@ export const auditEventTypeSchema = z.enum([
   'AUDIT_RELATIONS_UPDATED',
   'CHECKLIST_CREATED', 'CHECKLIST_UPDATED', 'CHECKLIST_DELETED',
   'CHECKLIST_ITEM_CREATED', 'CHECKLIST_ITEM_UPDATED', 'CHECKLIST_ITEM_DELETED',
-  'EVIDENCE_FILE_CREATED', 'EVIDENCE_FILE_DELETED',
-  'ACTION_CREATED', 'ACTION_UPDATED', 'ACTION_STATUS_CHANGED', 'ACTION_PROGRESS_ADDED',
+   'EVIDENCE_FILE_CREATED', 'EVIDENCE_FILE_DELETED',
+   'ACTION_CREATED', 'ACTION_UPDATED', 'ACTION_STATUS_CHANGED', 'ACTION_PROGRESS_ADDED',
+   'IMMEDIATE_CORRECTION_CREATED', 'IMMEDIATE_CORRECTION_UPDATED', 'IMMEDIATE_CORRECTION_STATUS_CHANGED',
+   'ROOT_CAUSE_ANALYSIS_CREATED', 'ROOT_CAUSE_ANALYSIS_UPDATED', 'ROOT_CAUSE_ANALYSIS_STATUS_CHANGED',
+   'ROOT_CAUSE_CREATED', 'ROOT_CAUSE_UPDATED', 'ROOT_CAUSE_STATUS_CHANGED',
+   'ROOT_CAUSE_FIVE_WHY_STEP_CREATED', 'ROOT_CAUSE_FIVE_WHY_STEP_UPDATED', 'ROOT_CAUSE_FIVE_WHY_STEP_DELETED',
+   'CORRECTIVE_ACTION_CAUSE_LINKED', 'CORRECTIVE_ACTION_CAUSE_UNLINKED',
+   'EFFICACY_EVALUATION_CREATED', 'EFFICACY_EVALUATION_UPDATED', 'EFFICACY_EVALUATION_PROGRESS_ADDED',
+   'EFFICACY_EVALUATION_STARTED', 'EFFICACY_EVALUATION_COMPLETED', 'EFFICACY_EVALUATION_CANCELLED',
+   'EFFICACY_EVALUATION_EVIDENCE_LINKED', 'EFFICACY_EVALUATION_EVIDENCE_UNLINKED',
+   'TEAM_MEMBER_ASSIGNED', 'TEAM_MEMBER_UPDATED', 'TEAM_MEMBER_REMOVED', 'INDEPENDENCE_EVALUATED',
+  'AUDIT_PLAN_CREATED', 'AUDIT_PLAN_UPDATED', 'AUDIT_PLAN_STATUS_CHANGED',
+  'AUDIT_PLAN_ACTIVITY_CREATED', 'AUDIT_PLAN_ACTIVITY_UPDATED', 'AUDIT_PLAN_ACTIVITY_DELETED',
+  'AUDIT_PLAN_ACTIVITY_EXECUTION_STARTED', 'AUDIT_PLAN_ACTIVITY_EXECUTION_UPDATED',
+  'AUDIT_PLAN_ACTIVITY_EXECUTION_COMPLETED', 'AUDIT_PLAN_ACTIVITY_EXECUTION_CANCELLED',
+  'AUDIT_PLAN_ACTIVITY_RESOURCE_LINKED', 'AUDIT_PLAN_ACTIVITY_RESOURCE_UNLINKED',
 ])
 export const auditHistoryQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),

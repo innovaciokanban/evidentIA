@@ -1,0 +1,54 @@
+{
+  "capturedAt": "2026-11-21T23:08:53.315Z",
+  "target": {
+    "host": "localhost",
+    "port": 5432,
+    "database": "EvidentIA",
+    "serverAddress": "::1/128",
+    "serverPort": 5432
+  },
+  "counts": {
+    "AuditProgram": 1,
+    "Audit": 1,
+    "Process": 3,
+    "AuditProgramProcessPriority": 2,
+    "Auditor": 2,
+    "AuditorCompetency": 1,
+    "AuditTeamMember": 2,
+    "AuditChecklist": 1,
+    "AuditChecklistItem": 7,
+    "AuditFinding": 1,
+    "AuditEvidence": 0,
+    "AuditCorrectiveAction": 0,
+    "AuditEvent": 25
+  },
+  "auditProgram": {
+    "id": "cmwpc4fgv0004gcl5hc0i38ig",
+    "code": "PA-001",
+    "status": "ACTIVE"
+  },
+  "audit": {
+    "id": "cmvy7eklk0019zgl5be78l2fy",
+    "code": "AUD-001",
+    "status": "IN_PROGRESS",
+    "auditProgramId": null
+  },
+  "teamMembers": [
+    {
+      "id": "cmwqytpfc0000col5dnj0dydq",
+      "role": "LEAD",
+      "isActive": true,
+      "independenceStatus": "MITIGATED",
+      "name": "Auditor Interno de Prueba",
+      "email": "auditor.interno.prueba@example.com"
+    },
+    {
+      "id": "cmwqz9m4c0004col5x8ljln0e",
+      "role": "MEMBER",
+      "isActive": true,
+      "independenceStatus": "CLEAR",
+      "name": "Alimentos del Eje S.A.S.",
+      "email": "auditor.externo.prueba@example.com"
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "database": "evidentia_block4_checky_tmp_20261126",
+  "counts": {
+    "Audit": 1,
+    "AuditProgram": 1,
+    "AuditFinding": 2,
+    "AuditRootCauseAnalysis": 2,
+    "AuditRootCause": 3,
+    "AuditCorrectiveAction": 2,
+    "AuditActionAcceptanceCriterion": 4,
+    "AuditEfficacyEvaluation": 1,
+    "AuditEvidence": 2,
+    "AuditEvent": 128,
+    "AuditCheckySuggestion": 0
+  },
+  "sentinels": {
+    "audit001": [
+      {
+        "id": "cmvy7eklk0019zgl5be78l2fy",
+        "code": "AUD-001",
+        "status": "IN_PROGRESS"
+      }
+    ],
+    "programPA001": [
+      {
+        "id": "cmwpc4fgv0004gcl5hc0i38ig",
+        "code": "PA-001",
+        "status": "ACTIVE"
+      }
+    ]
+  },
+  "indexes": [
+    "AuditCheckySuggestion_acceptedActionId_key",
+    "AuditCheckySuggestion_acceptedAnalysisId_key",
+    "AuditCheckySuggestion_acceptedRootCauseId_key",
+    "AuditCheckySuggestion_auditId_dedupeKey_key",
+    "AuditCheckySuggestion_auditId_findingId_kind_status_idx",
+    "AuditCheckySuggestion_pkey",
+    "AuditCheckySuggestion_requestedById_idx"
+  ],
+  "constraints": [
+    {
+      "conname": "AuditCheckySuggestion_acceptedActionId_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"acceptedActionId\") REFERENCES \"AuditCorrectiveAction\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "conname": "AuditCheckySuggestion_acceptedAnalysisId_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"acceptedAnalysisId\") REFERENCES \"AuditRootCauseAnalysis\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "conname": "AuditCheckySuggestion_acceptedRootCauseId_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"acceptedRootCauseId\") REFERENCES \"AuditRootCause\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "conname": "AuditCheckySuggestion_auditId_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"auditId\") REFERENCES \"Audit\"(id) ON UPDATE CASCADE ON DELETE CASCADE"
+    },
+    {
+      "conname": "AuditCheckySuggestion_auditId_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"auditId\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_createdAt_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_dedupeKey_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"dedupeKey\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_editablePayload_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"editablePayload\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_evidenceIds_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"evidenceIds\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_findingId_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"findingId\") REFERENCES \"AuditFinding\"(id) ON UPDATE CASCADE ON DELETE CASCADE"
+    },
+    {
+      "conname": "AuditCheckySuggestion_findingId_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"findingId\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_id_not_null",
+      "contype": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "conname": "AuditCheckySuggestion_kind_not_null",
+      "contype": "n",
+      "definition": "NOT NULL kind"
+    },
+    {
+      "conname": "AuditCheckySuggestion_originalPayload_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"originalPayload\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_pkey",
+      "contype": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "conname": "AuditCheckySuggestion_requestedById_fkey",
+      "contype": "f",
+      "definition": "FOREIGN KEY (\"requestedById\") REFERENCES \"User\"(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "conname": "AuditCheckySuggestion_requestedById_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"requestedById\""
+    },
+    {
+      "conname": "AuditCheckySuggestion_status_not_null",
+      "contype": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "conname": "AuditCheckySuggestion_updatedAt_not_null",
+      "contype": "n",
+      "definition": "NOT NULL \"updatedAt\""
+    }
+  ],
+  "enumValues": [
+    "ROOT_CAUSE",
+    "ROOT_CAUSE_ANALYSIS",
+    "CORRECTIVE_ACTION"
+  ],
+  "migration": [
+    {
+      "migration_name": "20261126010000_add_audit_checky_suggestions",
+      "finished_at": "2026-11-26T22:00:06.493Z",
+      "rolled_back_at": null
+    }
+  ]
+}

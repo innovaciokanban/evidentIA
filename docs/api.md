@@ -323,6 +323,17 @@ Módulo de auditorías de calidad sobre procesos. Rutas anidadas bajo `/api/proc
 - `DELETE /api/audits/:auditId/findings/:findingId` — elimina el hallazgo. Borrar un hallazgo con acciones correctivas responde `409`.
 - `POST /api/audits/:auditId/findings/:findingId/status` — máquina de estados (`OPEN` → `IN_PROGRESS` → `RESOLVED` → `VERIFIED`). `RESOLVED` exige `resolution` (≥3 chars) y que **ninguna acción obligatoria** siga abierta (`409 reason: ACTIONS_PENDING`). `VERIFIED` sobre una `NONCONFORMITY` exige `efficacyVerification` (≥3 chars) ya registrada en el hallazgo.
 
+### Propuestas Checky para hallazgos
+
+Las propuestas se almacenan separadas del expediente hasta una decisión explícita. No confirman causas,
+no completan acciones y no verifican ni cierran hallazgos automáticamente.
+
+- `GET|POST /api/audits/:auditId/findings/:findingId/checky/suggestions` — lista o genera propuestas. La solicitud puede enviar `{ "kinds": ["ROOT_CAUSE_ANALYSIS", "ROOT_CAUSE", "CORRECTIVE_ACTION"], "analysisId?": "..." }`; las evidencias y los análisis elegibles se validan contra el mismo hallazgo.
+- `PATCH /api/audit-checky-suggestions/:suggestionId` — edita `editablePayload` mientras la propuesta está `PENDING`; `originalPayload` permanece inmutable.
+- `POST /api/audit-checky-suggestions/:suggestionId/accept` — aceptación transaccional: crea un análisis `DRAFT`, una causa `POTENTIAL` o una acción `OPEN`, según el tipo, y registra `CHECKY_SUGGESTION_ACCEPTED`.
+- `POST /api/audit-checky-suggestions/:suggestionId/reject` — rechaza una propuesta `PENDING` y registra `CHECKY_SUGGESTION_REJECTED`.
+- Todas las operaciones validan empresa, auditoría, hallazgo, evidencias y estados terminales; las sugerencias generadas con el mismo contenido se deduplican por auditoría.
+
 ### Listas de verificación (Checklists)
 
 - `GET|POST /api/audits/:auditId/checklists` — lista/crea listas (`name`).
@@ -332,22 +343,103 @@ Módulo de auditorías de calidad sobre procesos. Rutas anidadas bajo `/api/proc
 ### Acciones correctivas
 
 - `GET /api/audits/:auditId/actions` — lista las acciones correctivas de la auditoría.
-- `POST /api/audits/:auditId/findings/:findingId/actions` — crea una acción (`title`, `description`, `responsibleId`, `priority?` LOW/MEDIUM/HIGH/CRITICAL, `required?`, `dueDate?`).
+- `POST /api/audits/:auditId/findings/:findingId/actions` — crea una acción integral (`title`, `description`, `objective?`, `implementationPlan?`, `resources?`, `observations?`, `responsibleId`, `priority?` LOW/MEDIUM/HIGH/CRITICAL, `required?`, `evidenceRequired?`, `dueDate?`). Las acciones nuevas reciben `workflowVersion=1` exclusivamente en el servidor; el cliente no puede escribirlo.
 - `PATCH|DELETE /api/audits/:auditId/actions/:actionId` — edita/elimina. Borrar una acción con progreso responde `409`.
-- `POST /api/audits/:auditId/actions/:actionId/status` — máquina de estados (`OPEN` → `IN_PROGRESS` → `COMPLETED` / `CANCELLED`).
-- `POST /api/audits/:auditId/actions/:actionId/progress` — registra un avance (`note`, `percent?`).
+- `POST /api/audits/:auditId/actions/:actionId/status` — máquina de estados (`OPEN` → `IN_PROGRESS` → `COMPLETED` / `CANCELLED`). Completar una acción `workflowVersion=1` exige responsable activo, `progressPercent=100`, criterios obligatorios de implementación cumplidos, observaciones finales y evidencia cuando `evidenceRequired=true`.
+- `POST /api/audits/:auditId/actions/:actionId/progress` — registra un avance cronológico (`note?`, `activities?`, `results?`, `difficulties?`, `pendingActivities?`, `observations?`, `percent?`). El porcentaje actual persistente vive en la acción; omitirlo conserva el porcentaje anterior. Llegar a `100` no cambia el estado.
+- `GET /api/audits/:auditId/actions/:actionId/acceptance-criteria` — lista criterios de aceptación.
+- `POST /api/audits/:auditId/actions/:actionId/acceptance-criteria` — crea un criterio (`type?` IMPLEMENTATION/EFFECTIVENESS, `description`, `expectedResult`, `required?`, `isMet?`, `observations?`). Los criterios de eficacia no se pueden marcar cumplidos en este bloque.
+- `PATCH /api/audits/:auditId/actions/:actionId/acceptance-criteria/:criterionId` — edita un criterio y registra cumplimiento de criterios de implementación.
+- Los criterios no se eliminan físicamente; las acciones con criterios no se pueden eliminar.
+
+### Verificación integral de eficacia
+
+La eficacia se registra en evaluaciones históricas separadas de la implementación de la acción. Solo
+se pueden evaluar acciones `COMPLETED` de la misma empresa y hallazgo; cada evaluación conserva un
+snapshot de los criterios de aceptación de eficacia y queda en solo lectura al finalizar o cancelar.
+
+- `GET /api/audits/:auditId/findings/:findingId/efficacy-evaluations` — lista evaluaciones históricas y su resumen.
+- `POST /api/audits/:auditId/findings/:findingId/efficacy-evaluations` — planifica una evaluación (`actionId`, `plannedDate`, `methodology`, `sampleDescription`, `sampleSize?`, `responsibleId`, `criteriaIds?`, `notes?`).
+- `GET|PATCH /api/audits/:auditId/efficacy-evaluations/:evaluationId` — consulta o edita la planificación mientras está `PLANNED`.
+- `POST /api/audits/:auditId/efficacy-evaluations/:evaluationId/status` — inicia, finaliza o cancela. Finalizar exige conclusión, dictamen, criterios evaluados y responsable activo; `outcome` puede ser `EFFECTIVE`, `PARTIALLY_EFFECTIVE` o `INEFFECTIVE`.
+- `POST /api/audits/:auditId/efficacy-evaluations/:evaluationId/progress` — registra avances cronológicos (`note?`, `percent?`, `observations?`).
+- `PATCH /api/audits/:auditId/efficacy-evaluations/:evaluationId/criteria/:criterionResultId` — registra el resultado de un criterio sin alterar el criterio histórico de la acción.
+- `POST|DELETE /api/audits/:auditId/efficacy-evaluations/:evaluationId/evidences/:evidenceId` — vincula o desvincula una evidencia URL oficial.
+- `POST|DELETE /api/audits/:auditId/efficacy-evaluations/:evaluationId/evidence-files/:evidenceFileId` — vincula o desvincula un PDF oficial.
+- Una evidencia oficial vinculada a una evaluación no se puede modificar ni eliminar; responde `409` con razón `EVIDENCE_LINKED_TO_EFFICACY_EVALUATION` o `EVIDENCE_FILE_LINKED_TO_EFFICACY_EVALUATION`.
+- Para acciones `workflowVersion=1`, completar una evaluación es requisito para verificar el hallazgo. El texto legacy `efficacyVerification` no permite saltarse el flujo estructurado.
+
+### Vinculos entre causas y acciones
+
+Los vínculos usan `AuditCorrectiveActionCause` y no cambian el estado de la acción, la causa ni el
+hallazgo. Solo se aceptan causas `CONFIRMED` de análisis `CONFIRMED` del mismo hallazgo. Las rutas
+anidadas bajo `/api/processes/:processId/audits/:auditId` son equivalentes.
+
+- `GET /api/audits/:auditId/findings/:findingId/actions/:actionId/causes` — consulta vínculos activos. Añadir `?history=true` incluye también vínculos retirados.
+- `POST /api/audits/:auditId/findings/:findingId/actions/:actionId/causes` — vincula una o varias causas con `{ "causeIds": ["..."] }`. Devuelve `{ "associations": [...] }`.
+- `DELETE /api/audits/:auditId/findings/:findingId/actions/:actionId/causes/:causeId` — desactiva el vínculo sin borrarlo y devuelve la asociación histórica actualizada.
+- `GET /api/audits/:auditId/findings/:findingId/eligible-root-causes` — lista causas confirmadas elegibles del hallazgo.
+- `GET /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/actions` — consulta acciones vinculadas a una causa; admite `?history=true`.
+- La revinculación reactiva la fila existente porque `(findingId, actionId, causeId)` es único. La fila se actualiza con el nuevo actor/periodo y el periodo anterior queda trazado en los eventos `CORRECTIVE_ACTION_CAUSE_*`.
+- Las consultas requieren autenticación y acceso a la empresa; las escrituras requieren `SUPERUSER` o `COMPANY_ADMIN`.
+- Las escrituras se bloquean para auditorías `CLOSED`/`CANCELLED`, hallazgos `VERIFIED` y acciones `COMPLETED`/`CANCELLED`. Desvincular conserva el historial y no convierte una acción con vínculos históricos en eliminable; las acciones sin vínculos mantienen el comportamiento anterior.
+
+Las evidencias URL aceptan `actionId` además de `findingId`; la acción y el hallazgo deben pertenecer a la misma auditoría y hallazgo. Los PDF siguen usando `AuditEvidenceFile.actionId`. Las evidencias vinculadas a acciones terminales no se pueden eliminar ni desvincular.
+
+### Correcciones inmediatas
+
+Las correcciones inmediatas documentan contención y tratamiento de consecuencias; no sustituyen ni
+crean acciones correctivas. Las variantes anidadas bajo `/api/processes/:processId/audits/:auditId`
+son equivalentes y aplican las mismas comprobaciones de empresa y auditoría.
+
+- `GET /api/audits/:auditId/findings/:findingId/corrections` — lista las correcciones del hallazgo.
+- `POST /api/audits/:auditId/findings/:findingId/corrections` — crea una corrección (`description`, `containmentMeasures?`, `consequencesIdentified?`, `consequencesTreatment?`, `responsibleId?`, `plannedDate?`, `observations?`). `createdById`, `createdAt` y `executedAt` no son controlables por el cliente.
+- `GET /api/audits/:auditId/findings/:findingId/corrections/:correctionId` — consulta una corrección específica.
+- `PATCH /api/audits/:auditId/findings/:findingId/corrections/:correctionId` — edita información descriptiva mientras la corrección está `OPEN` o `IN_PROGRESS`; no permite modificar estado, creador ni fecha real de ejecución.
+- `POST /api/audits/:auditId/findings/:findingId/corrections/:correctionId/start` — `OPEN` → `IN_PROGRESS`.
+- `POST /api/audits/:auditId/findings/:findingId/corrections/:correctionId/complete` — `IN_PROGRESS` → `COMPLETED`; exige `{ "observations": "..." }`, descripción y responsable activo. `executedAt` lo asigna el servidor.
+- `POST /api/audits/:auditId/findings/:findingId/corrections/:correctionId/cancel` — `OPEN|IN_PROGRESS` → `CANCELLED`; exige `{ "justification": "..." }` y conserva la justificación en `observations` e historial.
+- Las correcciones `COMPLETED` y `CANCELLED` son de solo lectura y no existe eliminación física.
+- Las transiciones inválidas responden `409`; una corrección inmediata nunca resuelve ni verifica automáticamente su hallazgo.
+- Las escrituras requieren `SUPERUSER` o `COMPANY_ADMIN`; `COMPANY_USER` conserva lectura cuando tiene acceso al proceso/empresa.
+- Las escrituras se bloquean para auditorías `CLOSED`/`CANCELLED` y hallazgos `VERIFIED`.
+- Los eventos emitidos son `IMMEDIATE_CORRECTION_CREATED`, `IMMEDIATE_CORRECTION_UPDATED` e `IMMEDIATE_CORRECTION_STATUS_CHANGED`.
+
+### Analisis de causa raiz
+
+Las investigaciones se crean con origen `MANUAL`. Un análisis `CONFIRMED` y sus causas confirmadas
+son inmutables; para una nueva investigación se crea otro análisis. Las variantes anidadas bajo
+`/api/processes/:processId/audits/:auditId` son equivalentes.
+
+- `GET|POST /api/audits/:auditId/findings/:findingId/root-cause-analyses` — lista/crea análisis (`methodology` MANUAL/FIVE_WHYS/ISHIKAWA, `problemDescription`, `responsibleId?`).
+- `GET|PATCH /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId` — consulta o edita un análisis `DRAFT`.
+- `POST /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/status` — confirma el análisis; exige al menos una causa `CONFIRMED` y, para FIVE_WHYS, pasos consecutivos desde 1.
+- `POST /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes` — crea una causa (`description`, `justification?`, `supportingEvidence?`, `ishikawaCategory?`, `position?`). Ishikawa exige categoría.
+- `PATCH /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId` — edita una causa `POTENTIAL` de un análisis `DRAFT`.
+- `POST /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/status` — `POTENTIAL` → `CONFIRMED` o `DISCARDED`.
+- `POST /api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps` y `PATCH|DELETE .../:stepId` — CRUD de pasos Five Whys (`sequence`, `question`, `answer`); la secuencia es única por análisis y no se fija una cantidad exacta de pasos.
+- Las escrituras requieren `SUPERUSER` o `COMPANY_ADMIN`, usan el bloqueo de la auditoría y registran eventos `ROOT_CAUSE_*` en la misma transacción.
+- Todas las escrituras de análisis, causas y pasos se rechazan con `409` y `reason: FINDING_VERIFIED` cuando el hallazgo está `VERIFIED`; las rutas `GET` continúan permitiendo lectura autorizada. El estado se revalida dentro de la transacción después de bloquear la auditoría.
+
+### Plan de auditoría y agenda
+
+- `GET /api/audits/:auditId/plan` — devuelve el plan o `{ "plan": null }` si aún no existe. Cada actividad conserva `responsible` como usuario operativo y añade `auditors[]` con `teamMemberId`, `auditorId`, `name`, `email`, `role`, `type`, `independenceStatus` y `mitigationMeasures`.
+- `POST|PATCH /api/audits/:auditId/plan` — crea o actualiza el plan mientras está en `DRAFT`.
+- `POST /api/audits/:auditId/plan/activities` y `PATCH /api/audits/:auditId/plan/activities/:activityId` — CRUD de actividades; `responsibleId` continúa identificando un `User` y `processId` puede ser `null` para reuniones generales.
+- `PUT /api/audits/:auditId/plan/activities/:activityId/auditors` — sustituye atómicamente la asignación de auditores con `{ "auditTeamMemberIds": ["..."] }`. La lista puede estar vacía en `DRAFT`; los identificadores son de `AuditTeamMember`, no de `User`.
+- `POST /api/audits/:auditId/plan/status` — `DRAFT` → `READY` → `APPROVED` y cancelación desde `DRAFT`/`READY`. Cada actividad activa debe tener al menos un integrante activo; `PENDING` y `CONFLICT` bloquean la transición y `MITIGATED` devuelve advertencias explícitas.
 
 ### Evidencias documentales (links)
 
 - `GET|POST /api/audits/:auditId/evidences` — evidencias con URL (`name`, `description?`, `url`, `findingId?`).
-- `PATCH|DELETE /api/audits/:auditId/evidences/:evidenceId` — edita/elimina.
+- `PATCH|DELETE /api/audits/:auditId/evidences/:evidenceId` — edita/elimina; la eliminación devuelve `409` con `reason: EVIDENCE_LINKED_TO_ACTIVITY` si conserva un vínculo histórico con una actividad.
 
 ### Evidencias PDF (archivos)
 
 - `POST /api/audits/:auditId/evidence-files` — sube un PDF (multipart, campos opcionales `findingId` / `actionId` / `itemId` para anclar). Validación: extensión `.pdf`, MIME, firma `%PDF-`, ≤10 MB. El proveedor se configura con `EVIDENCE_STORAGE_PROVIDER` (`local` o `r2`).
 - `GET /api/audits/:auditId/evidence-files` — lista los archivos.
 - `GET /api/audits/:auditId/evidence-files/:fileId` — descarga el PDF (`nosniff`, `no-store`) a través del backend autenticado.
-- `DELETE /api/audits/:auditId/evidence-files/:fileId` — elimina el registro y el recurso del proveedor configurado.
+- `DELETE /api/audits/:auditId/evidence-files/:fileId` — elimina el registro y el recurso del proveedor configurado; devuelve `409` con `reason: EVIDENCE_FILE_LINKED_TO_ACTIVITY` si conserva un vínculo histórico con una actividad.
 - `GET /api/audits/:auditId/evidence-operations/:operationId` — consulta únicamente estados históricos de operaciones heredadas.
 
 La respuesta de cada archivo incluye `storageProvider` (`LOCAL`, `R2` o el valor histórico `GOOGLE_DRIVE`) y `storageState`. Las cargas nuevas son síncronas; las operaciones históricas permanecen auditables.

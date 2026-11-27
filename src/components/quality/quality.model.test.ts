@@ -6,11 +6,17 @@ import {
   auditEvidenceStorageSummary,
   auditCloseBlockers,
   auditChecklistAIContext,
+  auditChecklistAIGenerationPayload,
+  auditChecklistAIErrorMessage,
+  auditEvidenceActivityLinkErrorMessage,
+  auditEvidenceActivityLinkRequest,
+  auditFindingActivityLinkErrorMessage,
   auditExecutionSummary,
   auditStatusLabels,
   auditTransitions,
   checklistResultLabels,
   checklistResults,
+  checklistCriteriaFromAIProposal,
   draftFromAudit,
   dedupeAuditChecklistAIProposals,
   emptyActionDraft,
@@ -26,6 +32,9 @@ import {
   formatBytes,
   isAuditActionOverdue,
   isTerminalAudit,
+  mergeAuditChecklistActivityItemIds,
+  mergeAuditEvidenceActivityIds,
+  mergeAuditFindingActivityIds,
   pendingEfficacyFindings,
 } from './quality.model'
 
@@ -104,6 +113,8 @@ describe('quality.model', () => {
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
     expect(eventLabel({ eventType: 'AUDIT_CREATED' } as never)).toContain('Auditoría')
     expect(eventLabel({ eventType: 'FINDING_CREATED' } as never)).toContain('Hallazgo')
+    expect(eventLabel({ eventType: 'IMMEDIATE_CORRECTION_CREATED' } as never)).toContain('Corrección inmediata')
+    expect(eventLabel({ eventType: 'EFFICACY_EVALUATION_COMPLETED' } as never)).toContain('eficacia')
   })
 
   it('deduplicates Checky proposals against existing questions and each other', () => {
@@ -112,6 +123,34 @@ describe('quality.model', () => {
       [{ question: ' ¿SE DOCUMENTA  EL PROCESO? ' }, { question: '¿Se revisa la evidencia?' }, { question: '¿Se revisa la evidencia?' }],
     )
     expect(proposals).toEqual([{ question: '¿Se revisa la evidencia?' }])
+  })
+
+  it('builds only the allowed contextual generation payload', () => {
+    expect(auditChecklistAIGenerationPayload()).toEqual({})
+    expect(auditChecklistAIGenerationPayload({ activityId: 'activity-1', dimension: '' })).toEqual({ activityId: 'activity-1' })
+    expect(auditChecklistAIGenerationPayload({ activityId: 'activity-1', dimension: 'EFFECTIVENESS' })).toEqual({ activityId: 'activity-1', dimension: 'EFFECTIVENESS' })
+    expect(mergeAuditChecklistActivityItemIds(['item-existing', 'item-shared'], ['item-shared', 'item-created'])).toEqual(['item-existing', 'item-shared', 'item-created'])
+    expect(mergeAuditFindingActivityIds(['finding-existing', 'finding-shared'], 'finding-shared')).toEqual(['finding-existing', 'finding-shared'])
+    expect(mergeAuditFindingActivityIds(['finding-existing'], 'finding-created')).toEqual(['finding-existing', 'finding-created'])
+    expect(mergeAuditEvidenceActivityIds(['evidence-existing', 'evidence-shared'], 'evidence-shared')).toEqual(['evidence-existing', 'evidence-shared'])
+    expect(mergeAuditEvidenceActivityIds(['file-existing'], 'file-created')).toEqual(['file-existing', 'file-created'])
+    expect(auditEvidenceActivityLinkRequest('url', ['evidence-existing'], 'evidence-created')).toEqual({ endpoint: 'evidences', field: 'evidenceIds', ids: ['evidence-existing', 'evidence-created'] })
+    expect(auditEvidenceActivityLinkRequest('pdf', ['file-existing', 'file-created'], 'file-created')).toEqual({ endpoint: 'evidence-files', field: 'evidenceFileIds', ids: ['file-existing', 'file-created'] })
+    expect(auditFindingActivityLinkErrorMessage(409, 'FINDING_LINKED_TO_ACTIVITY', 'A finding linked to an audit activity cannot be deleted', 'fallback')).toContain('ya está vinculado')
+    expect(auditEvidenceActivityLinkErrorMessage(409, 'EVIDENCE_LINKED_TO_ACTIVITY', 'Evidence linked to an audit activity cannot be deleted', 'fallback')).toContain('vínculos históricos')
+    expect(auditEvidenceActivityLinkErrorMessage(409, 'EVIDENCE_FILE_LINKED_TO_ACTIVITY', 'Evidence file linked to an audit activity cannot be deleted', 'fallback')).toContain('archivo')
+    expect(auditEvidenceActivityLinkErrorMessage(409, undefined, 'Resources can only be linked while the activity is in progress', 'fallback')).toContain('nuevos vínculos')
+    expect(checklistCriteriaFromAIProposal({ expectedEvidence: 'Registro firmado.', source: 'Procedimiento vigente', dimension: 'COMPLIANCE' })).toContain('Origen: Checky')
+  })
+
+  it('maps contextual Checky failures to Spanish messages without exposing provider details', () => {
+    expect(auditChecklistAIErrorMessage(400, 'Invalid checklist generation data', 'fallback')).toContain('solicitud')
+    expect(auditChecklistAIErrorMessage(403, 'Forbidden', 'fallback')).toContain('permisos')
+    expect(auditChecklistAIErrorMessage(404, 'Activity not found', 'fallback')).toContain('no existe')
+    expect(auditChecklistAIErrorMessage(409, 'Activity is completed', 'fallback')).toContain('ya no permite')
+    expect(auditChecklistAIErrorMessage(429, 'Too many requests', 'fallback')).toContain('límite')
+    expect(auditChecklistAIErrorMessage(502, 'Checky returned invalid checklist proposals', 'fallback')).toContain('inconsistente')
+    expect(auditChecklistAIErrorMessage(503, 'Checky no tiene créditos disponibles', 'fallback')).toContain('créditos')
   })
 
   it('resolves proposal cards to their procedure and process context', () => {
@@ -303,6 +342,11 @@ describe('quality.model', () => {
 
     const summary = auditExecutionSummary(auditWith({ findings: [finding({ actions: [action({ dueDate: '2026-06-01' }), action({ id: 'action-2', dueDate: '2026-06-01', status: 'COMPLETED' })] })] }), today)
     expect(summary).toMatchObject({ actionsTotal: 2, actionsOpen: 1, actionsRequiredOpen: 1, actionsOverdue: 1 })
+  })
+
+  it('removes a completed required action from the open counter while keeping the finding open', () => {
+    const summary = auditExecutionSummary(auditWith({ findings: [finding({ status: 'OPEN', actions: [action({ status: 'COMPLETED', required: true })] })] }))
+    expect(summary).toMatchObject({ findingsOpen: 1, actionsTotal: 1, actionsOpen: 0, actionsRequiredOpen: 0 })
   })
 
   it('lists resolved nonconformities that still need an efficacy verification', () => {

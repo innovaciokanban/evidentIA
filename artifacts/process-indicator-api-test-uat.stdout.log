@@ -1,0 +1,5 @@
+
+> kanban-consultoria@0.0.0 dev:api
+> tsx watch server/index.ts
+
+API listening on port 4000

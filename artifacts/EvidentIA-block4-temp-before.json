@@ -1,0 +1,31 @@
+{
+  "database": "evidentia_block4_checky_tmp_20261126",
+  "counts": {
+    "Audit": 1,
+    "AuditProgram": 1,
+    "AuditFinding": 2,
+    "AuditRootCauseAnalysis": 2,
+    "AuditRootCause": 3,
+    "AuditCorrectiveAction": 2,
+    "AuditActionAcceptanceCriterion": 4,
+    "AuditEfficacyEvaluation": 1,
+    "AuditEvidence": 2,
+    "AuditEvent": 128
+  },
+  "sentinels": {
+    "audit001": [
+      {
+        "id": "cmvy7eklk0019zgl5be78l2fy",
+        "code": "AUD-001",
+        "status": "IN_PROGRESS"
+      }
+    ],
+    "programPA001": [
+      {
+        "id": "cmwpc4fgv0004gcl5hc0i38ig",
+        "code": "PA-001",
+        "status": "ACTIVE"
+      }
+    ]
+  }
+}

@@ -1,0 +1,209 @@
+{
+  "generatedAt": "2026-11-22T01:22:24.511Z",
+  "database": {
+    "database": "EvidentIA",
+    "host": "::1/128",
+    "port": 5432
+  },
+  "migration": {
+    "name": "20261121030000_add_audit_plan_activity_auditors",
+    "targetTablePresent": false
+  },
+  "counts": {
+    "Audit": 1,
+    "AuditProgram": 1,
+    "AuditPlan": 1,
+    "AuditPlanActivity": 1,
+    "AuditTeamMember": 2,
+    "Auditor": 2,
+    "User": 5,
+    "Process": 3,
+    "AuditEvent": 27
+  },
+  "audit001": {
+    "audit": {
+      "id": "cmvy7eklk0019zgl5be78l2fy",
+      "code": "AUD-001",
+      "status": "IN_PROGRESS",
+      "auditProgramId": null,
+      "responsibleId": "cmvsjj8zs0001vgl51rwldgnl"
+    },
+    "plan": {
+      "id": "cmwr3472b0000qkl5mn1vmzcb",
+      "status": "DRAFT"
+    },
+    "activities": [
+      {
+        "id": "cmwr3chao0002qkl5d1iiqnzj",
+        "title": "Reunión de apertura",
+        "scheduledStart": "2026-11-16T18:00:00.000Z",
+        "scheduledEnd": "2026-11-16T18:30:00.000Z",
+        "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+        "status": "PLANNED"
+      }
+    ],
+    "teamMembers": [
+      {
+        "id": "cmwqytpfc0000col5dnj0dydq",
+        "role": "LEAD",
+        "isActive": true,
+        "independenceStatus": "MITIGATED",
+        "auditorId": "cmwpq13j100004gl5hdzyghok",
+        "name": "Auditor Interno de Prueba",
+        "type": "INTERNAL"
+      },
+      {
+        "id": "cmwqz9m4c0004col5x8ljln0e",
+        "role": "MEMBER",
+        "isActive": true,
+        "independenceStatus": "CLEAR",
+        "auditorId": "cmwqu7hvv0000nol5lxmmewb3",
+        "name": "Alimentos del Eje S.A.S.",
+        "type": "EXTERNAL"
+      }
+    ],
+    "events": [
+      {
+        "id": "cmvy7ekrl001azgl5x09edccp",
+        "eventType": "AUDIT_CREATED",
+        "occurredAt": "2026-11-02T00:09:09.921Z"
+      },
+      {
+        "id": "cmvyczd8r00004sl5c396i2q8",
+        "eventType": "AUDIT_RELATIONS_UPDATED",
+        "occurredAt": "2026-11-02T02:45:18.028Z"
+      },
+      {
+        "id": "cmvydemgg00024sl5ipkea4dp",
+        "eventType": "CHECKLIST_CREATED",
+        "occurredAt": "2026-11-02T02:57:09.808Z"
+      },
+      {
+        "id": "cmvyjpi0p00044sl5jk7bo0np",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:34.969Z"
+      },
+      {
+        "id": "cmvyjpi6s00064sl5l9w4jipw",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:35.188Z"
+      },
+      {
+        "id": "cmvyjpic500084sl5jtctblf0",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:35.381Z"
+      },
+      {
+        "id": "cmvyjpifg000a4sl5lxx5o3x3",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:35.501Z"
+      },
+      {
+        "id": "cmvyjpijw000c4sl51zl3jwy1",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:35.660Z"
+      },
+      {
+        "id": "cmvyjpimd000e4sl52if1nve5",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-02T05:53:35.749Z"
+      },
+      {
+        "id": "cmvzhyk720000rcl58n8pa4ul",
+        "eventType": "STATUS_CHANGED",
+        "occurredAt": "2026-11-02T21:52:24.638Z"
+      },
+      {
+        "id": "cmvzhz21e0001rcl5w34uj21j",
+        "eventType": "CHECKLIST_ITEM_UPDATED",
+        "occurredAt": "2026-11-02T21:52:47.762Z"
+      },
+      {
+        "id": "cmvzhzfky0002rcl5fojtzv81",
+        "eventType": "CHECKLIST_ITEM_UPDATED",
+        "occurredAt": "2026-11-02T21:53:05.314Z"
+      },
+      {
+        "id": "cmvzi3k030003rcl52ul9a9wz",
+        "eventType": "CHECKLIST_ITEM_UPDATED",
+        "occurredAt": "2026-11-02T21:56:17.667Z"
+      },
+      {
+        "id": "cmw1h3v730001lwl5saxd6m2s",
+        "eventType": "CHECKLIST_ITEM_CREATED",
+        "occurredAt": "2026-11-04T07:04:04.911Z"
+      },
+      {
+        "id": "cmw1h6vli0003lwl566mg3rb5",
+        "eventType": "FINDING_CREATED",
+        "occurredAt": "2026-11-04T07:06:25.398Z"
+      },
+      {
+        "id": "cmw1h6vry0004lwl5z8gq0crc",
+        "eventType": "CHECKLIST_ITEM_UPDATED",
+        "occurredAt": "2026-11-04T07:06:25.630Z"
+      },
+      {
+        "id": "cmw1h76kp0005lwl5hhnsuskl",
+        "eventType": "FINDING_STATUS_CHANGED",
+        "occurredAt": "2026-11-04T07:06:39.625Z"
+      },
+      {
+        "id": "cmw2qxdrz0001jsl5k6nyq8bi",
+        "eventType": "EVIDENCE_FILE_CREATED",
+        "occurredAt": "2026-11-05T04:26:44.735Z"
+      },
+      {
+        "id": "cmw2r6ezl0002jsl5q89vwxn7",
+        "eventType": "EVIDENCE_FILE_DELETED",
+        "occurredAt": "2026-11-05T04:33:46.209Z"
+      },
+      {
+        "id": "cmw2v1ayi0004jsl590m4sun9",
+        "eventType": "EVIDENCE_FILE_CREATED",
+        "occurredAt": "2026-11-05T06:21:46.170Z"
+      },
+      {
+        "id": "cmwqytphz0001col5cftve3gv",
+        "eventType": "TEAM_MEMBER_ASSIGNED",
+        "occurredAt": "2026-11-22T03:14:18.455Z"
+      },
+      {
+        "id": "cmwqyxf6j0002col5o8r05cdk",
+        "eventType": "INDEPENDENCE_EVALUATED",
+        "occurredAt": "2026-11-22T03:17:11.707Z"
+      },
+      {
+        "id": "cmwqz0ixl0003col5nkis34xd",
+        "eventType": "INDEPENDENCE_EVALUATED",
+        "occurredAt": "2026-11-22T03:19:36.537Z"
+      },
+      {
+        "id": "cmwqz9m530005col5oyss3dtc",
+        "eventType": "TEAM_MEMBER_ASSIGNED",
+        "occurredAt": "2026-11-22T03:26:40.599Z"
+      },
+      {
+        "id": "cmwqzbszi0006col5ob7y3vtu",
+        "eventType": "INDEPENDENCE_EVALUATED",
+        "occurredAt": "2026-11-22T03:28:22.782Z"
+      },
+      {
+        "id": "cmwr347310001qkl59ehvp4fj",
+        "eventType": "AUDIT_PLAN_CREATED",
+        "occurredAt": "2026-11-22T05:14:26.269Z"
+      },
+      {
+        "id": "cmwr3chbc0003qkl5x6mhclyj",
+        "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+        "occurredAt": "2026-11-22T05:20:52.776Z"
+      }
+    ]
+  },
+  "backup": {
+    "file": "artifacts\\stage6e2_audit_plan_activity_auditors_pre_migration_20261122_012222Z.dump",
+    "format": "custom",
+    "restoreListExitCode": 0,
+    "restoreListEntries": 708
+  }
+}

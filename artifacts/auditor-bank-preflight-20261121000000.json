@@ -1,0 +1,23 @@
+﻿{
+    "connection":  "localhost:5432/EvidentIA",
+    "counts":  {
+                   "audits":  1,
+                   "checklistItems":  7,
+                   "checklists":  1,
+                   "correctiveActions":  0,
+                   "findings":  1,
+                   "priorities":  2,
+                   "processes":  3,
+                   "programs":  1
+               },
+    "pa001":  [
+                  "PA-001|ACTIVE"
+              ],
+    "aud001":  [
+                   "AUD-001|IN_PROGRESS"
+               ],
+    "priorities":  [
+                       "2"
+                   ],
+    "backup":  "C:\\Users\\Viviana Londono\\Desktop\\EvidentIA\\artifacts\\auditor-bank-pre-migration-20261121000000-local.dump"
+}

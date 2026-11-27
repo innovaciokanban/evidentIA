@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Audit } from '../../types'
+import type { Audit, Role } from '../../types'
 import { QualityPage } from './QualityPage'
 
-const user = { id: 'user-1', role: 'COMPANY_ADMIN', companyId: 'company-1' }
+const user: { id: string; role: Role; companyId: string } = { id: 'user-1', role: 'COMPANY_ADMIN', companyId: 'company-1' }
 
 const audit = {
   id: 'audit-1',
@@ -38,12 +38,20 @@ const audit = {
 describe('QualityPage rendering', () => {
   it('renders the loading state', () => {
     const markup = renderToStaticMarkup(<QualityPage user={user} />)
-    expect(markup).toContain('Cargando auditorías')
+    expect(markup).toContain('Resumen')
+    expect(markup).toContain('Programas')
   })
 
   it('renders the empty state', () => {
     const markup = renderToStaticMarkup(<QualityPage user={user} initialLoading={false} />)
-    expect(markup).toContain('Sin auditorías de calidad')
+    expect(markup).toContain('Sin auditorías')
+  })
+
+  it('renders the three quality workspace sections', () => {
+    const markup = renderToStaticMarkup(<QualityPage user={user} initialLoading={false} />)
+    expect(markup).toContain('Resumen')
+    expect(markup).toContain('Programas')
+    expect(markup).toContain('Auditorías')
   })
 
   it('renders a loaded audit', () => {

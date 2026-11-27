@@ -1,0 +1,29 @@
+import type { FormEvent } from 'react'
+import type { AuditPlanActivityAuditor, AuditTeamMember, Process } from '../../types'
+import { auditPlanActivityTypeLabels, type AuditPlanActivityDraft } from './audit-plan.model'
+import { auditTeamRoleLabels, independenceStatusLabels } from './audit-team.model'
+import type { QualityUser } from './quality.model'
+
+type ActivityEditorWithAuditorsProps = {
+  draft: AuditPlanActivityDraft
+  users: QualityUser[]
+  processes: Process[]
+  members: AuditTeamMember[]
+  saving: boolean
+  error: string
+  editing: boolean
+  onChange: (draft: AuditPlanActivityDraft) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  onClose: () => void
+}
+
+const toggleId = (ids: string[], id: string): string[] => ids.includes(id) ? ids.filter((currentId) => currentId !== id) : [...ids, id]
+
+export function ActivityEditorWithAuditors({ draft, users, processes, members, saving, error, editing, onChange, onSubmit, onClose }: ActivityEditorWithAuditorsProps) {
+  return <div className="drawer-backdrop centered-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><form className="drawer centered-modal company-modal quality-plan-activity-modal" onSubmit={onSubmit} role="dialog" aria-modal="true" aria-labelledby="audit-plan-activity-title"><div className="company-modal-header"><div className="company-modal-icon" aria-hidden="true">◷</div><div className="company-modal-title"><p className="eyebrow">{editing ? 'EDITAR AGENDA' : 'NUEVA ACTIVIDAD'}</p><h2 id="audit-plan-activity-title">{editing ? 'Editar actividad' : 'Añadir actividad'}</h2><p className="company-modal-subtitle">Programa un momento concreto de la auditoría y define quién participará como auditor.</p></div><button type="button" className="icon-button" aria-label="Cerrar" onClick={onClose}>×</button></div><div className="quality-plan-activity-body"><div className="form-grid"><label>Tipo<select value={draft.type} onChange={(event) => onChange({ ...draft, type: event.target.value as AuditPlanActivityDraft['type'] })}>{(Object.keys(auditPlanActivityTypeLabels) as AuditPlanActivityDraft['type'][]).map((type) => <option key={type} value={type}>{auditPlanActivityTypeLabels[type]}</option>)}</select></label><label>Título<input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} minLength={3} maxLength={200} required autoFocus /></label></div><div className="form-grid"><label>Inicio<input type="datetime-local" value={draft.scheduledStart} onChange={(event) => onChange({ ...draft, scheduledStart: event.target.value })} required /></label><label>Fin<input type="datetime-local" value={draft.scheduledEnd} onChange={(event) => onChange({ ...draft, scheduledEnd: event.target.value })} required /></label></div><div className="form-grid"><label>Proceso vinculado<select value={draft.processId} onChange={(event) => onChange({ ...draft, processId: event.target.value })}><option value="">Actividad general</option>{processes.map((process) => <option key={process.id} value={process.id}>{process.code ? `${process.code} · ` : ''}{process.name}</option>)}</select></label><label>Responsable operativo<select value={draft.responsibleId} onChange={(event) => onChange({ ...draft, responsibleId: event.target.value })}><option value="">Sin asignar</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label></div><label>Descripción<textarea value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} maxLength={10000} rows={3} placeholder="Qué se revisará o coordinará en este momento." /></label><fieldset className="audit-plan-auditor-picker"><legend>Auditores de la actividad</legend><p className="audit-plan-auditor-picker-help">Selecciona uno o varios integrantes activos del equipo. La independencia debe estar evaluada antes de aprobar el plan.</p>{members.length === 0 ? <p className="audit-plan-auditor-empty">No hay integrantes activos disponibles. Revisa primero el equipo auditor.</p> : <div className="audit-plan-auditor-options">{members.map((member) => { const selected = draft.auditorIds.includes(member.id); return <label key={member.id} className={`audit-plan-auditor-option ${selected ? 'is-selected' : ''}`}><input type="checkbox" checked={selected} onChange={() => onChange({ ...draft, auditorIds: toggleId(draft.auditorIds, member.id) })} /><span className="audit-plan-auditor-option-copy"><strong>{member.auditor.name}</strong><small>{auditTeamRoleLabels[member.role]} · {member.auditor.type === 'INTERNAL' ? 'Interno' : 'Externo'} · {independenceStatusLabels[member.independenceStatus]}</small></span></label> })}</div>}</fieldset><label>Lugar / modalidad<input value={draft.location} onChange={(event) => onChange({ ...draft, location: event.target.value })} maxLength={500} placeholder="Ej. Sala 2 o videollamada" /></label><label>Notas<textarea value={draft.notes} onChange={(event) => onChange({ ...draft, notes: event.target.value })} maxLength={10000} rows={3} /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="drawer-actions"><button type="button" className="button secondary" onClick={onClose} disabled={saving}>Cancelar</button><button type="submit" className="button primary" disabled={saving}>{saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Añadir actividad'}</button></div></div></form></div>
+}
+
+export function ActivityAuditorSummary({ auditors }: { auditors: AuditPlanActivityAuditor[] }) {
+  if (auditors.length === 0) return <span className="audit-plan-activity-auditors-empty">Sin auditores asignados</span>
+  return <span className="audit-plan-activity-auditors"><small>Auditores</small><strong>{auditors.map((auditor) => `${auditor.name} (${auditTeamRoleLabels[auditor.role]})`).join(', ')}</strong></span>
+}

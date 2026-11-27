@@ -3,19 +3,25 @@ import type { FormEvent } from 'react'
 import { api, ApiError } from '../../api'
 import type {
   Audit,
+  AuditProgram,
+  AuditProgramStatus,
   AuditStatus,
+  Company,
   Process,
   Procedure,
+  Role,
 } from '../../types'
 import { EmptyState } from '../ui/EmptyState'
-import { KPICard } from '../ui/KPICard'
 import { LoadingState } from '../ui/LoadingState'
 import { askConfirm } from '../ui/useConfirm'
 import { AuditDetailView } from './AuditDetailView'
+import { AuditProgramsPage } from './AuditProgramsPage'
 import { AuditScopeSelect } from './AuditScopeSelect'
+import { AuditorBankPage } from './AuditorBankPage'
 import { activeUserOptions, userOptionLabel } from '../../user-status'
 import {
   auditKinds,
+  auditExecutionSummary,
   auditStatusLabels,
   draftFromAudit,
   emptyAuditDraft,
@@ -25,6 +31,7 @@ import {
 } from './quality.model'
 
 const shortDateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium' })
+type QualityWorkspaceView = 'summary' | 'programs' | 'audits'
 
 const formatMaybeDate = (value: string | null | undefined) => (value ? shortDateFormatter.format(new Date(value)) : '—')
 
@@ -33,10 +40,12 @@ function findErrorMessage(requestError: unknown, fallback: string): string {
   return fallback
 }
 
-export function QualityPage({ user, initialAudits = [], initialLoading = true }: { user: { id: string; role: string; companyId?: string | null }; initialAudits?: Audit[]; initialLoading?: boolean }) {
+export function QualityPage({ user, initialAudits = [], initialLoading = true }: { user: { id: string; role: Role; companyId?: string | null }; initialAudits?: Audit[]; initialLoading?: boolean }) {
   const canWrite = user.role === 'SUPERUSER' || user.role === 'COMPANY_ADMIN'
   const [allUsers, setAllUsers] = useState<QualityUser[]>([])
   const [allProcesses, setAllProcesses] = useState<Process[]>([])
+  const [companies, setCompanies] = useState<Company[]>([])
+  const [selectedCompanyId, setSelectedCompanyId] = useState(user.role === 'SUPERUSER' ? '' : (user.companyId ?? ''))
 
   useEffect(() => {
     let cancelled = false
@@ -46,22 +55,25 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
           api<{ users: QualityUser[] }>('/users'),
           api<{ processes: Process[] }>('/processes'),
         ])
+        const companiesResult = user.role === 'SUPERUSER' ? await api<{ companies: Company[] }>('/companies') : { companies: [] }
         if (!cancelled) {
           setAllUsers(usersResult.users)
           setAllProcesses(processesResult.processes)
+          setCompanies(companiesResult.companies)
         }
       } catch (requestError) {
         console.error('[quality] failed to load users/processes', requestError)
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [user.role])
 
+  const companyScope = user.role === 'SUPERUSER' ? selectedCompanyId : (user.companyId ?? '')
   const processes = useMemo(
-    () => (user.role === 'SUPERUSER' ? allProcesses : allProcesses.filter((process) => process.companyId === user.companyId)),
-    [allProcesses, user],
+    () => companyScope ? allProcesses.filter((process) => process.companyId === companyScope) : allProcesses,
+    [allProcesses, companyScope],
   )
-  const users = allUsers.filter((person) => person.isActive !== false)
+  const users = useMemo(() => allUsers.filter((person) => person.isActive !== false && (!companyScope || !person.companyId || person.companyId === companyScope)), [allUsers, companyScope])
   const companyProcesses = processes
 
   const [audits, setAudits] = useState<Audit[]>(initialAudits)
@@ -71,12 +83,18 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
   const [formError, setFormError] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [programStatusFilter, setProgramStatusFilter] = useState<AuditProgramStatus | ''>('')
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Audit | null>(null)
   const [draft, setDraft] = useState<AuditDraft>(emptyAuditDraft)
   const [saving, setSaving] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [workspaceView, setWorkspaceView] = useState<QualityWorkspaceView>('summary')
+  const [pendingProgramId, setPendingProgramId] = useState<string | null>(null)
+  const [programRefreshKey, setProgramRefreshKey] = useState(0)
   const [procedures, setProcedures] = useState<Procedure[]>([])
+  const [programs, setPrograms] = useState<AuditProgram[]>([])
+  const [showAuditorBank, setShowAuditorBank] = useState(false)
   const historicalAuditUsers: QualityUser[] = editing ? [editing.leadAuditor, editing.responsible].filter((person): person is NonNullable<typeof person> => Boolean(person)).map((person) => ({ ...person, companyId: editing.companyId })) : []
   const auditUsers = activeUserOptions<QualityUser>(users, historicalAuditUsers)
 
@@ -115,30 +133,46 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
     return () => { cancelled = true }
   }, [processes])
 
-  const filtered = audits.filter((audit) => {
+  const visibleAudits = useMemo(() => companyScope ? audits.filter((audit) => audit.companyId === companyScope) : audits, [audits, companyScope])
+  const filtered = visibleAudits.filter((audit) => {
     const term = search.trim().toLowerCase()
-    const matchesSearch = !term || audit.code.toLowerCase().includes(term) || audit.title.toLowerCase().includes(term) || audit.process.name.toLowerCase().includes(term)
+    const associatedProgram = programs.find((program) => program.id === audit.auditProgramId)
+    const matchesSearch = !term || audit.code.toLowerCase().includes(term) || audit.title.toLowerCase().includes(term) || audit.process.name.toLowerCase().includes(term) || associatedProgram?.name.toLowerCase().includes(term)
     const matchesStatus = !statusFilter || audit.status === statusFilter
     return matchesSearch && matchesStatus
   })
 
-  const qualitySummary = useMemo(() => audits.reduce((summary, audit) => {
+  const qualitySummary = useMemo(() => visibleAudits.reduce((summary, audit) => {
     const indicators = audit.indicators
+    const execution = auditExecutionSummary(audit)
     return {
       active: summary.active + (audit.status === 'PLANNED' || audit.status === 'IN_PROGRESS' ? 1 : 0),
       closed: summary.closed + (audit.status === 'CLOSED' ? 1 : 0),
-      openFindings: summary.openFindings + (indicators?.openFindings ?? audit.findings.filter((finding) => finding.status !== 'VERIFIED').length),
-      pendingChecklist: summary.pendingChecklist + (indicators?.checklistRequiredPending ?? audit.checklistProgress?.requiredPending ?? 0),
-      openActions: summary.openActions + (indicators?.openRequiredActions ?? audit.findings.flatMap((finding) => finding.actions ?? []).filter((action) => action.required && action.status !== 'COMPLETED' && action.status !== 'CANCELLED').length),
+      openFindings: summary.openFindings + (indicators?.openFindings ?? execution.findingsOpen),
+      pendingChecklist: summary.pendingChecklist + (indicators?.checklistRequiredPending ?? audit.checklistProgress?.requiredPending ?? execution.itemsRequiredPending),
+      openActions: summary.openActions + (indicators?.openRequiredActions ?? execution.actionsRequiredOpen),
     }
-  }, { active: 0, closed: 0, openFindings: 0, pendingChecklist: 0, openActions: 0 }), [audits])
+  }, { active: 0, closed: 0, openFindings: 0, pendingChecklist: 0, openActions: 0 }), [visibleAudits])
 
-  function startCreate() {
+  const auditIndicators = useMemo(() => ({
+    scheduled: visibleAudits.filter((audit) => audit.status === 'PLANNED').length,
+    inProgress: visibleAudits.filter((audit) => audit.status === 'IN_PROGRESS').length,
+    openFindings: qualitySummary.openFindings,
+    pendingActions: qualitySummary.openActions,
+  }), [qualitySummary.openActions, qualitySummary.openFindings, visibleAudits])
+
+  function startCreate(programId?: string) {
     setEditing(null)
     setDraft(emptyAuditDraft)
+    setPendingProgramId(programId ?? null)
     setFormError('')
     setNotice('')
     setShowForm(true)
+  }
+
+  function openAudit(auditId: string) {
+    setWorkspaceView('audits')
+    setSelectedId(auditId)
   }
 
   async function startEdit(audit: Audit) {
@@ -184,16 +218,22 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
           setSaving(false)
           return
         }
-        await api<{ audit: Audit }>('/audits', { method: 'POST', body: JSON.stringify({ ...base, processId: anchorProcessId, processIds: draft.processIds, procedureIds: draft.procedureIds }) })
+        const created = await api<{ audit: Audit }>('/audits', { method: 'POST', body: JSON.stringify({ ...base, processId: anchorProcessId, processIds: draft.processIds, procedureIds: draft.procedureIds }) })
+        if (pendingProgramId) {
+          await api(`/audit-programs/${pendingProgramId}/audits`, { method: 'POST', body: JSON.stringify({ auditId: created.audit.id }) })
+        }
       }
       await loadAudits()
+      setProgramRefreshKey((current) => current + 1)
       setShowForm(false)
       setEditing(null)
+      setPendingProgramId(null)
       setNotice(`Auditoría ${editing ? 'actualizada' : 'creada'} correctamente.`)
     } catch (requestError) {
       setFormError(findErrorMessage(requestError, 'No se pudo guardar la auditoría.'))
     } finally {
       setSaving(false)
+      setPendingProgramId(null)
     }
   }
 
@@ -212,18 +252,42 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
     }
   }
 
+  if (showAuditorBank) {
+    return <AuditorBankPage user={user} companies={companies} companyId={selectedCompanyId} onCompanyChange={(companyId) => setSelectedCompanyId(companyId)} onBack={() => setShowAuditorBank(false)} />
+  }
+
   return (
     <div className="quality-page page">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">AUDITORÍAS DE CALIDAD</p>
-          <h1>Auditorías de calidad</h1>
-          <p className="muted">Planifica auditorías, evalúa listas de verificación, registra hallazgos con acciones correctivas y conserva la evidencia documental.</p>
-        </div>
-        {canWrite && !showForm && !selected && (
-          <button type="button" className="button primary" onClick={startCreate}>+ Nueva auditoría</button>
-        )}
-      </div>
+      <nav className="quality-workspace-tabs" role="tablist" aria-label="Secciones de aseguramiento de calidad">
+        <button type="button" role="tab" className={`quality-tab${workspaceView === 'summary' ? ' active' : ''}`} aria-selected={workspaceView === 'summary'} onClick={() => { setSelectedId(null); setWorkspaceView('summary') }}>Resumen</button>
+        <button type="button" role="tab" className={`quality-tab${workspaceView === 'programs' ? ' active' : ''}`} aria-selected={workspaceView === 'programs'} onClick={() => { setSelectedId(null); setWorkspaceView('programs') }}>Programas</button>
+        <button type="button" role="tab" className={`quality-tab${workspaceView === 'audits' ? ' active' : ''}`} aria-selected={workspaceView === 'audits'} onClick={() => { setSelectedId(null); setWorkspaceView('audits') }}>Auditorías <span>{visibleAudits.length}</span></button>
+      </nav>
+
+      {!showForm && !selected && <AuditProgramsPage
+          key={workspaceView}
+          user={user}
+          users={users}
+          processes={companyProcesses}
+          audits={visibleAudits}
+          search={search}
+          programStatusFilter={programStatusFilter}
+          auditStatusFilter={statusFilter as AuditStatus | ''}
+          auditIndicators={auditIndicators}
+          companyId={selectedCompanyId}
+          companies={companies}
+          refreshKey={programRefreshKey}
+          view={workspaceView}
+          onSearch={setSearch}
+          onProgramStatusFilter={setProgramStatusFilter}
+          onAuditStatusFilter={setStatusFilter}
+          onCompanyChange={(companyId) => { setSelectedCompanyId(companyId); setSelectedId(null) }}
+          onProgramsChange={setPrograms}
+          onNewAudit={startCreate}
+          onOpenAudit={openAudit}
+          onNavigate={setWorkspaceView}
+          onOpenAuditorBank={() => { setNotice(''); setFormError(''); setShowAuditorBank(true) }}
+        />}
 
       {notice && <div className="notice success" role="status">{notice}</div>}
       {formError && <div className="notice error" role="alert">{formError}</div>}
@@ -257,7 +321,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                 <label>Auditor líder
                   <select value={draft.leadAuditorId} onChange={(event) => setDraft((current) => ({ ...current, leadAuditorId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {auditUsers.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
+                    {auditUsers.filter((person) => !person.companyId || !companyScope || person.companyId === companyScope).map((person) => (
                       <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>
                     ))}
                   </select>
@@ -265,7 +329,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                 <label>Responsable
                   <select value={draft.responsibleId} onChange={(event) => setDraft((current) => ({ ...current, responsibleId: event.target.value }))}>
                     <option value="">Sin asignar</option>
-                    {auditUsers.filter((person) => !person.companyId || person.companyId === user.companyId || user.role === 'SUPERUSER').map((person) => (
+                    {auditUsers.filter((person) => !person.companyId || !companyScope || person.companyId === companyScope).map((person) => (
                       <option key={person.id} value={person.id}>{userOptionLabel(person)}</option>
                     ))}
                   </select>
@@ -305,6 +369,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
       ) : selected ? (
         <AuditDetailView
           audit={selected}
+          companyName={companies.find((company) => company.id === selected.companyId)?.name ?? (user.role === 'SUPERUSER' ? selected.companyId : 'Empresa actual')}
           users={users}
           processes={companyProcesses}
           canWrite={canWrite}
@@ -315,38 +380,11 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
           onNotice={setNotice}
         />
       ) : (
-        <>
-          {!loading && !loadError && (
-            <section className="metric-grid quality-metrics" aria-label="Resumen de auditorías">
-              <KPICard icon="◎" label="Auditorías activas" value={qualitySummary.active} tone="blue" hint={`${qualitySummary.closed} cerradas`} />
-              <KPICard icon="△" label="Hallazgos abiertos" value={qualitySummary.openFindings} tone="red" hint="Requieren seguimiento" />
-              <KPICard icon="□" label="Checklist pendientes" value={qualitySummary.pendingChecklist} tone="amber" hint="Ítems obligatorios" />
-              <KPICard icon="↗" label="Acciones abiertas" value={qualitySummary.openActions} tone="purple" hint="Correctivas obligatorias" />
-            </section>
-          )}
-          <section className="panel">
-            <div className="filters quality-filters">
-              <div className="quality-filter-heading"><p className="detail-label">CONTROL DE AUDITORÍAS</p><strong>{filtered.length} de {audits.length} visibles</strong></div>
-              <div className="search-box"><span aria-hidden="true">⌕</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por código, título o proceso…" aria-label="Buscar auditorías" /></div>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filtrar por estado">
-                <option value="">Todos los estados</option>
-                {(Object.keys(auditStatusLabels) as AuditStatus[]).map((status) => (
-                  <option key={status} value={status}>{auditStatusLabels[status]}</option>
-                ))}
-              </select>
-            </div>
-          </section>
-
-          {loading ? (
-            <LoadingState text="Cargando auditorías…" />
-          ) : loadError ? (
-            <div className="notice error" role="alert">{loadError}</div>
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              title="Sin auditorías de calidad"
-              text="Crea la primera auditoría para empezar el aseguramiento de calidad de tus procesos."
-              action={canWrite ? <button type="button" className="button primary" onClick={startCreate}>Crear auditoría</button> : undefined}
-            />
+        workspaceView === 'audits' && !showForm ? (
+           <section className="audit-independent-section audit-control-section">
+           <div className="audit-independent-heading"><div><p className="eyebrow">SEGUIMIENTO OPERATIVO</p><h2>Control de auditorías</h2><p className="muted">Consulta cada auditoría, su programa asociado y el estado actual del seguimiento.</p></div><span className="audit-independent-count">{filtered.length}</span></div>
+           {loading ? <LoadingState text="Cargando auditorías…" /> : loadError ? <div className="notice error" role="alert">{loadError}</div> : filtered.length === 0 ? (
+             <EmptyState compact title="Sin auditorías" text="Crea una auditoría desde el menú Crear para iniciar el seguimiento." />
           ) : (
             <div className="quality-audit-list">
               {filtered.map((audit) => {
@@ -361,6 +399,7 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                         <p className="detail-label">{audit.code}</p>
                         <h3>{audit.title}</h3>
                         <p className="muted">{audit.process.code} · {audit.process.name}{audit.auditType ? ` · ${audit.auditType}` : ''}</p>
+                         <p className="audit-program-association">{programs.find((program) => program.id === audit.auditProgramId) ? `Vinculada · ${programs.find((program) => program.id === audit.auditProgramId)?.name}` : 'Independiente · Sin programa asociado'}</p>
                       </div>
                       <div className="quality-audit-card-actions">
                         <span className={`badge quality-status ${audit.status.toLowerCase()}`}>{auditStatusLabels[audit.status]}</span>
@@ -371,19 +410,19 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
                               <button type="button" className="text-button" onClick={() => void startEdit(audit)}>Editar</button>
                               {!isTerminalAudit(audit) && audit.findings.length === 0 && (
                                 <button type="button" className="text-button danger" onClick={() => void removeAudit(audit)}>Eliminar</button>
-                              )}
+                               )}
                             </>
-                          )}
+        )}
                         </div>
                       </div>
                     </div>
-                    {indicators && (
-                      <div className="quality-indicators">
-                        <span className="quality-indicator"><b className="quality-indicator-icon red">!</b><span><strong>{indicators.openFindings}</strong> hallazgos abiertos</span></span>
-                        <span className="quality-indicator"><b className="quality-indicator-icon amber">□</b><span><strong>{indicators.checklistRequiredPending}</strong> checklist pendientes</span></span>
-                        <span className="quality-indicator"><b className="quality-indicator-icon purple">↗</b><span><strong>{indicators.openRequiredActions}</strong> acciones abiertas</span></span>
-                      </div>
-                    )}
+                     {indicators && (
+                       <div className="quality-indicators">
+                         <span className="quality-indicator"><b className="quality-indicator-icon red">!</b><span><strong>{indicators.openFindings}</strong> hallazgos abiertos</span></span>
+                         <span className="quality-indicator"><b className="quality-indicator-icon amber">□</b><span><strong>{indicators.checklistRequiredPending}</strong> checklist pendientes</span></span>
+                         <span className="quality-indicator"><b className="quality-indicator-icon purple">↗</b><span><strong>{indicators.openRequiredActions}</strong> acciones abiertas</span></span>
+                       </div>
+                     )}
                     <div className="quality-audit-card-footer">
                       <div className="quality-audit-owner"><span className="avatar tiny">{(audit.responsible?.name ?? audit.leadAuditor?.name ?? '?').slice(0, 1).toUpperCase()}</span><span><small>Responsable</small><strong>{audit.responsible ? userOptionLabel(audit.responsible) : audit.leadAuditor ? userOptionLabel(audit.leadAuditor) : 'Sin asignar'}</strong></span></div>
                       <span className="quality-audit-date">Planeada {formatMaybeDate(audit.plannedDate)}</span>
@@ -394,8 +433,8 @@ export function QualityPage({ user, initialAudits = [], initialLoading = true }:
               })}
             </div>
           )}
-        </>
-      )}
+         </section>
+       ) : null)}
     </div>
   )
 }

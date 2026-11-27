@@ -1,0 +1,19 @@
+          relation          | count 
+----------------------------+-------
+ AuditCorrectiveAction      |     0
+ AuditActionProgress        |     0
+ AuditCorrectiveActionCause |     0
+ AuditEvidence              |     1
+ AuditEvidenceFile          |     2
+ AuditEvent                 |   100
+(6 rows)
+
+    relation     |  code   |            id             
+-----------------+---------+---------------------------
+ sentinel_audits | AUD-001 | cmvy7eklk0019zgl5be78l2fy
+(1 row)
+
+ id | latest_percent 
+----+----------------
+(0 rows)
+

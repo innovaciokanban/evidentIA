@@ -3,6 +3,7 @@ import request from './test-request.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, Role } from '@prisma/client'
 import { createApp, nextAuditCode } from './app.js'
+import { auditReportSourceFingerprint } from './audit-report.service.js'
 
 const companyId = 'cmcompany00000000000000001'
 const otherCompanyId = 'cmcompany00000000000000002'
@@ -21,7 +22,7 @@ const payload = {
   responsibleId: admin.id,
 }
 
-function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
+function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId, options: { reportReady?: boolean } = {}) {
   const users = [admin, companyUser, foreignAdmin]
   const currentUser = users.find((user) => user.role === role && user.companyId === userCompanyId) ?? { ...admin, role, companyId: userCompanyId }
   const passwordHash = bcrypt.hashSync('Password123!', 4)
@@ -30,6 +31,8 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const storedFindings: Array<Record<string, unknown>> = []
   const storedEvidences: Array<Record<string, unknown>> = []
   const storedEvents: Array<Record<string, unknown>> = []
+  const storedFollowUps: Array<Record<string, unknown>> = []
+  const reportReady = options.reportReady ?? true
   let auditSeq = 0
   let findingSeq = 0
   let evidenceSeq = 0
@@ -41,16 +44,29 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   }
   const findingView = (finding: Record<string, unknown>) => ({
     ...finding,
-    responsible: userView(finding.responsibleId),
+    responsible: userView(finding.responsibleId) ? { ...userView(finding.responsibleId), isActive: true } : null,
     verifiedBy: userView(finding.verifiedById),
+    item: null,
+    process: null,
+    procedure: null,
+    evidences: storedEvidences.filter((item) => item.findingId === finding.id),
+    evidenceFiles: [],
+    actions: (finding.actions as Array<Record<string, unknown>> | undefined ?? []).map((action) => ({ title: 'Corrective action', description: 'Action description', objective: null, implementationPlan: null, priority: 'MEDIUM', followUpId: null, followUpReason: null, followUpJustification: null, progress: [], progressPercent: 0, ...action })),
+    efficacyEvaluations: [],
   })
-  const auditView = (audit: Record<string, unknown>) => ({
+  const auditView = (audit: Record<string, unknown>, reportSource = false) => ({
     ...audit,
-    process: { id: processId, companyId: process.companyId, name: process.name, code: process.code },
+    process: { id: processId, ...(reportSource ? {} : { companyId: process.companyId }), name: process.name, code: process.code },
     leadAuditor: userView(audit.leadAuditorId),
     responsible: userView(audit.responsibleId),
     findings: storedFindings.filter((item) => item.auditId === audit.id).map(findingView),
     evidences: storedEvidences.filter((item) => item.auditId === audit.id),
+    evidenceFiles: [],
+    relatedProcesses: [],
+    procedures: [],
+    teamMembers: [],
+    plan: null,
+    checklists: [],
   })
 
   const auditMatches = (audit: Record<string, unknown>, where?: AuditWhere) => {
@@ -72,7 +88,8 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   const findingMatches = (finding: Record<string, unknown>, where?: FindingWhere) => {
     if (where?.id && finding.id !== where.id) return false
     if (where?.auditId && finding.auditId !== where.auditId) return false
-    if (where?.status && finding.status !== where.status) return false
+    if (typeof where?.status === 'string' && finding.status !== where.status) return false
+    if (where?.status && typeof where.status !== 'string' && 'not' in where.status && finding.status === where.status.not) return false
     return true
   }
   const evidenceMatches = (evidence: Record<string, unknown>, where?: EvidenceWhere) => {
@@ -96,6 +113,8 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
         const user = where.email ? users.find((item) => item.email === where.email) : users.find((item) => item.id === where.id)
         return user ? { ...user, passwordHash } : null
       }),
+      findFirst: vi.fn(async ({ where }: { where?: { id?: string; companyId?: string; isActive?: boolean } } = {}) => users.find((user) => (!where?.id || user.id === where.id) && (!where?.companyId || user.companyId === where.companyId) && (!where?.isActive || true)) ?? null),
+      findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] }; isActive?: boolean } } = {}) => users.filter((user) => (!where?.id?.in || where.id.in.includes(user.id)) && (!where?.isActive || true)).map((user) => ({ id: user.id }))),
     },
     session: {
       create: vi.fn(async () => { sessionActive = true; return { id: 'session-audit', expiresAt: new Date(Date.now() + 86400000) } }),
@@ -107,9 +126,9 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
     },
     audit: {
       findMany: vi.fn(async ({ where }: { where?: AuditWhere } = {}) => storedAudits.filter((audit) => auditMatches(audit, where)).map(auditView)),
-      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+      findUnique: vi.fn(async ({ where, include }: { where: { id: string }; include?: { evidenceFiles?: unknown } }) => {
         const found = storedAudits.find((audit) => audit.id === where.id)
-        return found ? auditView(found) : null
+        return found ? auditView(found, Boolean(include?.evidenceFiles)) : null
       }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         auditSeq += 1
@@ -255,9 +274,30 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
       findMany: vi.fn(async () => []),
     },
     auditCorrectiveAction: {
-      count: vi.fn(async () => 0),
+      count: vi.fn(async ({ where }: { where?: { findingId?: string; required?: boolean; status?: { notIn?: string[] } } } = {}) => storedFindings.flatMap((finding) => (finding.actions as Array<Record<string, unknown>> | undefined ?? [])).filter((action) => (!where?.findingId || action.findingId === where.findingId) && (where?.required === undefined || action.required === where.required) && (!where?.status?.notIn || !where.status.notIn.includes(String(action.status)))).length),
       findFirst: vi.fn(async () => null),
       findMany: vi.fn(async () => []),
+    },
+    auditPlan: {
+      findUnique: vi.fn(async () => null),
+    },
+    auditTeamMember: {
+      count: vi.fn(async () => 0),
+    },
+    auditReport: {
+      findUnique: vi.fn(async ({ where }: { where: { auditId: string } }) => {
+        if (!reportReady || !storedAudits.some((audit) => audit.id === where.auditId)) return null
+        const sourceFingerprint = await auditReportSourceFingerprint(db as unknown as PrismaClient, where.auditId)
+        return { status: 'APPROVED', approvedVersion: { snapshotHash: sourceFingerprint, snapshot: { sourceFingerprint }, pdfEvidenceFile: { storageState: 'READY' } } }
+      }),
+    },
+    auditFollowUp: {
+      findUnique: vi.fn(async ({ where }: { where: { auditId: string } }) => storedFollowUps.find((item) => item.auditId === where.auditId) ?? null),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { const followUp = { id: `cmfollowup${storedFollowUps.length + 1}`, status: 'ENABLED', ...data }; storedFollowUps.push(followUp); return followUp }),
+      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => { const followUp = storedFollowUps.find((item) => item.id === where.id); if (!followUp) throw new Error('Follow-up not found'); Object.assign(followUp, data); return followUp }),
+    },
+    auditPlanActivityFinding: {
+      findFirst: vi.fn(async () => null),
     },
     auditEvidenceFile: {
       count: vi.fn(async () => 0),
@@ -289,7 +329,7 @@ function makeAuditDb(role: Role = 'COMPANY_ADMIN', userCompanyId = companyId) {
   db.$queryRaw = vi.fn(async () => [{ locked: true }])
   // Misma convención que el resto de arneses: la transacción ejecuta sobre el propio mock.
   db.$transaction = vi.fn(async (fn: (client: Record<string, unknown>) => Promise<unknown>) => fn(db))
-  return { db: db as unknown as PrismaClient, storedAudits, storedFindings, storedEvidences, storedEvents }
+  return { db: db as unknown as PrismaClient, storedAudits, storedFindings, storedEvidences, storedEvents, storedFollowUps }
 }
 
 async function loggedIn(db: PrismaClient, email = admin.email) {
@@ -444,12 +484,18 @@ describe('process audit API', () => {
     expect(inProgress.status).toBe(200)
     expect(inProgress.body.finding.status).toBe('IN_PROGRESS')
 
+    storedFindings[0].actions = [{ id: 'action-pending', findingId, required: true, status: 'OPEN', responsibleId: admin.id }]
+
     const resolvedWithoutText = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'RESOLVED' })
     expect(resolvedWithoutText.status).toBe(400)
 
     const resolved = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
-    expect(resolved.status).toBe(200)
-    expect(resolved.body.finding).toMatchObject({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
+    expect(resolved.status).toBe(409)
+    expect(resolved.body.error).toContain('corrective action')
+    storedFindings[0].actions[0].status = 'COMPLETED'
+    const resolvedAfterAction = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
+    expect(resolvedAfterAction.status).toBe(200)
+    expect(resolvedAfterAction.body.finding).toMatchObject({ status: 'RESOLVED', resolution: 'Capacitación programada y registrada.' })
 
     // Una No conformidad exige verificar la eficacia antes de VERIFIED (regla del servidor).
     const verifiedWithoutEfficacy = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'VERIFIED' })
@@ -459,6 +505,12 @@ describe('process audit API', () => {
     const withEfficacy = await agent.patch(`${findingPath}/${findingId}`).send({ efficacyVerification: 'Auditoría de seguimiento confirma la capacitación registrada.' })
     expect(withEfficacy.status).toBe(200)
     expect(withEfficacy.body.finding.efficacyVerification).toContain('capacitación')
+
+    storedFindings[0].actions[0].status = 'OPEN'
+    const verifiedWithPendingAction = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'VERIFIED' })
+    expect(verifiedWithPendingAction.status).toBe(409)
+    expect(verifiedWithPendingAction.body.error).toContain('verified')
+    storedFindings[0].actions[0].status = 'COMPLETED'
 
     const verified = await agent.post(`${findingPath}/${findingId}/status`).send({ status: 'VERIFIED' })
     expect(verified.status).toBe(200)
@@ -641,6 +693,35 @@ describe('process audit API', () => {
     expect((await agent.delete(`${listPath}/${anyId}`)).status).toBe(403)
     expect((await agent.post(`${listPath}/${anyId}/findings`).send({ title: 'Hallazgo', description: 'Descripción.', type: 'OBSERVATION', severity: 'MINOR' })).status).toBe(403)
     expect((await agent.post(`${listPath}/${anyId}/evidences`).send({ name: 'Evidencia', description: 'Descripción.', url: 'https://evidentia.test/e.pdf' })).status).toBe(403)
+  })
+
+  it('requires a current approved report PDF before closing an audit', async () => {
+    const { db } = makeAuditDb('COMPANY_ADMIN', companyId, { reportReady: false })
+    const agent = await loggedIn(db)
+    const created = await agent.post(listPath).send(payload)
+    const auditId = created.body.audit.id as string
+    expect((await agent.post(`${listPath}/${auditId}/status`).send({ status: 'IN_PROGRESS' })).status).toBe(200)
+    const closed = await agent.post(`${listPath}/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre bloqueado sin informe.' })
+    expect(closed.status).toBe(409)
+    expect(closed.body.reason).toBe('REPORT_PENDING')
+  })
+
+  it('closes with formal CAPA planning and enables the follow-up for pending findings', async () => {
+    const { db, storedFindings, storedFollowUps } = makeAuditDb()
+    const agent = await loggedIn(db)
+    const created = await agent.post(listPath).send(payload)
+    const auditId = created.body.audit.id as string
+    const finding = await agent.post(`${listPath}/${auditId}/findings`).send({ title: 'Pending finding', description: 'Requires formal treatment.', type: 'NONCONFORMITY', severity: 'MAJOR', responsibleId: admin.id })
+    expect(finding.status).toBe(201)
+    storedFindings[0].dueDate = new Date('2026-12-01T00:00:00.000Z')
+    storedFindings[0].actions = [{ id: 'action-formal', findingId: finding.body.finding.id, required: true, status: 'OPEN', responsibleId: admin.id, dueDate: new Date('2026-12-15T00:00:00.000Z'), implementationPlan: 'Plan formal de tratamiento.' }]
+    const followUp = await agent.post(`/api/audits/${auditId}/follow-up`).send({ scope: 'Seguimiento formal de acciones pendientes.', responsibleId: admin.id })
+    expect(followUp.status).toBe(201)
+    expect((await agent.post(`${listPath}/${auditId}/status`).send({ status: 'IN_PROGRESS' })).status).toBe(200)
+    const closed = await agent.post(`${listPath}/${auditId}/status`).send({ status: 'CLOSED', summary: 'Cierre con seguimiento CAPA formal.' })
+    expect(closed.status).toBe(200)
+    expect(storedFollowUps).toHaveLength(1)
+    expect(storedFollowUps[0]).toMatchObject({ auditId, status: 'ENABLED', responsibleId: admin.id })
   })
 
   it('hides another company process and rejects cross-company references', async () => {

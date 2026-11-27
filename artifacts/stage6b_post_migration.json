@@ -1,0 +1,652 @@
+{
+  "capturedAt": "2026-11-21T23:15:12.850Z",
+  "target": {
+    "host": "localhost",
+    "port": 5432,
+    "database": "EvidentIA",
+    "serverAddress": "::1/128",
+    "serverPort": 5432
+  },
+  "counts": {
+    "AuditProgram": 1,
+    "Audit": 1,
+    "Process": 3,
+    "AuditProgramProcessPriority": 2,
+    "Auditor": 2,
+    "AuditorCompetency": 1,
+    "AuditTeamMember": 2,
+    "AuditChecklist": 1,
+    "AuditChecklistItem": 7,
+    "AuditFinding": 1,
+    "AuditEvidence": 0,
+    "AuditCorrectiveAction": 0,
+    "AuditEvent": 25,
+    "AuditPlan": 0,
+    "AuditPlanActivity": 0
+  },
+  "oneToOne": {
+    "audits": 1,
+    "linked": 0
+  },
+  "columns": [
+    {
+      "table_name": "AuditPlan",
+      "column_name": "id",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "auditId",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "methodology",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "samplingMethod",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "resources",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "notes",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "status",
+      "data_type": "USER-DEFINED",
+      "udt_name": "AuditPlanStatus",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "preparedById",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "approvedById",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "approvedAt",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlan",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "id",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "auditPlanId",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "position",
+      "data_type": "integer",
+      "udt_name": "int4",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "type",
+      "data_type": "USER-DEFINED",
+      "udt_name": "AuditPlanActivityType",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "title",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "description",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "scheduledStart",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "scheduledEnd",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "location",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "responsibleId",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "processId",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "status",
+      "data_type": "USER-DEFINED",
+      "udt_name": "AuditPlanActivityStatus",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "notes",
+      "data_type": "text",
+      "udt_name": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "AuditPlanActivity",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "is_nullable": "NO"
+    }
+  ],
+  "enums": [
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "STATUS_CHANGED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "FINDING_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "FINDING_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "FINDING_STATUS_CHANGED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "FINDING_DELETED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_DELETED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_RELATIONS_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_DELETED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_ITEM_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_ITEM_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "CHECKLIST_ITEM_DELETED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_FILE_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_FILE_DELETED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_FILE_STORAGE_READY"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_FILE_STORAGE_FAILED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "EVIDENCE_FILE_DELETE_PENDING"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "ACTION_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "ACTION_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "ACTION_STATUS_CHANGED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "ACTION_PROGRESS_ADDED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "TEAM_MEMBER_ASSIGNED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "TEAM_MEMBER_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "TEAM_MEMBER_REMOVED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "INDEPENDENCE_EVALUATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_STATUS_CHANGED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_ACTIVITY_CREATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_ACTIVITY_UPDATED"
+    },
+    {
+      "enum_name": "AuditEventType",
+      "value": "AUDIT_PLAN_ACTIVITY_DELETED"
+    },
+    {
+      "enum_name": "AuditPlanActivityStatus",
+      "value": "PLANNED"
+    },
+    {
+      "enum_name": "AuditPlanActivityStatus",
+      "value": "IN_PROGRESS"
+    },
+    {
+      "enum_name": "AuditPlanActivityStatus",
+      "value": "COMPLETED"
+    },
+    {
+      "enum_name": "AuditPlanActivityStatus",
+      "value": "CANCELLED"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "OPENING_MEETING"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "DOCUMENT_REVIEW"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "INTERVIEW"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "PROCESS_REVIEW"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "CLOSING_MEETING"
+    },
+    {
+      "enum_name": "AuditPlanActivityType",
+      "value": "OTHER"
+    },
+    {
+      "enum_name": "AuditPlanStatus",
+      "value": "DRAFT"
+    },
+    {
+      "enum_name": "AuditPlanStatus",
+      "value": "READY"
+    },
+    {
+      "enum_name": "AuditPlanStatus",
+      "value": "APPROVED"
+    },
+    {
+      "enum_name": "AuditPlanStatus",
+      "value": "CANCELLED"
+    }
+  ],
+  "indexes": [
+    {
+      "tablename": "AuditPlan",
+      "indexname": "AuditPlan_approvedById_idx",
+      "indexdef": "CREATE INDEX \"AuditPlan_approvedById_idx\" ON public.\"AuditPlan\" USING btree (\"approvedById\")"
+    },
+    {
+      "tablename": "AuditPlan",
+      "indexname": "AuditPlan_auditId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"AuditPlan_auditId_key\" ON public.\"AuditPlan\" USING btree (\"auditId\")"
+    },
+    {
+      "tablename": "AuditPlan",
+      "indexname": "AuditPlan_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"AuditPlan_pkey\" ON public.\"AuditPlan\" USING btree (id)"
+    },
+    {
+      "tablename": "AuditPlan",
+      "indexname": "AuditPlan_preparedById_idx",
+      "indexdef": "CREATE INDEX \"AuditPlan_preparedById_idx\" ON public.\"AuditPlan\" USING btree (\"preparedById\")"
+    },
+    {
+      "tablename": "AuditPlan",
+      "indexname": "AuditPlan_status_idx",
+      "indexdef": "CREATE INDEX \"AuditPlan_status_idx\" ON public.\"AuditPlan\" USING btree (status)"
+    },
+    {
+      "tablename": "AuditPlanActivity",
+      "indexname": "AuditPlanActivity_auditPlanId_scheduledStart_idx",
+      "indexdef": "CREATE INDEX \"AuditPlanActivity_auditPlanId_scheduledStart_idx\" ON public.\"AuditPlanActivity\" USING btree (\"auditPlanId\", \"scheduledStart\")"
+    },
+    {
+      "tablename": "AuditPlanActivity",
+      "indexname": "AuditPlanActivity_auditPlanId_status_idx",
+      "indexdef": "CREATE INDEX \"AuditPlanActivity_auditPlanId_status_idx\" ON public.\"AuditPlanActivity\" USING btree (\"auditPlanId\", status)"
+    },
+    {
+      "tablename": "AuditPlanActivity",
+      "indexname": "AuditPlanActivity_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"AuditPlanActivity_pkey\" ON public.\"AuditPlanActivity\" USING btree (id)"
+    },
+    {
+      "tablename": "AuditPlanActivity",
+      "indexname": "AuditPlanActivity_processId_idx",
+      "indexdef": "CREATE INDEX \"AuditPlanActivity_processId_idx\" ON public.\"AuditPlanActivity\" USING btree (\"processId\")"
+    },
+    {
+      "tablename": "AuditPlanActivity",
+      "indexname": "AuditPlanActivity_responsibleId_idx",
+      "indexdef": "CREATE INDEX \"AuditPlanActivity_responsibleId_idx\" ON public.\"AuditPlanActivity\" USING btree (\"responsibleId\")"
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_name": "AuditPlan_approvedById_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlan\"",
+      "definition": "FOREIGN KEY (\"approvedById\") REFERENCES \"User\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "constraint_name": "AuditPlan_auditId_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlan\"",
+      "definition": "FOREIGN KEY (\"auditId\") REFERENCES \"Audit\"(id) ON UPDATE CASCADE ON DELETE CASCADE"
+    },
+    {
+      "constraint_name": "AuditPlan_auditId_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL \"auditId\""
+    },
+    {
+      "constraint_name": "AuditPlan_createdAt_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "constraint_name": "AuditPlan_id_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL id"
+    },
+    {
+      "constraint_name": "AuditPlan_methodology_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL methodology"
+    },
+    {
+      "constraint_name": "AuditPlan_pkey",
+      "constraint_type": "p",
+      "table_name": "\"AuditPlan\"",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "constraint_name": "AuditPlan_preparedById_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlan\"",
+      "definition": "FOREIGN KEY (\"preparedById\") REFERENCES \"User\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "constraint_name": "AuditPlan_status_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL status"
+    },
+    {
+      "constraint_name": "AuditPlan_updatedAt_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlan\"",
+      "definition": "NOT NULL \"updatedAt\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_auditPlanId_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "FOREIGN KEY (\"auditPlanId\") REFERENCES \"AuditPlan\"(id) ON UPDATE CASCADE ON DELETE CASCADE"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_auditPlanId_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"auditPlanId\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_createdAt_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_id_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL id"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_pkey",
+      "constraint_type": "p",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_position_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"position\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_processId_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "FOREIGN KEY (\"processId\") REFERENCES \"Process\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_responsibleId_fkey",
+      "constraint_type": "f",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "FOREIGN KEY (\"responsibleId\") REFERENCES \"User\"(id) ON UPDATE CASCADE ON DELETE SET NULL"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_scheduledEnd_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"scheduledEnd\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_scheduledStart_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"scheduledStart\""
+    },
+    {
+      "constraint_name": "AuditPlanActivity_status_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL status"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_title_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL title"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_type_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL type"
+    },
+    {
+      "constraint_name": "AuditPlanActivity_updatedAt_not_null",
+      "constraint_type": "n",
+      "table_name": "\"AuditPlanActivity\"",
+      "definition": "NOT NULL \"updatedAt\""
+    }
+  ],
+  "auditProgram": {
+    "id": "cmwpc4fgv0004gcl5hc0i38ig",
+    "code": "PA-001",
+    "status": "ACTIVE"
+  },
+  "audit": {
+    "id": "cmvy7eklk0019zgl5be78l2fy",
+    "code": "AUD-001",
+    "status": "IN_PROGRESS",
+    "auditProgramId": null
+  },
+  "teamMembers": [
+    {
+      "id": "cmwqytpfc0000col5dnj0dydq",
+      "role": "LEAD",
+      "isActive": true,
+      "independenceStatus": "MITIGATED",
+      "name": "Auditor Interno de Prueba",
+      "email": "auditor.interno.prueba@example.com"
+    },
+    {
+      "id": "cmwqz9m4c0004col5x8ljln0e",
+      "role": "MEMBER",
+      "isActive": true,
+      "independenceStatus": "CLEAR",
+      "name": "Alimentos del Eje S.A.S.",
+      "email": "auditor.externo.prueba@example.com"
+    }
+  ],
+  "migration": "20261121020000_add_audit_plans_and_agenda"
+}

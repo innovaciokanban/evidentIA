@@ -1,0 +1,764 @@
+{
+    "audit001": {
+        "eventIds": [
+            "cmvy7ekrl001azgl5x09edccp",
+            "cmvyczd8r00004sl5c396i2q8",
+            "cmvydemgg00024sl5ipkea4dp",
+            "cmvyjpi0p00044sl5jk7bo0np",
+            "cmvyjpi6s00064sl5l9w4jipw",
+            "cmvyjpic500084sl5jtctblf0",
+            "cmvyjpifg000a4sl5lxx5o3x3",
+            "cmvyjpijw000c4sl51zl3jwy1",
+            "cmvyjpimd000e4sl52if1nve5",
+            "cmvzhyk720000rcl58n8pa4ul",
+            "cmvzhz21e0001rcl5w34uj21j",
+            "cmvzhzfky0002rcl5fojtzv81",
+            "cmvzi3k030003rcl52ul9a9wz",
+            "cmw1h3v730001lwl5saxd6m2s",
+            "cmw1h6vli0003lwl566mg3rb5",
+            "cmw1h6vry0004lwl5z8gq0crc",
+            "cmw1h76kp0005lwl5hhnsuskl",
+            "cmw2qxdrz0001jsl5k6nyq8bi",
+            "cmw2r6ezl0002jsl5q89vwxn7",
+            "cmw2v1ayi0004jsl590m4sun9",
+            "cmwqytphz0001col5cftve3gv",
+            "cmwqyxf6j0002col5o8r05cdk",
+            "cmwqz0ixl0003col5nkis34xd",
+            "cmwqz9m530005col5oyss3dtc",
+            "cmwqzbszi0006col5ob7y3vtu",
+            "cmwr347310001qkl59ehvp4fj",
+            "cmwr3chbc0003qkl5x6mhclyj",
+            "cmwr7e5yo0000wcl56hv0w16j",
+            "cmwr7e6220003wcl59kilf90x",
+            "cmwr7h7zl0005wcl52qkuvgmq",
+            "cmwr7h84h0007wcl5lfb4o8qb",
+            "cmwr7jtzb0008wcl5izxmc6x0",
+            "cmwr7ju1t000awcl5ey30new6",
+            "cmwr7nx0z000cwcl516sxk9js",
+            "cmwr7nx3n000ewcl5qfq408lw",
+            "cmwr7rc4j000gwcl5jc0isjh1",
+            "cmwr7rc75000iwcl55fq4d6do",
+            "cmws7qv600000bwl5v012yenf",
+            "cmws7qv8z0002bwl5c1pzmdna",
+            "cmws7t98a0003bwl5g669kli5",
+            "cmws7u7hb0004bwl5kht5ankx",
+            "cmws7xd8h0006bwl59oh80pw3",
+            "cmws8rpj60007bwl5rd88gtrh",
+            "cmws8rpl90009bwl5zwjpto2r",
+            "cmws8s1ql000abwl51dpfv5s5",
+            "cmws8vgyt000bbwl5m3w54jrk"
+        ],
+        "activities": [
+            {
+                "id": "cmwr3chao0002qkl5d1iiqnzj",
+                "type": "OPENING_MEETING",
+                "notes": "algunas notas",
+                "title": "Reunión de apertura",
+                "status": "PLANNED",
+                "location": "Presencial",
+                "position": 0,
+                "actualEnd": null,
+                "processId": null,
+                "actualStart": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "descripcion",
+                "startedById": null,
+                "scheduledEnd": "2026-11-16T13:30:00",
+                "completedById": null,
+                "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+                "scheduledStart": "2026-11-16T13:00:00",
+                "executionResult": null,
+                "executionObservations": null
+            },
+            {
+                "id": "cmwr7h7xn0004wcl55o0i2p0c",
+                "type": "OTHER",
+                "notes": null,
+                "title": "Revisión de Direccionamiento estratégico",
+                "status": "PLANNED",
+                "location": null,
+                "position": 1,
+                "actualEnd": null,
+                "processId": "cmvy52tb70000zgl5rngbrklj",
+                "actualStart": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": null,
+                "startedById": null,
+                "scheduledEnd": "2026-11-16T15:00:00",
+                "completedById": null,
+                "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+                "scheduledStart": "2026-11-16T13:30:00",
+                "executionResult": null,
+                "executionObservations": null
+            },
+            {
+                "id": "cmwr7nx0f000bwcl5375v2a80",
+                "type": "PROCESS_REVIEW",
+                "notes": null,
+                "title": "Revisión del proceso de Prestación del servicio de consultoría",
+                "status": "PLANNED",
+                "location": "Sala",
+                "position": 2,
+                "actualEnd": null,
+                "processId": "cmvy564610002zgl5gxi21ozo",
+                "actualStart": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Evaluación del cumplimiento de los procedimientos de consultoría, requisitos del cliente, planificación y ejecución del servicio, indicadores de desempeño, controles operacionales y evidencias documentadas.",
+                "startedById": null,
+                "scheduledEnd": "2026-11-16T16:45:00",
+                "completedById": null,
+                "responsibleId": null,
+                "scheduledStart": "2026-11-16T15:15:00",
+                "executionResult": null,
+                "executionObservations": null
+            },
+            {
+                "id": "cmwr7rc3z000fwcl50ro42ff4",
+                "type": "PROCESS_REVIEW",
+                "notes": null,
+                "title": "Revisión del proceso de Gestión administrativa y financiera",
+                "status": "PLANNED",
+                "location": "presencial",
+                "position": 3,
+                "actualEnd": null,
+                "processId": null,
+                "actualStart": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Verificación de la gestión de recursos, controles administrativos y financieros, cumplimiento de procedimientos, indicadores de desempeño, gestión de riesgos y registros que evidencien la eficacia del proceso.",
+                "startedById": null,
+                "scheduledEnd": "2026-11-17T14:30:00",
+                "completedById": null,
+                "responsibleId": null,
+                "scheduledStart": "2026-11-17T13:00:00",
+                "executionResult": null,
+                "executionObservations": null
+            },
+            {
+                "id": "cmws7xd7x0005bwl5bm6l8qh8",
+                "type": "OTHER",
+                "notes": null,
+                "title": "Revisión de evidencias",
+                "status": "PLANNED",
+                "location": null,
+                "position": 4,
+                "actualEnd": null,
+                "processId": null,
+                "actualStart": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Consolidación y revisión de evidencias, verificación de hallazgos y evaluación del cumplimiento de los criterios de auditoría.",
+                "startedById": null,
+                "scheduledEnd": "2026-11-17T16:59:00",
+                "completedById": null,
+                "responsibleId": null,
+                "scheduledStart": "2026-11-17T15:00:00",
+                "executionResult": null,
+                "executionObservations": null
+            }
+        ],
+        "auditAndPlan": {
+            "id": "cmvy7eklk0019zgl5be78l2fy",
+            "code": "AUD-001",
+            "scope": "La auditoría comprende los procesos de Direccionamiento estratégico, Prestación del servicio de consultoría y Gestión administrativa y financiera. Incluye la revisión documental, entrevistas, evaluación de indicadores, identificación de riesgos, verificación de controles y seguimiento a acciones de mejora correspondientes al periodo de enero a octubre de 2026.",
+            "title": "Auditoría interna del Sistema de Gestión de Calidad",
+            "status": "IN_PROGRESS",
+            "endDate": null,
+            "plan_id": "cmwr3472b0000qkl5mn1vmzcb",
+            "summary": null,
+            "criteria": "ISO 9001:2015, especialmente numerales 4.4, 6.1, 6.2, 7.5, 8.1, 8.2, 9.1, 9.2 y 10.2.\nPolítica y objetivos de calidad.\nProcedimientos documentados de los tres procesos.\nMatriz de riesgos y controles.\nIndicadores KPI y registros de seguimiento.\nRequisitos contractuales aplicables.",
+            "auditType": "Interna",
+            "createdAt": "2026-11-01T19:09:09.704",
+            "processId": "cmvy52tb70000zgl5rngbrklj",
+            "startDate": "2026-11-02T16:52:24.577",
+            "updatedAt": "2026-11-02T16:52:24.603",
+            "objectives": "Evaluar la conformidad, implementación y eficacia del Sistema de Gestión de Calidad de la organización frente a los requisitos de ISO 9001:2015, los procedimientos internos y los objetivos organizacionales, identificando fortalezas, no conformidades y oportunidades de mejora.",
+            "plan_status": "APPROVED",
+            "plannedDate": "2026-11-16T00:00:00",
+            "driveFolderId": null,
+            "leadAuditorId": "cmvsjj8zs0001vgl51rwldgnl",
+            "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+            "auditProgramId": null,
+            "storageDeletionRequestedAt": null
+        },
+        "resourceCounts": {
+            "events": 46,
+            "findings": 1,
+            "evidences": 0,
+            "checklists": 1,
+            "evidenceFiles": 1,
+            "checklistItems": 7,
+            "correctiveActions": 0
+        },
+        "activityAuditors": [
+            {
+                "id": "cmwr7e61p0001wcl54um0k1t5",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr3chao0002qkl5d1iiqnzj",
+                "assignedAt": "2026-11-22T02:14:09.949",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7e61x0002wcl5evpf6a3j",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr3chao0002qkl5d1iiqnzj",
+                "assignedAt": "2026-11-22T02:14:09.957",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7h84a0006wcl5v1etos2a",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": false,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": "2026-11-22T02:18:34.324",
+                "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                "assignedAt": "2026-11-22T02:16:32.602",
+                "removedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7ju1o0009wcl5iz2jv4d8",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                "assignedAt": "2026-11-22T02:18:34.332",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7nx3f000dwcl5y724jp3y",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                "assignedAt": "2026-11-22T02:21:44.907",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7rc70000hwcl5qxwln79l",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7rc3z000fwcl50ro42ff4",
+                "assignedAt": "2026-11-22T02:24:24.444",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmws7qv8u0001bwl5uxmxvtyg",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                "assignedAt": "2026-11-22T19:11:48.654",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmws8rpky0008bwl51ilgs9hz",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmws7xd7x0005bwl5bm6l8qh8",
+                "assignedAt": "2026-11-22T19:40:27.586",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            }
+        ]
+    },
+    "database": "EvidentIA",
+    "migration": "20261122000000_add_audit_activity_execution",
+    "newSchema": {
+        "indexes": [
+            {
+                "index": "AuditPlanActivity_auditPlanId_scheduledStart_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_auditPlanId_scheduledStart_idx\" ON public.\"AuditPlanActivity\" USING btree (\"auditPlanId\", \"scheduledStart\")"
+            },
+            {
+                "index": "AuditPlanActivity_auditPlanId_status_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_auditPlanId_status_idx\" ON public.\"AuditPlanActivity\" USING btree (\"auditPlanId\", status)"
+            },
+            {
+                "index": "AuditPlanActivity_completedById_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_completedById_idx\" ON public.\"AuditPlanActivity\" USING btree (\"completedById\")"
+            },
+            {
+                "index": "AuditPlanActivity_pkey",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivity_pkey\" ON public.\"AuditPlanActivity\" USING btree (id)"
+            },
+            {
+                "index": "AuditPlanActivity_processId_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_processId_idx\" ON public.\"AuditPlanActivity\" USING btree (\"processId\")"
+            },
+            {
+                "index": "AuditPlanActivity_responsibleId_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_responsibleId_idx\" ON public.\"AuditPlanActivity\" USING btree (\"responsibleId\")"
+            },
+            {
+                "index": "AuditPlanActivity_startedById_idx",
+                "table": "AuditPlanActivity",
+                "definition": "CREATE INDEX \"AuditPlanActivity_startedById_idx\" ON public.\"AuditPlanActivity\" USING btree (\"startedById\")"
+            },
+            {
+                "index": "AuditPlanActivityChecklistItem_activityId_isActive_idx",
+                "table": "AuditPlanActivityChecklistItem",
+                "definition": "CREATE INDEX \"AuditPlanActivityChecklistItem_activityId_isActive_idx\" ON public.\"AuditPlanActivityChecklistItem\" USING btree (\"activityId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityChecklistItem_activityId_itemId_key",
+                "table": "AuditPlanActivityChecklistItem",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityChecklistItem_activityId_itemId_key\" ON public.\"AuditPlanActivityChecklistItem\" USING btree (\"activityId\", \"itemId\")"
+            },
+            {
+                "index": "AuditPlanActivityChecklistItem_itemId_isActive_idx",
+                "table": "AuditPlanActivityChecklistItem",
+                "definition": "CREATE INDEX \"AuditPlanActivityChecklistItem_itemId_isActive_idx\" ON public.\"AuditPlanActivityChecklistItem\" USING btree (\"itemId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityChecklistItem_pkey",
+                "table": "AuditPlanActivityChecklistItem",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityChecklistItem_pkey\" ON public.\"AuditPlanActivityChecklistItem\" USING btree (id)"
+            },
+            {
+                "index": "AuditPlanActivityEvidence_activityId_evidenceId_key",
+                "table": "AuditPlanActivityEvidence",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityEvidence_activityId_evidenceId_key\" ON public.\"AuditPlanActivityEvidence\" USING btree (\"activityId\", \"evidenceId\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidence_activityId_isActive_idx",
+                "table": "AuditPlanActivityEvidence",
+                "definition": "CREATE INDEX \"AuditPlanActivityEvidence_activityId_isActive_idx\" ON public.\"AuditPlanActivityEvidence\" USING btree (\"activityId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidence_evidenceId_isActive_idx",
+                "table": "AuditPlanActivityEvidence",
+                "definition": "CREATE INDEX \"AuditPlanActivityEvidence_evidenceId_isActive_idx\" ON public.\"AuditPlanActivityEvidence\" USING btree (\"evidenceId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidence_pkey",
+                "table": "AuditPlanActivityEvidence",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityEvidence_pkey\" ON public.\"AuditPlanActivityEvidence\" USING btree (id)"
+            },
+            {
+                "index": "AuditPlanActivityEvidenceFile_activityId_evidenceFileId_key",
+                "table": "AuditPlanActivityEvidenceFile",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityEvidenceFile_activityId_evidenceFileId_key\" ON public.\"AuditPlanActivityEvidenceFile\" USING btree (\"activityId\", \"evidenceFileId\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidenceFile_activityId_isActive_idx",
+                "table": "AuditPlanActivityEvidenceFile",
+                "definition": "CREATE INDEX \"AuditPlanActivityEvidenceFile_activityId_isActive_idx\" ON public.\"AuditPlanActivityEvidenceFile\" USING btree (\"activityId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidenceFile_evidenceFileId_isActive_idx",
+                "table": "AuditPlanActivityEvidenceFile",
+                "definition": "CREATE INDEX \"AuditPlanActivityEvidenceFile_evidenceFileId_isActive_idx\" ON public.\"AuditPlanActivityEvidenceFile\" USING btree (\"evidenceFileId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityEvidenceFile_pkey",
+                "table": "AuditPlanActivityEvidenceFile",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityEvidenceFile_pkey\" ON public.\"AuditPlanActivityEvidenceFile\" USING btree (id)"
+            },
+            {
+                "index": "AuditPlanActivityFinding_activityId_findingId_key",
+                "table": "AuditPlanActivityFinding",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityFinding_activityId_findingId_key\" ON public.\"AuditPlanActivityFinding\" USING btree (\"activityId\", \"findingId\")"
+            },
+            {
+                "index": "AuditPlanActivityFinding_activityId_isActive_idx",
+                "table": "AuditPlanActivityFinding",
+                "definition": "CREATE INDEX \"AuditPlanActivityFinding_activityId_isActive_idx\" ON public.\"AuditPlanActivityFinding\" USING btree (\"activityId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityFinding_findingId_isActive_idx",
+                "table": "AuditPlanActivityFinding",
+                "definition": "CREATE INDEX \"AuditPlanActivityFinding_findingId_isActive_idx\" ON public.\"AuditPlanActivityFinding\" USING btree (\"findingId\", \"isActive\")"
+            },
+            {
+                "index": "AuditPlanActivityFinding_pkey",
+                "table": "AuditPlanActivityFinding",
+                "definition": "CREATE UNIQUE INDEX \"AuditPlanActivityFinding_pkey\" ON public.\"AuditPlanActivityFinding\" USING btree (id)"
+            }
+        ],
+        "constraints": [
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_activityId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_activityId_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_id_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_isActive_not_null"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_itemId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_itemId_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_linkedAt_not_null"
+            },
+            {
+                "type": "PRIMARY KEY",
+                "table": "AuditPlanActivityChecklistItem",
+                "constraint": "AuditPlanActivityChecklistItem_pkey"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_activityId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_activityId_not_null"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_evidenceId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_evidenceId_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_id_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_isActive_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_linkedAt_not_null"
+            },
+            {
+                "type": "PRIMARY KEY",
+                "table": "AuditPlanActivityEvidence",
+                "constraint": "AuditPlanActivityEvidence_pkey"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_activityId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_activityId_not_null"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_evidenceFileId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_evidenceFileId_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_id_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_isActive_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_linkedAt_not_null"
+            },
+            {
+                "type": "PRIMARY KEY",
+                "table": "AuditPlanActivityEvidenceFile",
+                "constraint": "AuditPlanActivityEvidenceFile_pkey"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_activityId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_activityId_not_null"
+            },
+            {
+                "type": "FOREIGN KEY",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_findingId_fkey"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_findingId_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_id_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_isActive_not_null"
+            },
+            {
+                "type": "CHECK",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_linkedAt_not_null"
+            },
+            {
+                "type": "PRIMARY KEY",
+                "table": "AuditPlanActivityFinding",
+                "constraint": "AuditPlanActivityFinding_pkey"
+            }
+        ],
+        "auditPlanActivityColumns": [
+            {
+                "type": "text",
+                "column": "id",
+                "nullable": "NO"
+            },
+            {
+                "type": "text",
+                "column": "auditPlanId",
+                "nullable": "NO"
+            },
+            {
+                "type": "integer",
+                "column": "position",
+                "nullable": "NO"
+            },
+            {
+                "type": "USER-DEFINED",
+                "column": "type",
+                "nullable": "NO"
+            },
+            {
+                "type": "text",
+                "column": "title",
+                "nullable": "NO"
+            },
+            {
+                "type": "text",
+                "column": "description",
+                "nullable": "YES"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "scheduledStart",
+                "nullable": "NO"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "scheduledEnd",
+                "nullable": "NO"
+            },
+            {
+                "type": "text",
+                "column": "location",
+                "nullable": "YES"
+            },
+            {
+                "type": "text",
+                "column": "responsibleId",
+                "nullable": "YES"
+            },
+            {
+                "type": "text",
+                "column": "processId",
+                "nullable": "YES"
+            },
+            {
+                "type": "USER-DEFINED",
+                "column": "status",
+                "nullable": "NO"
+            },
+            {
+                "type": "text",
+                "column": "notes",
+                "nullable": "YES"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "createdAt",
+                "nullable": "NO"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "updatedAt",
+                "nullable": "NO"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "actualStart",
+                "nullable": "YES"
+            },
+            {
+                "type": "timestamp without time zone",
+                "column": "actualEnd",
+                "nullable": "YES"
+            },
+            {
+                "type": "USER-DEFINED",
+                "column": "executionResult",
+                "nullable": "YES"
+            },
+            {
+                "type": "text",
+                "column": "executionObservations",
+                "nullable": "YES"
+            },
+            {
+                "type": "text",
+                "column": "startedById",
+                "nullable": "YES"
+            },
+            {
+                "type": "text",
+                "column": "completedById",
+                "nullable": "YES"
+            }
+        ],
+        "auditActivityResultValues": [
+            "SATISFACTORY",
+            "PARTIAL",
+            "ISSUE",
+            "NOT_APPLICABLE"
+        ]
+    },
+    "serverPort": 5432,
+    "generatedAt": "2026-11-22T18:29:48.143557-05:00",
+    "tableCounts": {
+        "Audit": 1,
+        "Auditor": 2,
+        "AuditPlan": 1,
+        "AuditEvent": 46,
+        "AuditFinding": 1,
+        "AuditProgram": 1,
+        "AuditEvidence": 0,
+        "AuditChecklist": 1,
+        "AuditTeamMember": 2,
+        "AuditEvidenceFile": 1,
+        "AuditPlanActivity": 5,
+        "AuditChecklistItem": 7,
+        "AuditCorrectiveAction": 0,
+        "AuditPlanActivityAuditor": 8,
+        "AuditPlanActivityFinding": 0,
+        "AuditPlanActivityEvidence": 0,
+        "AuditPlanActivityEvidenceFile": 0,
+        "AuditPlanActivityChecklistItem": 0
+    }
+}

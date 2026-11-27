@@ -12,6 +12,17 @@ enum Role {
   COMPANY_USER
 }
 
+enum AuditorType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum AuditorStatus {
+  AVAILABLE
+  UNAVAILABLE
+  INACTIVE
+}
+
 enum LearningCourseStatus {
   DRAFT
   PUBLISHED
@@ -155,6 +166,12 @@ enum CheckyCategory {
   NEXT_STEPS
 }
 
+enum AuditCheckySuggestionKind {
+  ROOT_CAUSE
+  ROOT_CAUSE_ANALYSIS
+  CORRECTIVE_ACTION
+}
+
 enum StrategicObjectiveStatus {
   DRAFT
   APPROVED
@@ -282,74 +299,112 @@ enum RiskAuditEventType {
 }
 
 model User {
-  id                                             String                         @id @default(cuid())
-  email                                          String                         @unique
+  id                                             String                                @id @default(cuid())
+  email                                          String                                @unique
   name                                           String
   passwordHash                                   String
   role                                           Role
-  isActive                                       Boolean                        @default(true)
+  isActive                                       Boolean                               @default(true)
   companyId                                      String?
-  company                                        Company?                       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company                                        Company?                              @relation(fields: [companyId], references: [id], onDelete: SetNull)
   sessions                                       Session[]
-  createdTickets                                 Ticket[]                       @relation("CreatedTickets")
-  assignedTickets                                Ticket[]                       @relation("AssignedTickets")
-  ticketAuditEvents                              TicketAuditEvent[]             @relation("TicketAuditActors")
-  ticketDriveReferences                          TicketDriveReference[]         @relation("TicketDriveReferenceCreators")
-  createdDiagnostics                             QualityDiagnostic[]            @relation("CreatedDiagnostics")
-  createdActionPlans                             ActionPlan[]                   @relation("CreatedActionPlans")
-  responsibleItems                               ActionItem[]                   @relation("ResponsibleActionItems")
-  createdCrosses                                 StrategicCross[]               @relation("CreatedStrategicCrosses")
-  createdCheckySessions                          CheckySession[]                @relation("CreatedCheckySessions")
-  createdCrossWeightings                         StrategicCrossWeighting[]      @relation("CreatedCrossWeightings")
-  createdStrategyWeightings                      StrategyWeighting[]            @relation("CreatedStrategyWeightings")
-  responsibleProcesses                           Process[]                      @relation("ResponsibleProcesses")
-  riskOwnerRisks                                 Risk[]                         @relation("RiskOwners")
-  mitigationOwnerRisks                           Risk[]                         @relation("RiskMitigationOwners")
-  riskApprovalRequests                           RiskApproval[]                 @relation("RiskApprovalRequesters")
-  riskApprovalDecisions                          RiskApproval[]                 @relation("RiskApprovalDeciders")
-  ticketAssignmentRequests                       TicketAssignmentApproval[]     @relation("TicketAssignmentRequests")
-  ticketAssignmentCandidates                     TicketAssignmentApproval[]     @relation("TicketAssignmentCandidates")
-  previousTicketAssignees                        TicketAssignmentApproval[]     @relation("PreviousTicketAssignees")
-  ticketAssignmentDecisions                      TicketAssignmentApproval[]     @relation("TicketAssignmentDecisions")
+  createdTickets                                 Ticket[]                              @relation("CreatedTickets")
+  assignedTickets                                Ticket[]                              @relation("AssignedTickets")
+  ticketAuditEvents                              TicketAuditEvent[]                    @relation("TicketAuditActors")
+  ticketDriveReferences                          TicketDriveReference[]                @relation("TicketDriveReferenceCreators")
+  createdDiagnostics                             QualityDiagnostic[]                   @relation("CreatedDiagnostics")
+  createdActionPlans                             ActionPlan[]                          @relation("CreatedActionPlans")
+  responsibleItems                               ActionItem[]                          @relation("ResponsibleActionItems")
+  createdCrosses                                 StrategicCross[]                      @relation("CreatedStrategicCrosses")
+  createdCheckySessions                          CheckySession[]                       @relation("CreatedCheckySessions")
+  createdCrossWeightings                         StrategicCrossWeighting[]             @relation("CreatedCrossWeightings")
+  createdStrategyWeightings                      StrategyWeighting[]                   @relation("CreatedStrategyWeightings")
+  responsibleProcesses                           Process[]                             @relation("ResponsibleProcesses")
+  riskOwnerRisks                                 Risk[]                                @relation("RiskOwners")
+  mitigationOwnerRisks                           Risk[]                                @relation("RiskMitigationOwners")
+  riskApprovalRequests                           RiskApproval[]                        @relation("RiskApprovalRequesters")
+  riskApprovalDecisions                          RiskApproval[]                        @relation("RiskApprovalDeciders")
+  ticketAssignmentRequests                       TicketAssignmentApproval[]            @relation("TicketAssignmentRequests")
+  ticketAssignmentCandidates                     TicketAssignmentApproval[]            @relation("TicketAssignmentCandidates")
+  previousTicketAssignees                        TicketAssignmentApproval[]            @relation("PreviousTicketAssignees")
+  ticketAssignmentDecisions                      TicketAssignmentApproval[]            @relation("TicketAssignmentDecisions")
   notifications                                  Notification[]
-  evidenceUploads                                TicketEvidenceFile[]           @relation("TicketEvidenceUploaders")
-  processChanges                                 ProcessChange[]                @relation("ProcessChangeActors")
-  riskAuditEvents                                RiskAuditEvent[]               @relation("RiskAuditActors")
-  reportResponsibleKpis                          Kpi[]                          @relation("ReportResponsibleKpis")
-  monitorResponsibleKpis                         Kpi[]                          @relation("MonitorResponsibleKpis")
-  reportResponsibleProcessIndicators             ProcessIndicator[]             @relation("ReportResponsibleProcessIndicators")
-  monitorResponsibleProcessIndicators            ProcessIndicator[]             @relation("MonitorResponsibleProcessIndicators")
-  reportResponsibleProcedureIndicators           ProcedureIndicator[]           @relation("ReportResponsibleProcedureIndicators")
-  monitorResponsibleProcedureIndicators          ProcedureIndicator[]           @relation("MonitorResponsibleProcedureIndicators")
-  reportResponsibleStrategicObjectiveIndicators  StrategicObjectiveIndicator[]  @relation("ReportResponsibleStrategicObjectiveIndicators")
-  monitorResponsibleStrategicObjectiveIndicators StrategicObjectiveIndicator[]  @relation("MonitorResponsibleStrategicObjectiveIndicators")
-  responsibleProcedures                          Procedure[]                    @relation("ProcedureResponsibles")
+  evidenceUploads                                TicketEvidenceFile[]                  @relation("TicketEvidenceUploaders")
+  processChanges                                 ProcessChange[]                       @relation("ProcessChangeActors")
+  riskAuditEvents                                RiskAuditEvent[]                      @relation("RiskAuditActors")
+  reportResponsibleKpis                          Kpi[]                                 @relation("ReportResponsibleKpis")
+  monitorResponsibleKpis                         Kpi[]                                 @relation("MonitorResponsibleKpis")
+  reportResponsibleProcessIndicators             ProcessIndicator[]                    @relation("ReportResponsibleProcessIndicators")
+  monitorResponsibleProcessIndicators            ProcessIndicator[]                    @relation("MonitorResponsibleProcessIndicators")
+  reportResponsibleProcedureIndicators           ProcedureIndicator[]                  @relation("ReportResponsibleProcedureIndicators")
+  monitorResponsibleProcedureIndicators          ProcedureIndicator[]                  @relation("MonitorResponsibleProcedureIndicators")
+  reportResponsibleStrategicObjectiveIndicators  StrategicObjectiveIndicator[]         @relation("ReportResponsibleStrategicObjectiveIndicators")
+  monitorResponsibleStrategicObjectiveIndicators StrategicObjectiveIndicator[]         @relation("MonitorResponsibleStrategicObjectiveIndicators")
+  responsibleProcedures                          Procedure[]                           @relation("ProcedureResponsibles")
   procedureStepResponsibles                      ProcedureStepResponsible[]
-  procedureVersions                              ProcedureVersion[]             @relation("ProcedureVersionActors")
-  auditLeadAuditors                              Audit[]                        @relation("AuditLeadAuditors")
-  auditResponsibles                              Audit[]                        @relation("AuditResponsibles")
-  auditFindingResponsibles                       AuditFinding[]                 @relation("AuditFindingResponsibles")
-  auditFindingVerifiers                          AuditFinding[]                 @relation("AuditFindingVerifiers")
-  auditFindingEfficacyVerifiers                  AuditFinding[]                 @relation("AuditFindingEfficacyVerifiers")
-  auditEvents                                    AuditEvent[]                   @relation("AuditEventActors")
-  auditActionResponsibles                        AuditCorrectiveAction[]        @relation("AuditActionResponsibles")
-  auditActionProgressCreators                    AuditActionProgress[]          @relation("AuditActionProgressCreators")
-  auditEvidenceUploaders                         AuditEvidenceFile[]            @relation("AuditEvidenceUploaders")
-  createdStrategicObjectives                     StrategicObjective[]           @relation("CreatedStrategicObjectives")
-  requestedStrategicObjectiveSuggestions         StrategicObjectiveSuggestion[] @relation("RequestedStrategicObjectiveSuggestions")
-  strategicObjectiveLinks                        StrategicObjectiveStrategy[]   @relation("LinkedStrategicObjectiveStrategies")
-  strategicObjectiveHistory                      StrategicObjectiveHistory[]    @relation("StrategicObjectiveHistoryActors")
-  createdLearningCourses                         LearningCourse[]               @relation("LearningCourseCreators")
-  updatedLearningCourses                         LearningCourse[]               @relation("LearningCourseUpdaters")
-  createdLearningVersions                        LearningCourseVersion[]        @relation("LearningVersionCreators")
-  updatedLearningVersions                        LearningCourseVersion[]        @relation("LearningVersionUpdaters")
-  learningEnrollments                            LearningEnrollment[]           @relation("LearningEnrollmentUsers")
-  assignedLearningEnrollments                    LearningEnrollment[]           @relation("LearningEnrollmentAssigners")
+  procedureVersions                              ProcedureVersion[]                    @relation("ProcedureVersionActors")
+  auditLeadAuditors                              Audit[]                               @relation("AuditLeadAuditors")
+  auditResponsibles                              Audit[]                               @relation("AuditResponsibles")
+  auditProgramResponsibles                       AuditProgram[]                        @relation("AuditProgramResponsibles")
+  auditProgramProcessPriorityEvaluations         AuditProgramProcessPriority[]         @relation("AuditProgramProcessPriorityEvaluators")
+  auditFindingResponsibles                       AuditFinding[]                        @relation("AuditFindingResponsibles")
+  auditFindingVerifiers                          AuditFinding[]                        @relation("AuditFindingVerifiers")
+  auditFindingEfficacyVerifiers                  AuditFinding[]                        @relation("AuditFindingEfficacyVerifiers")
+  auditEvents                                    AuditEvent[]                          @relation("AuditEventActors")
+  auditActionResponsibles                        AuditCorrectiveAction[]               @relation("AuditActionResponsibles")
+  auditActionProgressCreators                    AuditActionProgress[]                 @relation("AuditActionProgressCreators")
+  createdAuditActionAcceptanceCriteria           AuditActionAcceptanceCriterion[]      @relation("AuditActionAcceptanceCriterionCreators")
+  completedAuditActionAcceptanceCriteria         AuditActionAcceptanceCriterion[]      @relation("AuditActionAcceptanceCriterionCompleters")
+  responsibleAuditEfficacyEvaluations            AuditEfficacyEvaluation[]             @relation("AuditEfficacyEvaluationResponsibles")
+  createdAuditEfficacyEvaluations                AuditEfficacyEvaluation[]             @relation("AuditEfficacyEvaluationCreators")
+  completedAuditEfficacyEvaluations              AuditEfficacyEvaluation[]             @relation("AuditEfficacyEvaluationCompleters")
+  evaluatedAuditEfficacyCriteria                 AuditEfficacyCriterionResult[]        @relation("AuditEfficacyCriterionEvaluators")
+  createdAuditEfficacyProgress                   AuditEfficacyEvaluationProgress[]     @relation("AuditEfficacyProgressCreators")
+  linkedAuditEfficacyEvidence                    AuditEfficacyEvaluationEvidence[]     @relation("AuditEfficacyEvidenceLinkers")
+  linkedAuditEfficacyEvidenceFiles               AuditEfficacyEvaluationEvidenceFile[] @relation("AuditEfficacyEvidenceFileLinkers")
+  auditImmediateCorrectionResponsibles           AuditImmediateCorrection[]            @relation("AuditImmediateCorrectionResponsibles")
+  createdAuditImmediateCorrections               AuditImmediateCorrection[]            @relation("AuditImmediateCorrectionCreators")
+  auditRootCauseAnalysisResponsibles             AuditRootCauseAnalysis[]              @relation("AuditRootCauseAnalysisResponsibles")
+  createdAuditRootCauseAnalyses                  AuditRootCauseAnalysis[]              @relation("AuditRootCauseAnalysisCreators")
+  confirmedAuditRootCauseAnalyses                AuditRootCauseAnalysis[]              @relation("AuditRootCauseAnalysisConfirmers")
+  createdAuditRootCauses                         AuditRootCause[]                      @relation("AuditRootCauseCreators")
+  confirmedAuditRootCauses                       AuditRootCause[]                      @relation("AuditRootCauseConfirmers")
+  linkedAuditCorrectiveActionCauses              AuditCorrectiveActionCause[]          @relation("AuditCorrectiveActionCauseLinkers")
+  removedAuditCorrectiveActionCauses             AuditCorrectiveActionCause[]          @relation("AuditCorrectiveActionCauseRemovers")
+  auditEvidenceUploaders                         AuditEvidenceFile[]                   @relation("AuditEvidenceUploaders")
+  createdStrategicObjectives                     StrategicObjective[]                  @relation("CreatedStrategicObjectives")
+  requestedStrategicObjectiveSuggestions         StrategicObjectiveSuggestion[]        @relation("RequestedStrategicObjectiveSuggestions")
+  requestedAuditCheckySuggestions                AuditCheckySuggestion[]               @relation("RequestedAuditCheckySuggestions")
+  strategicObjectiveLinks                        StrategicObjectiveStrategy[]          @relation("LinkedStrategicObjectiveStrategies")
+  strategicObjectiveHistory                      StrategicObjectiveHistory[]           @relation("StrategicObjectiveHistoryActors")
+  createdLearningCourses                         LearningCourse[]                      @relation("LearningCourseCreators")
+  updatedLearningCourses                         LearningCourse[]                      @relation("LearningCourseUpdaters")
+  createdLearningVersions                        LearningCourseVersion[]               @relation("LearningVersionCreators")
+  updatedLearningVersions                        LearningCourseVersion[]               @relation("LearningVersionUpdaters")
+  learningEnrollments                            LearningEnrollment[]                  @relation("LearningEnrollmentUsers")
+  assignedLearningEnrollments                    LearningEnrollment[]                  @relation("LearningEnrollmentAssigners")
   googleDriveOAuthStates                         GoogleDriveOAuthState[]
-  statusEvents                                   UserStatusEvent[]              @relation("UserStatusChanges")
-  performedStatusEvents                          UserStatusEvent[]              @relation("UserStatusActors")
-  createdAt                                      DateTime                       @default(now())
-  updatedAt                                      DateTime                       @updatedAt
+  statusEvents                                   UserStatusEvent[]                     @relation("UserStatusChanges")
+  performedStatusEvents                          UserStatusEvent[]                     @relation("UserStatusActors")
+  createdAuditors                                Auditor[]                             @relation("AuditorCreators")
+  auditTeamAssignments                           AuditTeamMember[]                     @relation("AuditTeamAssignmentActors")
+  auditTeamRemovals                              AuditTeamMember[]                     @relation("AuditTeamRemovalActors")
+  auditTeamIndependenceEvaluations               AuditTeamMember[]                     @relation("AuditTeamIndependenceEvaluators")
+  auditPlanActivityAuditorAssignments            AuditPlanActivityAuditor[]            @relation("AuditPlanActivityAuditorAssigners")
+  auditPlanActivityAuditorRemovals               AuditPlanActivityAuditor[]            @relation("AuditPlanActivityAuditorRemovers")
+  auditPlansPrepared                             AuditPlan[]                           @relation("AuditPlanPreparers")
+  auditPlansApproved                             AuditPlan[]                           @relation("AuditPlanApprovers")
+  auditPlanActivityResponsibilities              AuditPlanActivity[]                   @relation("AuditPlanActivityResponsibles")
+  auditPlanActivityStarts                        AuditPlanActivity[]                   @relation("AuditPlanActivityStarters")
+  auditPlanActivityCompletions                   AuditPlanActivity[]                   @relation("AuditPlanActivityCompleters")
+  createdAuditReports                            AuditReport[]                         @relation("AuditReportCreators")
+  reviewedAuditReports                           AuditReport[]                         @relation("AuditReportReviewers")
+  approvedAuditReportVersions                    AuditReportVersion[]                 @relation("AuditReportVersionApprovers")
+  responsibleAuditFollowUps                      AuditFollowUp[]                      @relation("AuditFollowUpResponsibles")
+  enabledAuditFollowUps                          AuditFollowUp[]                      @relation("AuditFollowUpEnablers")
+  completedAuditFollowUps                        AuditFollowUp[]                      @relation("AuditFollowUpCompleters")
+  createdAt                                      DateTime                              @default(now())
+  updatedAt                                      DateTime                              @updatedAt
 
   @@index([companyId])
   @@index([companyId, isActive])
@@ -559,14 +614,58 @@ model Company {
   processes              Process[]
   googleDriveConnections CompanyGoogleDriveConnection[]
   ticketDriveReferences  TicketDriveReference[]
+  auditPrograms          AuditProgram[]
   googleDriveOAuthStates GoogleDriveOAuthState[]
   storageOperations      EvidenceStorageOperation[]
   learningCourses        LearningCourse[]
   learningEnrollments    LearningEnrollment[]
+  auditors               Auditor[]
+  auditTeamMembers       AuditTeamMember[]
   createdAt              DateTime                       @default(now())
   updatedAt              DateTime                       @updatedAt
 
   @@index([name])
+}
+
+model Auditor {
+  id              String              @id @default(cuid())
+  companyId       String
+  name            String
+  email           String
+  phone           String?
+  type            AuditorType
+  position        String?
+  organization    String?
+  experience      String?
+  status          AuditorStatus       @default(AVAILABLE)
+  observations    String?
+  createdById     String?
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy       User?               @relation("AuditorCreators", fields: [createdById], references: [id], onDelete: SetNull)
+  competencies    AuditorCompetency[]
+  teamMemberships AuditTeamMember[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([companyId, email])
+  @@index([companyId, status])
+  @@index([companyId, type])
+  @@index([createdById])
+}
+
+model AuditorCompetency {
+  id        String   @id @default(cuid())
+  auditorId String
+  name      String
+  nameKey   String
+  level     Int
+  evidence  String?
+  auditor   Auditor  @relation(fields: [auditorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([auditorId, nameKey])
+  @@index([auditorId])
 }
 
 model QualityDiagnostic {
@@ -959,42 +1058,44 @@ model StrategicObjectiveHistory {
 }
 
 model Process {
-  id                 String             @id @default(cuid())
-  companyId          String
-  name               String
-  code               String?
-  type               ProcessType
-  version            String?
-  frequency          String?
-  organizationalArea String?
-  supervision        String?
-  executionType      String?
-  objective          String
-  description        String?
-  responsibleId      String?
-  status             ProcessStatus      @default(ACTIVE)
-  thirdPartyProvided Boolean            @default(false)
-  critical           Boolean            @default(false)
-  affectsAccounting  Boolean            @default(false)
-  personalData       Boolean            @default(false)
-  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  responsible        User?              @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
-  changeHistory      ProcessChange[]
-  indicators         ProcessIndicator[]
-  kpis               Kpi[]
-  kpiLinks           ProcessKpi[]
-  sipocSuppliers     SipocSupplier[]
-  sipocInputs        SipocInput[]
-  sipocProcesses     SipocProcess[]
-  sipocOutputs       SipocOutput[]
-  sipocCustomers     SipocCustomer[]
-  risks              Risk[]
-  procedures         Procedure[]
-  audits             Audit[]
-  auditProcesses     AuditProcess[]
-  findingAudits      AuditFinding[]
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  id                     String                        @id @default(cuid())
+  companyId              String
+  name                   String
+  code                   String?
+  type                   ProcessType
+  version                String?
+  frequency              String?
+  organizationalArea     String?
+  supervision            String?
+  executionType          String?
+  objective              String
+  description            String?
+  responsibleId          String?
+  status                 ProcessStatus                 @default(ACTIVE)
+  thirdPartyProvided     Boolean                       @default(false)
+  critical               Boolean                       @default(false)
+  affectsAccounting      Boolean                       @default(false)
+  personalData           Boolean                       @default(false)
+  company                Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  responsible            User?                         @relation("ResponsibleProcesses", fields: [responsibleId], references: [id], onDelete: SetNull)
+  changeHistory          ProcessChange[]
+  indicators             ProcessIndicator[]
+  kpis                   Kpi[]
+  kpiLinks               ProcessKpi[]
+  sipocSuppliers         SipocSupplier[]
+  sipocInputs            SipocInput[]
+  sipocProcesses         SipocProcess[]
+  sipocOutputs           SipocOutput[]
+  sipocCustomers         SipocCustomer[]
+  risks                  Risk[]
+  procedures             Procedure[]
+  audits                 Audit[]
+  auditProcesses         AuditProcess[]
+  auditPlanActivities    AuditPlanActivity[]
+  auditProgramPriorities AuditProgramProcessPriority[]
+  findingAudits          AuditFinding[]
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId])
@@ -1443,6 +1544,33 @@ enum AuditStatus {
   CANCELLED
 }
 
+enum AuditReportStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+}
+
+enum AuditFollowUpStatus {
+  ENABLED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditFollowUpActionReason {
+  EFFICACY_INEFFECTIVE
+  RECURRENCE
+  ADDITIONAL_TREATMENT
+  OTHER
+}
+
+enum AuditProgramStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
 enum AuditFindingType {
   NONCONFORMITY
   OBSERVATION
@@ -1460,6 +1588,35 @@ enum AuditFindingStatus {
   IN_PROGRESS
   RESOLVED
   VERIFIED
+}
+
+enum AuditImmediateCorrectionStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditRootCauseAnalysisMethod {
+  MANUAL
+  FIVE_WHYS
+  ISHIKAWA
+}
+
+enum AuditRootCauseAnalysisStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum AuditRootCauseOrigin {
+  MANUAL
+  CHECKY
+}
+
+enum AuditRootCauseStatus {
+  POTENTIAL
+  CONFIRMED
+  DISCARDED
 }
 
 /**
@@ -1494,11 +1651,160 @@ enum AuditEventType {
   ACTION_UPDATED
   ACTION_STATUS_CHANGED
   ACTION_PROGRESS_ADDED
+  IMMEDIATE_CORRECTION_CREATED
+  IMMEDIATE_CORRECTION_UPDATED
+  IMMEDIATE_CORRECTION_STATUS_CHANGED
+  ROOT_CAUSE_ANALYSIS_CREATED
+  ROOT_CAUSE_ANALYSIS_UPDATED
+  ROOT_CAUSE_ANALYSIS_STATUS_CHANGED
+  ROOT_CAUSE_CREATED
+  ROOT_CAUSE_UPDATED
+  ROOT_CAUSE_STATUS_CHANGED
+  ROOT_CAUSE_FIVE_WHY_STEP_CREATED
+  ROOT_CAUSE_FIVE_WHY_STEP_UPDATED
+  ROOT_CAUSE_FIVE_WHY_STEP_DELETED
+  CORRECTIVE_ACTION_CAUSE_LINKED
+  CORRECTIVE_ACTION_CAUSE_UNLINKED
+  CHECKY_SUGGESTION_CREATED
+  CHECKY_SUGGESTION_UPDATED
+  CHECKY_SUGGESTION_ACCEPTED
+  CHECKY_SUGGESTION_REJECTED
+  TEAM_MEMBER_ASSIGNED
+  TEAM_MEMBER_UPDATED
+  TEAM_MEMBER_REMOVED
+  INDEPENDENCE_EVALUATED
+  AUDIT_PLAN_CREATED
+  AUDIT_PLAN_UPDATED
+  AUDIT_PLAN_STATUS_CHANGED
+  AUDIT_PLAN_ACTIVITY_CREATED
+  AUDIT_PLAN_ACTIVITY_UPDATED
+  AUDIT_PLAN_ACTIVITY_DELETED
+  AUDIT_PLAN_ACTIVITY_EXECUTION_STARTED
+  AUDIT_PLAN_ACTIVITY_EXECUTION_UPDATED
+  AUDIT_PLAN_ACTIVITY_EXECUTION_COMPLETED
+  AUDIT_PLAN_ACTIVITY_EXECUTION_CANCELLED
+  AUDIT_PLAN_ACTIVITY_RESOURCE_LINKED
+  AUDIT_PLAN_ACTIVITY_RESOURCE_UNLINKED
+  EFFICACY_EVALUATION_CREATED
+  EFFICACY_EVALUATION_UPDATED
+  EFFICACY_EVALUATION_PROGRESS_ADDED
+  EFFICACY_EVALUATION_STARTED
+  EFFICACY_EVALUATION_COMPLETED
+  EFFICACY_EVALUATION_CANCELLED
+  EFFICACY_EVALUATION_EVIDENCE_LINKED
+  EFFICACY_EVALUATION_EVIDENCE_UNLINKED
+  AUDIT_REPORT_CREATED
+  AUDIT_REPORT_UPDATED
+  AUDIT_REPORT_SUBMITTED
+  AUDIT_REPORT_REVIEWED
+  AUDIT_REPORT_APPROVED
+  AUDIT_REPORT_VERSION_CREATED
+  AUDIT_REPORT_PDF_GENERATED
+  AUDIT_FOLLOW_UP_ENABLED
+  AUDIT_FOLLOW_UP_UPDATED
+  AUDIT_FOLLOW_UP_COMPLETED
+}
+
+enum AuditTeamRole {
+  LEAD
+  MEMBER
+}
+
+enum AuditIndependenceStatus {
+  PENDING
+  CLEAR
+  CONFLICT
+  MITIGATED
+}
+
+enum AuditPlanStatus {
+  DRAFT
+  READY
+  APPROVED
+  CANCELLED
+}
+
+enum AuditPlanActivityType {
+  OPENING_MEETING
+  DOCUMENT_REVIEW
+  INTERVIEW
+  PROCESS_REVIEW
+  CLOSING_MEETING
+  OTHER
+}
+
+enum AuditPlanActivityStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditActivityResult {
+  SATISFACTORY
+  PARTIAL
+  ISSUE
+  NOT_APPLICABLE
+}
+
+model AuditProgram {
+  id                String                        @id @default(cuid())
+  companyId         String
+  code              String
+  name              String
+  objective         String
+  scope             String
+  startDate         DateTime
+  endDate           DateTime
+  responsibleId     String?
+  criteria          String
+  resources         String?
+  risks             String?
+  notes             String?
+  status            AuditProgramStatus            @default(DRAFT)
+  company           Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  responsible       User?                         @relation("AuditProgramResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  audits            Audit[]
+  processPriorities AuditProgramProcessPriority[]
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([responsibleId])
+}
+
+model AuditProgramProcessPriority {
+  id                         String       @id @default(cuid())
+  auditProgramId             String
+  processId                  String
+  criticality                Int
+  recentChanges              Int
+  previousUnfavorableResults Int
+  score                      Int
+  calculatedPriority         Priority
+  manualPriority             Priority?
+  manualJustification        String?
+  observations               String?
+  evaluatedById              String
+  createdAt                  DateTime     @default(now())
+  updatedAt                  DateTime     @updatedAt
+  auditProgram               AuditProgram @relation(fields: [auditProgramId], references: [id], onDelete: Cascade)
+  process                    Process      @relation(fields: [processId], references: [id], onDelete: Cascade)
+  evaluatedBy                User         @relation("AuditProgramProcessPriorityEvaluators", fields: [evaluatedById], references: [id], onDelete: Restrict)
+
+  @@unique([auditProgramId, processId])
+  @@index([auditProgramId, calculatedPriority])
+  @@index([auditProgramId, score])
+  @@index([processId])
+  @@index([evaluatedById])
 }
 
 model Audit {
   id                         String                     @id @default(cuid())
   processId                  String
+  auditProgramId             String?
   code                       String
   title                      String
   auditType                  String?
@@ -1515,24 +1821,291 @@ model Audit {
   leadAuditorId              String?
   responsibleId              String?
   process                    Process                    @relation(fields: [processId], references: [id], onDelete: Restrict)
+  auditProgram               AuditProgram?              @relation(fields: [auditProgramId], references: [id], onDelete: SetNull)
   leadAuditor                User?                      @relation("AuditLeadAuditors", fields: [leadAuditorId], references: [id], onDelete: SetNull)
   responsible                User?                      @relation("AuditResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
   findings                   AuditFinding[]
+  checkySuggestions          AuditCheckySuggestion[]
+  efficacyEvaluations        AuditEfficacyEvaluation[]
   evidences                  AuditEvidence[]
   evidenceFiles              AuditEvidenceFile[]
   events                     AuditEvent[]
   checklists                 AuditChecklist[]
   relatedProcesses           AuditProcess[]
   procedures                 AuditProcedure[]
+  teamMembers                AuditTeamMember[]
+  plan                       AuditPlan?
+  report                     AuditReport?
+  followUp                   AuditFollowUp?
   storageOperations          EvidenceStorageOperation[]
   createdAt                  DateTime                   @default(now())
   updatedAt                  DateTime                   @updatedAt
 
   @@unique([processId, code])
   @@index([processId])
+  @@index([auditProgramId])
   @@index([status])
   @@index([leadAuditorId])
   @@index([responsibleId])
+}
+
+model AuditReport {
+  id                String                 @id @default(cuid())
+  auditId           String                 @unique
+  status            AuditReportStatus      @default(DRAFT)
+  draftSnapshot     Json
+  createdById       String
+  reviewedById      String?
+  reviewedAt        DateTime?
+  approvedVersionId String?                @unique
+  audit             Audit                  @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  createdBy         User                   @relation("AuditReportCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  reviewedBy        User?                  @relation("AuditReportReviewers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  versions          AuditReportVersion[]   @relation("AuditReportVersions")
+  approvedVersion   AuditReportVersion?    @relation("AuditReportApprovedVersion", fields: [approvedVersionId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([status])
+  @@index([createdById])
+  @@index([reviewedById])
+}
+
+model AuditReportVersion {
+  id                String             @id @default(cuid())
+  reportId          String
+  version           Int
+  snapshot          Json
+  snapshotHash      String
+  approvedById      String
+  approvedAt        DateTime           @default(now())
+  pdfEvidenceFileId String?            @unique
+  report            AuditReport        @relation("AuditReportVersions", fields: [reportId], references: [id], onDelete: Cascade)
+  approvedForReport AuditReport?       @relation("AuditReportApprovedVersion")
+  approvedBy        User               @relation("AuditReportVersionApprovers", fields: [approvedById], references: [id], onDelete: Restrict)
+  pdfEvidenceFile   AuditEvidenceFile? @relation("AuditReportVersionPdf", fields: [pdfEvidenceFileId], references: [id], onDelete: Restrict)
+  createdAt         DateTime           @default(now())
+
+  @@unique([reportId, version])
+  @@index([reportId, approvedAt])
+  @@index([approvedById])
+}
+
+model AuditFollowUp {
+  id            String              @id @default(cuid())
+  auditId       String              @unique
+  status        AuditFollowUpStatus @default(ENABLED)
+  scope         String
+  responsibleId String
+  enabledById   String
+  enabledAt     DateTime            @default(now())
+  completedById String?
+  completedAt   DateTime?
+  notes         String?
+  audit         Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  responsible   User                @relation("AuditFollowUpResponsibles", fields: [responsibleId], references: [id], onDelete: Restrict)
+  enabledBy     User                @relation("AuditFollowUpEnablers", fields: [enabledById], references: [id], onDelete: Restrict)
+  completedBy   User?               @relation("AuditFollowUpCompleters", fields: [completedById], references: [id], onDelete: SetNull)
+  actions       AuditCorrectiveAction[]
+  evaluations   AuditEfficacyEvaluation[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([status])
+  @@index([responsibleId, status])
+  @@index([enabledById])
+  @@index([completedById])
+}
+
+/**
+ * Asignacion historica de un auditor del banco a una auditoria. Las bajas son logicas para que
+ * ninguna operacion posterior borre la trazabilidad de la asignacion o de su evaluacion.
+ */
+model AuditTeamMember {
+  id                        String                     @id @default(cuid())
+  auditId                   String
+  auditorId                 String
+  companyId                 String
+  role                      AuditTeamRole              @default(MEMBER)
+  assignedAt                DateTime                   @default(now())
+  assignedById              String?
+  observations              String?
+  isActive                  Boolean                    @default(true)
+  removedAt                 DateTime?
+  removedById               String?
+  independenceStatus        AuditIndependenceStatus    @default(PENDING)
+  independenceDeclaration   String?
+  conflictDescription       String?
+  mitigationMeasures        String?
+  independenceEvaluatedAt   DateTime?
+  independenceEvaluatedById String?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  audit                     Audit                      @relation(fields: [auditId], references: [id], onDelete: Restrict)
+  auditor                   Auditor                    @relation(fields: [auditorId], references: [id], onDelete: Restrict)
+  company                   Company                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assignedBy                User?                      @relation("AuditTeamAssignmentActors", fields: [assignedById], references: [id], onDelete: SetNull)
+  removedBy                 User?                      @relation("AuditTeamRemovalActors", fields: [removedById], references: [id], onDelete: SetNull)
+  independenceEvaluatedBy   User?                      @relation("AuditTeamIndependenceEvaluators", fields: [independenceEvaluatedById], references: [id], onDelete: SetNull)
+  activityAssignments       AuditPlanActivityAuditor[]
+
+  @@index([auditId, isActive])
+  @@index([auditId, role, isActive])
+  @@index([auditorId, isActive])
+  @@index([companyId, isActive])
+  @@index([assignedById])
+  @@index([removedById])
+  @@index([independenceEvaluatedById])
+}
+
+model AuditPlan {
+  id             String              @id @default(cuid())
+  auditId        String              @unique
+  methodology    String
+  samplingMethod String?
+  resources      String?
+  notes          String?
+  status         AuditPlanStatus     @default(DRAFT)
+  preparedById   String?
+  approvedById   String?
+  approvedAt     DateTime?
+  audit          Audit               @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  preparedBy     User?               @relation("AuditPlanPreparers", fields: [preparedById], references: [id], onDelete: SetNull)
+  approvedBy     User?               @relation("AuditPlanApprovers", fields: [approvedById], references: [id], onDelete: SetNull)
+  activities     AuditPlanActivity[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([status])
+  @@index([preparedById])
+  @@index([approvedById])
+}
+
+model AuditPlanActivityAuditor {
+  id                String            @id @default(cuid())
+  activityId        String
+  auditTeamMemberId String
+  assignedAt        DateTime          @default(now())
+  assignedById      String?
+  isActive          Boolean           @default(true)
+  removedAt         DateTime?
+  removedById       String?
+  activity          AuditPlanActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  auditTeamMember   AuditTeamMember   @relation(fields: [auditTeamMemberId], references: [id], onDelete: Restrict)
+  assignedBy        User?             @relation("AuditPlanActivityAuditorAssigners", fields: [assignedById], references: [id], onDelete: SetNull)
+  removedBy         User?             @relation("AuditPlanActivityAuditorRemovers", fields: [removedById], references: [id], onDelete: SetNull)
+
+  @@unique([activityId, auditTeamMemberId])
+  @@index([activityId, isActive])
+  @@index([auditTeamMemberId, isActive])
+  @@index([assignedById])
+  @@index([removedById])
+}
+
+model AuditPlanActivity {
+  id                    String                           @id @default(cuid())
+  auditPlanId           String
+  position              Int                              @default(0)
+  type                  AuditPlanActivityType            @default(OTHER)
+  title                 String
+  description           String?
+  scheduledStart        DateTime
+  scheduledEnd          DateTime
+  location              String?
+  responsibleId         String?
+  processId             String?
+  status                AuditPlanActivityStatus          @default(PLANNED)
+  notes                 String?
+  actualStart           DateTime?
+  actualEnd             DateTime?
+  executionResult       AuditActivityResult?
+  executionObservations String?
+  startedById           String?
+  completedById         String?
+  auditPlan             AuditPlan                        @relation(fields: [auditPlanId], references: [id], onDelete: Cascade)
+  responsible           User?                            @relation("AuditPlanActivityResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  process               Process?                         @relation(fields: [processId], references: [id], onDelete: SetNull)
+  startedBy             User?                            @relation("AuditPlanActivityStarters", fields: [startedById], references: [id], onDelete: SetNull)
+  completedBy           User?                            @relation("AuditPlanActivityCompleters", fields: [completedById], references: [id], onDelete: SetNull)
+  auditorAssignments    AuditPlanActivityAuditor[]
+  checklistItemLinks    AuditPlanActivityChecklistItem[]
+  evidenceLinks         AuditPlanActivityEvidence[]
+  evidenceFileLinks     AuditPlanActivityEvidenceFile[]
+  findingLinks          AuditPlanActivityFinding[]
+  createdAt             DateTime                         @default(now())
+  updatedAt             DateTime                         @updatedAt
+
+  @@index([auditPlanId, scheduledStart])
+  @@index([auditPlanId, status])
+  @@index([responsibleId])
+  @@index([processId])
+  @@index([startedById])
+  @@index([completedById])
+}
+
+/**
+ * Asociaciones historicas entre una actividad ejecutada y recursos del expediente. Las bajas son
+ * logicas para que una desvinculacion no destruya la evidencia de que el recurso estuvo asociado.
+ * El historial de actor y cambios vive en AuditEvent.
+ */
+model AuditPlanActivityChecklistItem {
+  id         String             @id @default(cuid())
+  activityId String
+  itemId     String
+  isActive   Boolean            @default(true)
+  linkedAt   DateTime           @default(now())
+  removedAt  DateTime?
+  activity   AuditPlanActivity  @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  item       AuditChecklistItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([activityId, itemId])
+  @@index([activityId, isActive])
+  @@index([itemId, isActive])
+}
+
+model AuditPlanActivityEvidence {
+  id         String            @id @default(cuid())
+  activityId String
+  evidenceId String
+  isActive   Boolean           @default(true)
+  linkedAt   DateTime          @default(now())
+  removedAt  DateTime?
+  activity   AuditPlanActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  evidence   AuditEvidence     @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  @@unique([activityId, evidenceId])
+  @@index([activityId, isActive])
+  @@index([evidenceId, isActive])
+}
+
+model AuditPlanActivityEvidenceFile {
+  id             String            @id @default(cuid())
+  activityId     String
+  evidenceFileId String
+  isActive       Boolean           @default(true)
+  linkedAt       DateTime          @default(now())
+  removedAt      DateTime?
+  activity       AuditPlanActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  evidenceFile   AuditEvidenceFile @relation(fields: [evidenceFileId], references: [id], onDelete: Cascade)
+
+  @@unique([activityId, evidenceFileId])
+  @@index([activityId, isActive])
+  @@index([evidenceFileId, isActive])
+}
+
+model AuditPlanActivityFinding {
+  id         String            @id @default(cuid())
+  activityId String
+  findingId  String
+  isActive   Boolean           @default(true)
+  linkedAt   DateTime          @default(now())
+  removedAt  DateTime?
+  activity   AuditPlanActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  finding    AuditFinding      @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  @@unique([activityId, findingId])
+  @@index([activityId, isActive])
+  @@index([findingId, isActive])
 }
 
 /**
@@ -1600,55 +2173,62 @@ model AuditChecklist {
  * reordenamiento o a la baja del ítem.
  */
 model AuditChecklistItem {
-  id            String               @id @default(cuid())
+  id            String                           @id @default(cuid())
   checklistId   String
-  position      Int                  @default(0)
+  position      Int                              @default(0)
   description   String
   criteria      String
-  result        AuditChecklistResult @default(PENDING)
+  result        AuditChecklistResult             @default(PENDING)
   observations  String?
-  required      Boolean              @default(true)
-  checklist     AuditChecklist       @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  required      Boolean                          @default(true)
+  checklist     AuditChecklist                   @relation(fields: [checklistId], references: [id], onDelete: Cascade)
   findings      AuditFinding[]
   evidenceFiles AuditEvidenceFile[]
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  activityLinks AuditPlanActivityChecklistItem[]
+  createdAt     DateTime                         @default(now())
+  updatedAt     DateTime                         @updatedAt
 
   @@index([checklistId])
   @@index([result])
 }
 
 model AuditFinding {
-  id                   String                  @id @default(cuid())
-  auditId              String
-  title                String
-  description          String
-  type                 AuditFindingType
-  severity             AuditFindingSeverity
-  status               AuditFindingStatus      @default(OPEN)
-  dueDate              DateTime?
-  responsibleId        String?
-  resolution           String?
-  verifiedById         String?
-  verifiedAt           DateTime?
-  itemId               String?
-  processId            String?
-  procedureId          String?
-  efficacyVerification String?
-  efficacyVerifiedById String?
-  efficacyVerifiedAt   DateTime?
-  audit                Audit                   @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  responsible          User?                   @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  verifiedBy           User?                   @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
-  efficacyVerifiedBy   User?                   @relation("AuditFindingEfficacyVerifiers", fields: [efficacyVerifiedById], references: [id], onDelete: SetNull)
-  item                 AuditChecklistItem?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  process              Process?                @relation(fields: [processId], references: [id], onDelete: SetNull)
-  procedure            Procedure?              @relation(fields: [procedureId], references: [id], onDelete: SetNull)
-  evidences            AuditEvidence[]
-  evidenceFiles        AuditEvidenceFile[]
-  actions              AuditCorrectiveAction[]
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
+  id                         String                       @id @default(cuid())
+  auditId                    String
+  title                      String
+  description                String
+  type                       AuditFindingType
+  severity                   AuditFindingSeverity
+  status                     AuditFindingStatus           @default(OPEN)
+  dueDate                    DateTime?
+  responsibleId              String?
+  resolution                 String?
+  verifiedById               String?
+  verifiedAt                 DateTime?
+  itemId                     String?
+  processId                  String?
+  procedureId                String?
+  efficacyVerification       String?
+  efficacyVerifiedById       String?
+  efficacyVerifiedAt         DateTime?
+  audit                      Audit                        @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  responsible                User?                        @relation("AuditFindingResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  verifiedBy                 User?                        @relation("AuditFindingVerifiers", fields: [verifiedById], references: [id], onDelete: SetNull)
+  efficacyVerifiedBy         User?                        @relation("AuditFindingEfficacyVerifiers", fields: [efficacyVerifiedById], references: [id], onDelete: SetNull)
+  item                       AuditChecklistItem?          @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  process                    Process?                     @relation(fields: [processId], references: [id], onDelete: SetNull)
+  procedure                  Procedure?                   @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  evidences                  AuditEvidence[]
+  evidenceFiles              AuditEvidenceFile[]
+  actions                    AuditCorrectiveAction[]
+  immediateCorrections       AuditImmediateCorrection[]
+  rootCauseAnalyses          AuditRootCauseAnalysis[]
+  correctiveActionCauseLinks AuditCorrectiveActionCause[]
+  efficacyEvaluations        AuditEfficacyEvaluation[]
+  checkySuggestions          AuditCheckySuggestion[]
+  activityLinks              AuditPlanActivityFinding[]
+  createdAt                  DateTime                     @default(now())
+  updatedAt                  DateTime                     @updatedAt
 
   @@index([auditId])
   @@index([status])
@@ -1659,24 +2239,64 @@ model AuditFinding {
   @@index([procedureId])
 }
 
+/**
+ * Propuesta persistente de Checky para un hallazgo. El documento original nunca cambia y el
+ * editable contiene la última versión revisada por la persona. La aceptación es la única ruta que
+ * puede crear el registro oficial referenciado por accepted*; una propuesta no altera el expediente.
+ */
+model AuditCheckySuggestion {
+  id                  String                    @id @default(cuid())
+  auditId             String
+  findingId           String
+  requestedById       String
+  kind                AuditCheckySuggestionKind
+  originalPayload     Json
+  editablePayload     Json
+  evidenceIds         String[]                  @default([])
+  dedupeKey           String
+  status              CheckySuggestionStatus    @default(PENDING)
+  decisionNote        String?
+  acceptedRootCauseId String?                   @unique
+  acceptedAnalysisId  String?                   @unique
+  acceptedActionId    String?                   @unique
+  decidedAt           DateTime?
+  audit               Audit                     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding             AuditFinding              @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  requestedBy         User                      @relation("RequestedAuditCheckySuggestions", fields: [requestedById], references: [id], onDelete: Restrict)
+  acceptedRootCause   AuditRootCause?           @relation("AcceptedAuditCheckyRootCause", fields: [acceptedRootCauseId], references: [id], onDelete: SetNull)
+  acceptedAnalysis    AuditRootCauseAnalysis?   @relation("AcceptedAuditCheckyAnalysis", fields: [acceptedAnalysisId], references: [id], onDelete: SetNull)
+  acceptedAction      AuditCorrectiveAction?    @relation("AcceptedAuditCheckyAction", fields: [acceptedActionId], references: [id], onDelete: SetNull)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  @@unique([auditId, dedupeKey])
+  @@index([auditId, findingId, kind, status])
+  @@index([requestedById])
+}
+
 // Evidencia con solo enlace http(s) (mismo contrato que RiskEvidence): no se guardan archivos ni
 // rutas del servidor. Puede pertenecer a la auditoría completa o anclarse a un hallazgo concreto;
 // la ruta valida que el hallazgo sea de esta misma auditoría (sin referencias cruzadas entre
 // empresas o auditorías). Si el hallazgo se borra, la evidencia sobrevive anclada a la auditoría.
 model AuditEvidence {
-  id          String        @id @default(cuid())
-  auditId     String
-  findingId   String?
-  name        String
-  description String
-  url         String
-  audit       Audit         @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  finding     AuditFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id                              String                            @id @default(cuid())
+  auditId                         String
+  findingId                       String?
+  actionId                        String?
+  name                            String
+  description                     String
+  url                             String
+  audit                           Audit                             @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding                         AuditFinding?                     @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  action                          AuditCorrectiveAction?            @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  efficacyEvaluationEvidenceLinks AuditEfficacyEvaluationEvidence[]
+  activityLinks                   AuditPlanActivityEvidence[]
+  createdAt                       DateTime                          @default(now())
+  updatedAt                       DateTime                          @updatedAt
 
   @@index([auditId])
   @@index([findingId])
+  @@index([actionId])
 }
 
 /**
@@ -1721,6 +2341,11 @@ enum AuditCorrectiveActionPriority {
   CRITICAL
 }
 
+enum AuditActionAcceptanceCriterionType {
+  IMPLEMENTATION
+  EFFECTIVENESS
+}
+
 /**
  * Acción correctiva derivada de un hallazgo de auditoría. `required` determina si su estado
  * bloquea la resolución del hallazgo: ninguna acción obligatoria puede quedar sin estado final
@@ -1729,27 +2354,241 @@ enum AuditCorrectiveActionPriority {
  * (la API responde 409 y el esquema usa Restrict), de modo que la trazabilidad no se destruye.
  */
 model AuditCorrectiveAction {
-  id            String                        @id @default(cuid())
-  findingId     String
-  title         String
-  description   String
-  responsibleId String?
-  priority      AuditCorrectiveActionPriority @default(MEDIUM)
-  status        AuditCorrectiveActionStatus   @default(OPEN)
-  required      Boolean                       @default(true)
-  dueDate       DateTime?
-  completedAt   DateTime?
-  finding       AuditFinding                  @relation(fields: [findingId], references: [id], onDelete: Restrict)
-  responsible   User?                         @relation("AuditActionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
-  progress      AuditActionProgress[]
-  evidenceFiles AuditEvidenceFile[]
-  createdAt     DateTime                      @default(now())
-  updatedAt     DateTime                      @updatedAt
+  id                   String                           @id @default(cuid())
+  findingId            String
+  title                String
+  description          String
+  objective            String?
+  implementationPlan   String?
+  resources            String?
+  observations         String?
+  responsibleId        String?
+  priority             AuditCorrectiveActionPriority    @default(MEDIUM)
+  status               AuditCorrectiveActionStatus      @default(OPEN)
+  required             Boolean                          @default(true)
+  evidenceRequired     Boolean                          @default(false)
+  followUpId           String?
+  followUpReason       AuditFollowUpActionReason?
+  followUpJustification String?
+  progressPercent      Int                              @default(0)
+  workflowVersion      Int                              @default(0)
+  dueDate              DateTime?
+  completedAt          DateTime?
+  finding              AuditFinding                     @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  responsible          User?                            @relation("AuditActionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  progress             AuditActionProgress[]
+  acceptanceCriteria   AuditActionAcceptanceCriterion[]
+  evidenceFiles        AuditEvidenceFile[]
+  evidences            AuditEvidence[]
+  causeLinks           AuditCorrectiveActionCause[]     @relation("CorrectiveActionCauseLinks")
+  checkySuggestion     AuditCheckySuggestion?           @relation("AcceptedAuditCheckyAction")
+  efficacyEvaluations  AuditEfficacyEvaluation[]
+  followUp             AuditFollowUp?                   @relation(fields: [followUpId], references: [id], onDelete: Restrict)
+  efficacyEvaluationId String?
+  efficacyEvaluation   AuditEfficacyEvaluation?         @relation("EfficacyFollowUpActions", fields: [efficacyEvaluationId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
 
+  @@unique([id, findingId])
   @@index([findingId])
   @@index([status])
   @@index([responsibleId])
   @@index([dueDate])
+  @@index([followUpId, status])
+}
+
+/**
+ * Criterio verificable de aceptación de una acción. La categoría EFFECTIVENESS
+ * se registra para trazabilidad, pero su evaluación formal sigue perteneciendo
+ * al flujo de eficacia del hallazgo y no se automatiza aquí.
+ */
+model AuditActionAcceptanceCriterion {
+  id              String                             @id @default(cuid())
+  actionId        String
+  type            AuditActionAcceptanceCriterionType @default(IMPLEMENTATION)
+  description     String
+  expectedResult  String
+  required        Boolean                            @default(true)
+  isMet           Boolean                            @default(false)
+  observations    String?
+  completedAt     DateTime?
+  completedById   String?
+  createdById     String?
+  createdAt       DateTime                           @default(now())
+  updatedAt       DateTime                           @updatedAt
+  action          AuditCorrectiveAction              @relation(fields: [actionId], references: [id], onDelete: Restrict)
+  completedBy     User?                              @relation("AuditActionAcceptanceCriterionCompleters", fields: [completedById], references: [id], onDelete: SetNull)
+  createdBy       User?                              @relation("AuditActionAcceptanceCriterionCreators", fields: [createdById], references: [id], onDelete: SetNull)
+  efficacyResults AuditEfficacyCriterionResult[]
+
+  @@index([actionId, type, isMet])
+  @@index([actionId, required, isMet])
+  @@index([completedById])
+  @@index([createdById])
+}
+
+enum AuditEfficacyEvaluationStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditEfficacyOutcome {
+  PENDING
+  EFFECTIVE
+  PARTIALLY_EFFECTIVE
+  INEFFECTIVE
+}
+
+enum AuditEfficacyMethodology {
+  DOCUMENTARY_SAMPLING
+  INDICATOR_MONITORING
+  DIRECT_OBSERVATION
+  INTERVIEWS
+  RECORD_REVIEW
+  FOLLOW_UP_AUDIT
+  OTHER
+}
+
+/**
+ * Historical efficacy evaluation for one completed corrective action. The legacy scalar efficacy
+ * fields on AuditFinding remain for compatibility; this model is the structured source for new
+ * evaluations and never overwrites a previous evaluation.
+ */
+model AuditEfficacyEvaluation {
+  id                     String                                @id @default(cuid())
+  auditId                String
+  findingId              String
+  actionId               String
+  status                 AuditEfficacyEvaluationStatus         @default(PLANNED)
+  outcome                AuditEfficacyOutcome                  @default(PENDING)
+  responsibleId          String
+  scheduledDate          DateTime?
+  methodology            AuditEfficacyMethodology
+  methodologyOther       String?
+  observationPeriod      String?
+  observationStartDate   DateTime?
+  observationEndDate     DateTime?
+  scope                  String
+  observations           String?
+  conclusion             String?
+  recurrenceDetected     Boolean                               @default(false)
+  recurrenceDescription  String?
+  recurrenceIdentifiedAt DateTime?
+  startedAt              DateTime?
+  completedAt            DateTime?
+  completedById          String?
+  createdById            String
+  followUpId             String?
+  audit                  Audit                                 @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding                AuditFinding                          @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  action                 AuditCorrectiveAction                 @relation(fields: [actionId, findingId], references: [id, findingId], onDelete: Restrict)
+  responsible            User                                  @relation("AuditEfficacyEvaluationResponsibles", fields: [responsibleId], references: [id], onDelete: Restrict)
+  createdBy              User                                  @relation("AuditEfficacyEvaluationCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy            User?                                 @relation("AuditEfficacyEvaluationCompleters", fields: [completedById], references: [id], onDelete: SetNull)
+  criteria               AuditEfficacyCriterionResult[]
+  progress               AuditEfficacyEvaluationProgress[]
+  evidenceLinks          AuditEfficacyEvaluationEvidence[]
+  evidenceFileLinks      AuditEfficacyEvaluationEvidenceFile[]
+  followUpActions        AuditCorrectiveAction[]               @relation("EfficacyFollowUpActions")
+  followUp               AuditFollowUp?                        @relation(fields: [followUpId], references: [id], onDelete: Restrict)
+  createdAt              DateTime                              @default(now())
+  updatedAt              DateTime                              @updatedAt
+
+  @@index([auditId, createdAt])
+  @@index([findingId, createdAt])
+  @@index([actionId, createdAt])
+  @@index([status])
+  @@index([outcome])
+  @@index([responsibleId])
+  @@index([scheduledDate])
+  @@index([followUpId, status])
+}
+
+/**
+ * Snapshot and measured result for one EFFECTIVENESS criterion in one evaluation.
+ */
+model AuditEfficacyCriterionResult {
+  id              String                         @id @default(cuid())
+  evaluationId    String
+  criterionId     String
+  description     String
+  expectedResult  String
+  required        Boolean
+  resultObtained  String?
+  measuredValue   String?
+  measurementUnit String?
+  sampleSize      Int?
+  isMet           Boolean?
+  observations    String?
+  evaluatedById   String?
+  evaluatedAt     DateTime?
+  evaluation      AuditEfficacyEvaluation        @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  criterion       AuditActionAcceptanceCriterion @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+  evaluatedBy     User?                          @relation("AuditEfficacyCriterionEvaluators", fields: [evaluatedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+
+  @@unique([evaluationId, criterionId])
+  @@index([criterionId])
+  @@index([evaluatedById])
+}
+
+/**
+ * Append-only partial work log for an efficacy evaluation.
+ */
+model AuditEfficacyEvaluationProgress {
+  id                String                  @id @default(cuid())
+  evaluationId      String
+  note              String
+  results           String?
+  difficulties      String?
+  pendingActivities String?
+  percent           Int?
+  createdById       String?
+  evaluation        AuditEfficacyEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  createdBy         User?                   @relation("AuditEfficacyProgressCreators", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt         DateTime                @default(now())
+
+  @@index([evaluationId, createdAt])
+  @@index([createdById])
+}
+
+/**
+ * Link to an official URL evidence without changing its original audit/action anchor.
+ */
+model AuditEfficacyEvaluationEvidence {
+  id           String                  @id @default(cuid())
+  evaluationId String
+  evidenceId   String
+  linkedById   String?
+  linkedAt     DateTime                @default(now())
+  evaluation   AuditEfficacyEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  evidence     AuditEvidence           @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  linkedBy     User?                   @relation("AuditEfficacyEvidenceLinkers", fields: [linkedById], references: [id], onDelete: SetNull)
+
+  @@unique([evaluationId, evidenceId])
+  @@index([evidenceId])
+  @@index([linkedById])
+}
+
+/**
+ * Link to an official PDF evidence without creating a second storage system.
+ */
+model AuditEfficacyEvaluationEvidenceFile {
+  id             String                  @id @default(cuid())
+  evaluationId   String
+  evidenceFileId String
+  linkedById     String?
+  linkedAt       DateTime                @default(now())
+  evaluation     AuditEfficacyEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  evidenceFile   AuditEvidenceFile       @relation(fields: [evidenceFileId], references: [id], onDelete: Restrict)
+  linkedBy       User?                   @relation("AuditEfficacyEvidenceFileLinkers", fields: [linkedById], references: [id], onDelete: SetNull)
+
+  @@unique([evaluationId, evidenceFileId])
+  @@index([evidenceFileId])
+  @@index([linkedById])
 }
 
 /**
@@ -1771,6 +2610,148 @@ model AuditActionProgress {
 }
 
 /**
+ * Correccion inmediata o contencion de un hallazgo. No sustituye a
+ * AuditCorrectiveAction: esta entidad trata el efecto inmediato y sus consecuencias,
+ * mientras la accion correctiva elimina la causa para evitar la recurrencia.
+ */
+model AuditImmediateCorrection {
+  id                     String                         @id @default(cuid())
+  findingId              String
+  description            String
+  containmentMeasures    String?
+  consequencesIdentified String?
+  consequencesTreatment  String?
+  responsibleId          String?
+  plannedDate            DateTime?
+  executedAt             DateTime?
+  status                 AuditImmediateCorrectionStatus @default(OPEN)
+  observations           String?
+  createdById            String
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  finding                AuditFinding                   @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  responsible            User?                          @relation("AuditImmediateCorrectionResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  createdBy              User                           @relation("AuditImmediateCorrectionCreators", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([findingId, status])
+  @@index([responsibleId, status])
+  @@index([createdById])
+  @@index([plannedDate])
+}
+
+/**
+ * Una investigacion historica de causas para un hallazgo. Los cambios posteriores deben crear
+ * una nueva investigacion cuando la anterior ya fue confirmada; la API futura debe imponer esa
+ * regla y registrar sus mutaciones en AuditEvent.
+ */
+model AuditRootCauseAnalysis {
+  id                 String                       @id @default(cuid())
+  findingId          String
+  methodology        AuditRootCauseAnalysisMethod
+  status             AuditRootCauseAnalysisStatus @default(DRAFT)
+  origin             AuditRootCauseOrigin         @default(MANUAL)
+  problemDescription String
+  responsibleId      String?
+  createdById        String
+  confirmedById      String?
+  confirmedAt        DateTime?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  finding            AuditFinding                 @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  responsible        User?                        @relation("AuditRootCauseAnalysisResponsibles", fields: [responsibleId], references: [id], onDelete: SetNull)
+  createdBy          User                         @relation("AuditRootCauseAnalysisCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  confirmedBy        User?                        @relation("AuditRootCauseAnalysisConfirmers", fields: [confirmedById], references: [id], onDelete: SetNull)
+  causes             AuditRootCause[]
+  fiveWhySteps       AuditRootCauseFiveWhyStep[]
+  checkySuggestion   AuditCheckySuggestion?       @relation("AcceptedAuditCheckyAnalysis")
+
+  @@unique([id, findingId])
+  @@index([findingId, status])
+  @@index([findingId, methodology])
+  @@index([responsibleId])
+  @@index([createdById])
+  @@index([confirmedById])
+}
+
+/**
+ * Causa potencial, confirmada o descartada dentro de una investigacion. La categoria es texto
+ * libre para que Ishikawa no quede atado a categorias industriales predeterminadas.
+ */
+model AuditRootCause {
+  id                 String                       @id @default(cuid())
+  analysisId         String
+  findingId          String
+  status             AuditRootCauseStatus         @default(POTENTIAL)
+  description        String
+  justification      String?
+  supportingEvidence String?
+  ishikawaCategory   String?
+  position           Int                          @default(0)
+  createdById        String
+  confirmedById      String?
+  confirmedAt        DateTime?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  analysis           AuditRootCauseAnalysis       @relation(fields: [analysisId, findingId], references: [id, findingId], onDelete: Cascade)
+  createdBy          User                         @relation("AuditRootCauseCreators", fields: [createdById], references: [id], onDelete: Restrict)
+  confirmedBy        User?                        @relation("AuditRootCauseConfirmers", fields: [confirmedById], references: [id], onDelete: SetNull)
+  actionLinks        AuditCorrectiveActionCause[] @relation("RootCauseActionLinks")
+  checkySuggestion   AuditCheckySuggestion?       @relation("AcceptedAuditCheckyRootCause")
+
+  @@unique([id, findingId])
+  @@index([analysisId, status, position])
+  @@index([findingId, status])
+  @@index([createdById])
+  @@index([confirmedById])
+}
+
+/**
+ * Paso ordenado de un analisis FIVE_WHYS. No se impone una cantidad fija de pasos: la API futura
+ * debe validar que el analisis use esta metodologia antes de aceptar los pasos.
+ */
+model AuditRootCauseFiveWhyStep {
+  id         String                 @id @default(cuid())
+  analysisId String
+  sequence   Int
+  question   String
+  answer     String
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+  analysis   AuditRootCauseAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@unique([analysisId, sequence])
+  @@index([analysisId, sequence])
+}
+
+/**
+ * Vinculo historico entre una accion correctiva existente y una causa del mismo hallazgo. Las
+ * claves compuestas hacen que PostgreSQL rechace un vinculo cruzado entre hallazgos distintos.
+ */
+model AuditCorrectiveActionCause {
+  id          String                @id @default(cuid())
+  findingId   String
+  actionId    String
+  causeId     String
+  isActive    Boolean               @default(true)
+  linkedAt    DateTime              @default(now())
+  linkedById  String?
+  removedAt   DateTime?
+  removedById String?
+  finding     AuditFinding          @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  action      AuditCorrectiveAction @relation("CorrectiveActionCauseLinks", fields: [actionId, findingId], references: [id, findingId], onDelete: Restrict)
+  cause       AuditRootCause        @relation("RootCauseActionLinks", fields: [causeId, findingId], references: [id, findingId], onDelete: Restrict)
+  linkedBy    User?                 @relation("AuditCorrectiveActionCauseLinkers", fields: [linkedById], references: [id], onDelete: SetNull)
+  removedBy   User?                 @relation("AuditCorrectiveActionCauseRemovers", fields: [removedById], references: [id], onDelete: SetNull)
+
+  @@unique([findingId, actionId, causeId])
+  @@index([findingId, isActive])
+  @@index([actionId, isActive])
+  @@index([causeId, isActive])
+  @@index([linkedById])
+  @@index([removedById])
+}
+
+/**
  * Evidencia en PDF adjunta a una auditoría, un hallazgo, una acción correctiva o un ítem de
  * checklist (como mucho uno de ellos; la API lo valida). Las filas antiguas usan el proveedor
  * local y `storedName`; las nuevas pueden usar Google Drive privado y `driveFileId`. La descarga
@@ -1778,33 +2759,36 @@ model AuditActionProgress {
  * sobrevive anclada a la auditoría (SET NULL) para no perder el respaldo documental.
  */
 model AuditEvidenceFile {
-  id                String                        @id @default(cuid())
-  auditId           String
-  findingId         String?
-  actionId          String?
-  itemId            String?
-  filename          String
-  storedName        String?                       @unique
-  mimeType          String
-  size              Int
-  uploadedById      String
-  storageProvider   EvidenceStorageProvider       @default(LOCAL)
-  storageState      EvidenceStorageState          @default(PENDING)
-  driveFileId       String?                       @unique
-  driveUrl          String?
-  storageError      String?
-  storageErrorCode  String?
-  stagedName        String?
-  lastAttemptAt     DateTime?
-  driveConnectionId String?
-  audit             Audit                         @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  finding           AuditFinding?                 @relation(fields: [findingId], references: [id], onDelete: SetNull)
-  action            AuditCorrectiveAction?        @relation(fields: [actionId], references: [id], onDelete: SetNull)
-  item              AuditChecklistItem?           @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  uploadedBy        User                          @relation("AuditEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
-  driveConnection   CompanyGoogleDriveConnection? @relation(fields: [driveConnectionId], references: [id], onDelete: Restrict)
-  operations        EvidenceStorageOperation[]
-  createdAt         DateTime                      @default(now())
+  id                                  String                                @id @default(cuid())
+  auditId                             String
+  findingId                           String?
+  actionId                            String?
+  itemId                              String?
+  filename                            String
+  storedName                          String?                               @unique
+  mimeType                            String
+  size                                Int
+  uploadedById                        String
+  storageProvider                     EvidenceStorageProvider               @default(LOCAL)
+  storageState                        EvidenceStorageState                  @default(PENDING)
+  driveFileId                         String?                               @unique
+  driveUrl                            String?
+  storageError                        String?
+  storageErrorCode                    String?
+  stagedName                          String?
+  lastAttemptAt                       DateTime?
+  driveConnectionId                   String?
+  audit                               Audit                                 @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  finding                             AuditFinding?                         @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  action                              AuditCorrectiveAction?                @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  efficacyEvaluationEvidenceFileLinks AuditEfficacyEvaluationEvidenceFile[]
+  reportVersion                       AuditReportVersion?                  @relation("AuditReportVersionPdf")
+  item                                AuditChecklistItem?                   @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  activityLinks                       AuditPlanActivityEvidenceFile[]
+  uploadedBy                          User                                  @relation("AuditEvidenceUploaders", fields: [uploadedById], references: [id], onDelete: Restrict)
+  driveConnection                     CompanyGoogleDriveConnection?         @relation(fields: [driveConnectionId], references: [id], onDelete: Restrict)
+  operations                          EvidenceStorageOperation[]
+  createdAt                           DateTime                              @default(now())
 
   @@index([auditId])
   @@index([findingId])

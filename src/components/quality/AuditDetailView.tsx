@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent } from 'react'
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
 import { api, apiUpload, ApiError, apiUrl } from '../../api'
 import checkyImage from '../../assets/Aprobado por checky.png'
 import { activeUserOptions, userOptionLabel } from '../../user-status'
@@ -9,34 +9,48 @@ import type {
   AuditChecklistItem,
   AuditCorrectiveAction,
   AuditEvent,
+  AuditEvidence,
   AuditEvidenceFile,
   AuditFinding,
+  AuditPlan,
+  AuditPlanActivity,
   AuditFindingStatus,
   AuditStatus,
   EvidenceStorageOperation,
   Process,
-  ProcessChangeValue,
 } from '../../types'
 import { askConfirm } from '../ui/useConfirm'
+import { AuditTeamSection } from './AuditTeamSection'
+import { AuditPlanSection } from './AuditPlanSection'
+import { FindingDossier } from './FindingDossier'
+import { AuditReportPanel } from './AuditReportPanel'
+import { AuditFollowUpPanel } from './AuditFollowUpPanel'
 import {
   actionPriorityLabels,
   actionStatusLabels,
   actionTransitions,
   auditCloseBlockers,
   auditChecklistAIContext,
+  auditChecklistAIGenerationPayload,
+  auditChecklistAIErrorMessage,
   auditChecklistAIDimensionLabels,
+  auditEvidenceActivityLinkErrorMessage,
+  auditEvidenceActivityLinkRequest,
+  auditFindingActivityLinkErrorMessage,
   auditExecutionSummary,
   auditStatusLabels,
   auditTransitions,
   checklistResultLabels,
   checklistResults,
+  checklistItemContext,
+  checklistCriteriaFromAIProposal,
   dedupeAuditChecklistAIProposals,
   draftFromFinding,
   emptyActionDraft,
   emptyChecklistDraft,
   emptyChecklistItemDraft,
+  emptyEvidenceDraft,
   emptyFindingDraft,
-  eventLabel,
   evidenceFileRelationLabel,
   evidenceStorageStateLabels,
   evidenceStorageStateMessages,
@@ -47,6 +61,8 @@ import {
   formatBytes,
   isAuditActionOverdue,
   isTerminalAudit,
+  mergeAuditChecklistActivityItemIds,
+  mergeAuditFindingActivityIds,
   pendingEfficacyFindings,
   type ActionDraft,
   type AuditChecklistAIProposal,
@@ -54,15 +70,13 @@ import {
   type AuditWorkspaceSection,
   type ChecklistDraft,
   type ChecklistItemDraft,
-  type ChecklistItemOrigin,
+  type EvidenceDraft,
   type FindingDraft,
   type QualityUser,
 } from './quality.model'
+import { auditHistoryCategory, auditHistoryChangeLabel, auditHistoryChanges, auditHistoryChangeValue, auditHistoryGlyph, auditHistoryPresentation, formatAuditCalendarDate, formatAuditDateTime } from './audit-history.model'
 
-const dateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' })
-const shortDateFormatter = new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium' })
-
-const formatMaybeDate = (value: string | null | undefined) => (value ? shortDateFormatter.format(new Date(value)) : '—')
+const formatMaybeDate = (value: string | null | undefined) => (value ? formatAuditCalendarDate(value) : '—')
 
 const wordForCount = (count: number, singular: string, plural: string): string => count === 1 ? singular : plural
 
@@ -79,76 +93,37 @@ const closeBlockerMessage = (reason: string, count: number): string => {
   }
 }
 
-const auditHistoryGlyph = (eventType: AuditEvent['eventType']): string => {
-  if (eventType.includes('DELETED')) return '−'
-  if (eventType.includes('STATUS')) return '↕'
-  if (eventType.includes('PROGRESS')) return '↗'
-  if (eventType.includes('EVIDENCE') || eventType.includes('CHECKLIST')) return '▣'
-  if (eventType.includes('CREATED')) return '+'
-  return '✎'
-}
-
-const auditHistoryCategory = (eventType: AuditEvent['eventType']): string => {
-  if (eventType.includes('FINDING')) return 'Hallazgo'
-  if (eventType.includes('ACTION')) return 'Acción'
-  if (eventType.includes('EVIDENCE')) return 'Evidencia'
-  if (eventType.includes('CHECKLIST')) return 'Checklist'
-  return 'Auditoría'
-}
-
-const auditHistoryTechnicalLabels: Record<string, string> = {
-  OPEN: 'Abierto',
-  IN_PROGRESS: 'En curso',
-  PENDING: 'Pendiente',
-  NON_CONFORM: 'No conforme',
-  CONFORM: 'Conforme',
-  NOT_APPLICABLE: 'No aplica',
-  COMPLETED: 'Completado',
-  CANCELLED: 'Cancelado',
-  PLANNED: 'Planificada',
-  CLOSED: 'Cerrada',
-  RESOLVED: 'Resuelto',
-  VERIFIED: 'Verificado',
-  READY: 'Disponible',
-  FAILED: 'Fallido',
-  DELETE_PENDING: 'Eliminación pendiente',
-  RETRYABLE: 'Reintento programado',
-  CRITICAL: 'Crítica',
-  HIGH: 'Alta',
-  MEDIUM: 'Media',
-  LOW: 'Baja',
-  MAJOR: 'Mayor',
-  MINOR: 'Menor',
-  NONCONFORMITY: 'No conformidad',
-  OBSERVATION: 'Observación',
-  OPPORTUNITY: 'Oportunidad',
-  DRAFT: 'Borrador',
-  IN_REVIEW: 'En revisión',
-  APPROVED: 'Aprobado',
-  OBSOLETE: 'Obsoleto',
-  SUPERUSER: 'Superusuario',
-  COMPANY_ADMIN: 'Administrador',
-  COMPANY_USER: 'Usuario de empresa',
-}
-
-const auditHistoryValue = (value: ProcessChangeValue): string => {
-  if (value === null || value === '') return 'Sin valor'
-  if (typeof value === 'boolean') return value ? 'Sí' : 'No'
-  return auditHistoryTechnicalLabels[String(value)] ?? String(value)
-}
-
-const auditHistoryPresentation = (event: AuditEvent): { title: string; detail: string } => {
-  const title = eventLabel(event)
-  const quoted = event.summary.match(/«([^»]+)»/)
-  if (!quoted || quoted.index === undefined) return { title, detail: event.summary === title ? '' : event.summary }
-  const suffix = event.summary.slice(quoted.index + quoted[0].length).trim()
-  const genericSuffixes = new Set(['creado', 'creada', 'actualizado', 'actualizada', 'eliminado', 'eliminada', 'registrada', 'adjuntada', 'añadido', 'añadida'])
-  return { title, detail: [quoted[1], suffix && !genericSuffixes.has(suffix) ? suffix : ''].filter(Boolean).join(' · ') }
-}
-
 type AuditChecklistAIProcessFilter = 'ALL' | Process['type']
-type EvidenceAnchor = { findingId?: string; actionId?: string; itemId?: string }
+type EvidenceAnchor = { findingId?: string; actionId?: string; itemId?: string; evidenceId?: string; evidenceFileId?: string }
 type EvidenceOperationResponse = { operationId?: string; operationStatus?: EvidenceStorageOperation['status']; file?: AuditEvidenceFile | null }
+type ChecklistActivityContext = {
+  activityId: string
+  activityTitle: string
+  activityStatus: AuditPlanActivity['status']
+  processLabel: string | null
+  mode: 'manual' | 'checky'
+  dimension: AuditChecklistAIDimension | ''
+  createdItemIds: string[]
+  linkedItemIds: string[]
+}
+type FindingActivityContext = {
+  activityId: string
+  activityTitle: string
+  activityStatus: AuditPlanActivity['status']
+  processId: string | null
+  processLabel: string | null
+  createdFindingId: string | null
+  linkedFindingId: string | null
+}
+type EvidenceActivityContext = {
+  activityId: string
+  activityTitle: string
+  activityStatus: AuditPlanActivity['status']
+  processLabel: string | null
+  kind: 'url' | 'pdf'
+  registeredResourceId: string | null
+  linkError: string | null
+}
 
 const storageOperationStatusLabels: Record<EvidenceStorageOperation['status'], string> = {
   PENDING: 'Pendiente',
@@ -162,10 +137,37 @@ const storageOperationStatusLabels: Record<EvidenceStorageOperation['status'], s
 const isTerminalStorageOperation = (status: EvidenceStorageOperation['status']): boolean =>
   status === 'SUCCEEDED' || status === 'FAILED' || status === 'CANCELLED'
 
+export function EvidenceActivityComposer({ kind, disabled, onKindChange, urlForm, pdfForm }: { kind: 'url' | 'pdf'; disabled: boolean; onKindChange: (kind: 'url' | 'pdf') => void; urlForm: ReactNode; pdfForm: ReactNode }) {
+  return (
+    <div className="quality-evidence-activity-composer">
+      <div className="quality-evidence-kind-switch" role="group" aria-label="Tipo de evidencia">
+        <button type="button" className={`button small-button ${kind === 'url' ? 'primary' : 'secondary'}`} onClick={() => onKindChange('url')} disabled={disabled}>Añadir enlace URL</button>
+        <button type="button" className={`button small-button ${kind === 'pdf' ? 'primary' : 'secondary'}`} onClick={() => onKindChange('pdf')} disabled={disabled}>Subir PDF</button>
+      </div>
+      {kind === 'url' ? urlForm : pdfForm}
+    </div>
+  )
+}
+
 
 function findErrorMessage(requestError: unknown, fallback: string): string {
-  if (requestError instanceof ApiError) return requestError.message
+  if (requestError instanceof ApiError) {
+    if (requestError.reason === 'FINDING_LINKED_TO_ACTIVITY') return 'El hallazgo está vinculado a una actividad de auditoría y no se puede eliminar. Retira el vínculo histórico desde la actividad correspondiente.'
+    if (requestError.reason === 'EVIDENCE_LINKED_TO_ACTIVITY') return 'Esta evidencia no puede eliminarse porque está vinculada o tiene vínculos históricos con actividades de auditoría.'
+    if (requestError.reason === 'EVIDENCE_FILE_LINKED_TO_ACTIVITY') return 'Este archivo no puede eliminarse porque está vinculado o tiene vínculos históricos con actividades de auditoría.'
+    return requestError.message
+  }
   return fallback
+}
+
+function findingActivityError(requestError: unknown, fallback: string): string {
+  if (!(requestError instanceof ApiError)) return fallback
+  return auditFindingActivityLinkErrorMessage(requestError.status, requestError.reason, requestError.message, fallback)
+}
+
+function checklistAIError(requestError: unknown, fallback: string): string {
+  if (!(requestError instanceof ApiError)) return fallback
+  return auditChecklistAIErrorMessage(requestError.status, requestError.message, fallback)
 }
 
 /** Mensaje amable de un cierre rechazado por el servidor, enlazando con la condición incumplida. */
@@ -186,22 +188,6 @@ function closeErrorMessage(requestError: unknown): string {
   return 'No se pudo cerrar la auditoría.'
 }
 
-function checklistItemContext(criteria: string): { verification: string; source: string; dimension: string; origin: ChecklistItemOrigin } {
-  const lines = criteria.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  const valueFor = (prefix: string) => lines.find((line) => line.toLowerCase().startsWith(prefix.toLowerCase()))?.slice(prefix.length).trim() || null
-  const expectedEvidence = valueFor('Evidencia esperada:')
-  const source = valueFor('Fuente:')
-  const dimension = valueFor('Dimensión:')
-  const origin = valueFor('Origen:')
-  const contentLines = lines.filter((line) => !['evidencia esperada:', 'fuente:', 'dimensión:', 'origen:'].some((prefix) => line.toLowerCase().startsWith(prefix)))
-  return {
-    verification: (expectedEvidence ?? contentLines.join('\n')) || criteria,
-    source: source ?? 'No especificada',
-    dimension: dimension ?? 'No especificada',
-    origin: origin?.toLowerCase() === 'checky' || Boolean(expectedEvidence) ? 'CHECKY' : 'MANUAL',
-  }
-}
-
 function checklistDimensionValue(label: string): AuditChecklistAIDimension | '' {
   const match = (Object.entries(auditChecklistAIDimensionLabels) as Array<[AuditChecklistAIDimension, string]>)
     .find(([, value]) => value.toLowerCase() === label.toLowerCase())
@@ -219,18 +205,40 @@ function checklistCriteriaFromDraft(draft: ChecklistItemDraft): string {
 
 const sectionTabs: Array<{ id: AuditWorkspaceSection; label: string }> = [
   { id: 'resumen', label: 'Resumen' },
+  { id: 'plan', label: 'Plan de auditoría' },
+  { id: 'equipo', label: 'Equipo auditor' },
   { id: 'checklist', label: 'Checklist' },
   { id: 'hallazgos', label: 'Hallazgos' },
+  { id: 'informe', label: 'Informe de auditoría' },
+  { id: 'seguimiento', label: 'Seguimiento CAPA' },
   { id: 'historial', label: 'Historial' },
 ]
 
 const sectionLabels: Record<AuditWorkspaceSection, string> = {
   resumen: 'Resumen',
+  plan: 'Plan de auditoría',
+  equipo: 'Equipo auditor',
   checklist: 'Checklist',
   hallazgos: 'Hallazgos',
+  informe: 'Informe de auditoría',
+  seguimiento: 'Seguimiento CAPA',
   evidencias: 'Evidencias',
   acciones: 'Acciones correctivas',
   historial: 'Historial',
+}
+
+type AuditStageId = 'planificacion' | 'ejecucion' | 'hallazgos' | 'informe' | 'seguimiento'
+
+const auditStages: Array<{ id: AuditStageId; label: string; sections: AuditWorkspaceSection[]; defaultSection: AuditWorkspaceSection }> = [
+  { id: 'planificacion', label: 'Planificación', sections: ['resumen', 'plan', 'equipo'], defaultSection: 'plan' },
+  { id: 'ejecucion', label: 'Ejecución', sections: ['checklist'], defaultSection: 'checklist' },
+  { id: 'hallazgos', label: 'Hallazgos', sections: ['hallazgos'], defaultSection: 'hallazgos' },
+  { id: 'informe', label: 'Informe', sections: ['informe'], defaultSection: 'informe' },
+  { id: 'seguimiento', label: 'Seguimiento CAPA', sections: ['seguimiento'], defaultSection: 'seguimiento' },
+]
+
+function stageForSection(section: AuditWorkspaceSection): AuditStageId | null {
+  return auditStages.find((stage) => stage.sections.includes(section))?.id ?? null
 }
 
 function visibleSection(section: AuditWorkspaceSection): AuditWorkspaceSection {
@@ -243,7 +251,7 @@ function visibleSection(section: AuditWorkspaceSection): AuditWorkspaceSection {
  * servidor (transiciones, gates de cierre, bloqueos terminales); el cliente solo anticipa los
  * bloqueos para mostrar qué falta, sin sustituir la validación del backend.
  */
-export function AuditDetailView({ audit: initial, users, processes, canWrite, onChanged, onBack, onEdit, onError, onNotice, initialSection = 'resumen' }: {
+export function AuditDetailView({ audit: initial, users, processes, canWrite, onChanged, onBack, onEdit, onError, onNotice, initialSection = 'resumen', companyName }: {
   audit: Audit
   users: QualityUser[]
   processes: Process[]
@@ -254,6 +262,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   onError: (message: string) => void
   onNotice: (message: string) => void
   initialSection?: AuditWorkspaceSection
+  companyName?: string
 }) {
   const [audit, setAudit] = useState(initial)
   const [activeSection, setActiveSection] = useState<AuditWorkspaceSection>(() => visibleSection(initialSection))
@@ -263,6 +272,10 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const [historyOpen, setHistoryOpen] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '' })
+  const [checklistSearch, setChecklistSearch] = useState('')
+  const [checklistResultFilter, setChecklistResultFilter] = useState<typeof checklistResults[number] | ''>('')
+  const [checklistDimensionFilter, setChecklistDimensionFilter] = useState<AuditChecklistAIDimension | ''>('')
+  const [checklistProcessFilter, setChecklistProcessFilter] = useState('')
   const [itemDraft, setItemDraft] = useState<ChecklistItemDraft>(emptyChecklistItemDraft)
   const [itemFor, setItemFor] = useState<{ checklistId: string; item: AuditChecklistItem | null } | null>(null)
   const [itemError, setItemError] = useState('')
@@ -278,7 +291,15 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const [observationsFor, setObservationsFor] = useState<{ checklistId: string; itemId: string } | null>(null)
   const [observationsDraft, setObservationsDraft] = useState('')
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
+  const [checklistActivityContext, setChecklistActivityContext] = useState<ChecklistActivityContext | null>(null)
+  const [findingActivityContext, setFindingActivityContext] = useState<FindingActivityContext | null>(null)
   const [highlightActionId, setHighlightActionId] = useState<string | null>(null)
+  const [highlightFindingId, setHighlightFindingId] = useState<string | null>(null)
+  const [dossierFindingId, setDossierFindingId] = useState<string | null>(null)
+  const [planRefreshKey, setPlanRefreshKey] = useState(0)
+  const [evidenceActivityContext, setEvidenceActivityContext] = useState<EvidenceActivityContext | null>(null)
+  const [evidenceDraft, setEvidenceDraft] = useState<EvidenceDraft>(emptyEvidenceDraft)
+  const [evidenceSaving, setEvidenceSaving] = useState(false)
   const [findingDraft, setFindingDraft] = useState<FindingDraft>(emptyFindingDraft)
   const [findingFor, setFindingFor] = useState<{ finding: AuditFinding | null } | null>(null)
   const [pendingNonConformity, setPendingNonConformity] = useState<{ checklistId: string; itemId: string; observations: string } | null>(null)
@@ -308,14 +329,25 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setAIMissingInformation([])
     setAIProcessFilter('ALL')
     setAIDimensionFilter('ALL')
+    setChecklistSearch('')
+    setChecklistResultFilter('')
+    setChecklistDimensionFilter('')
+    setChecklistProcessFilter('')
     setAIExpandedProposalIds(new Set())
     setResponseEditorFor(null)
+    setChecklistActivityContext(null)
+    setFindingActivityContext(null)
     setEvidenceFilter(null)
     setEvidenceOperations({})
+    setEvidenceActivityContext(null)
+    setEvidenceDraft(emptyEvidenceDraft)
     historyAuditId.current = initial.id
     setClosing(false)
     setCloseSummary('')
     setCloseError('')
+    setHighlightFindingId(null)
+    setDossierFindingId(null)
+    setPlanRefreshKey(0)
   }
 
   // El listado entrega datos parciales (sin procesos/procedimientos vinculados, sin archivos de
@@ -341,6 +373,24 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   }, [highlightItemId, activeSection])
 
   useEffect(() => {
+    if (!highlightItemId) return
+    const timer = window.setTimeout(() => setHighlightItemId(null), 2400)
+    return () => window.clearTimeout(timer)
+  }, [highlightItemId])
+
+  useEffect(() => {
+    if (!highlightFindingId || activeSection !== 'hallazgos') return
+    const element = document.getElementById(`quality-finding-${highlightFindingId}`)
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [highlightFindingId, activeSection])
+
+  useEffect(() => {
+    if (!highlightFindingId) return
+    const timer = window.setTimeout(() => setHighlightFindingId(null), 2400)
+    return () => window.clearTimeout(timer)
+  }, [highlightFindingId])
+
+  useEffect(() => {
     if (!highlightActionId || activeSection !== 'acciones') return
     const element = document.getElementById(`quality-action-${highlightActionId}`)
     element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -351,6 +401,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const actionUsers = activeUserOptions(activeCompanyUsers, actionFor?.action?.responsible ? [actionFor.action.responsible] : [])
   const relatedProcessIds = new Set([audit.processId, ...(audit.relatedProcesses ?? []).map((process) => process.id)])
   const linkedProcedures = (audit.procedures ?? []).map((procedure) => procedure)
+  const findingProcedures = linkedProcedures.filter((procedure) => !findingDraft.processId || procedure.processId === findingDraft.processId)
 
   const results = auditExecutionSummary(audit)
   const closeBlockers = auditCloseBlockers(audit)
@@ -362,17 +413,25 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   const checklistCompleted = results.itemsEvaluated
   const checklistPending = results.itemsRequiredPending
   const checklistPercent = checklistTotal > 0 ? Math.min(100, Math.round((checklistCompleted / checklistTotal) * 100)) : 0
+  const evidences = audit.evidences ?? []
   const evidenceFiles = audit.evidenceFiles ?? []
-  const evidenceCount = evidenceFiles.length
+  const evidenceCount = evidences.length + evidenceFiles.length
   const hasEvidenceFilter = Boolean(evidenceFilter && Object.values(evidenceFilter).some(Boolean))
   const filteredEvidenceFiles = hasEvidenceFilter
     ? evidenceFiles.filter((file) => (
-      (evidenceFilter?.findingId && file.findingId === evidenceFilter.findingId)
+       (evidenceFilter?.evidenceFileId && file.id === evidenceFilter.evidenceFileId)
+       || (evidenceFilter?.findingId && file.findingId === evidenceFilter.findingId)
       || (evidenceFilter?.actionId && file.actionId === evidenceFilter.actionId)
       || (evidenceFilter?.itemId && file.itemId === evidenceFilter.itemId)
     ))
     : evidenceFiles
-  const visibleEvidenceCount = filteredEvidenceFiles.length
+  const filteredEvidences = hasEvidenceFilter
+    ? evidences.filter((evidence) => (
+      (evidenceFilter?.evidenceId && evidence.id === evidenceFilter.evidenceId)
+      || (evidenceFilter?.findingId && evidence.findingId === evidenceFilter.findingId)
+    ))
+    : evidences
+  const visibleEvidenceCount = filteredEvidenceFiles.length + filteredEvidences.length
   const activeStorageOperations = Object.values(evidenceOperations).filter((operation) => !isTerminalStorageOperation(operation.status) || operation.status === 'FAILED')
   const closeWarnings = [
     results.itemsPending - results.itemsRequiredPending > 0
@@ -395,19 +454,250 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       return (left.action.dueDate ?? '9999-12-31').localeCompare(right.action.dueDate ?? '9999-12-31')
     })
   const historyForCurrentAudit = historyAuditId.current === audit.id
+  const dossierFinding = dossierFindingId ? audit.findings.find((finding) => finding.id === dossierFindingId) ?? null : null
+  const activeStage = stageForSection(activeSection)
+  const nextStep = terminal
+    ? { section: 'historial' as AuditWorkspaceSection, title: 'Revisa la trazabilidad del expediente', detail: 'La auditoría está cerrada. Consulta los cambios y decisiones registradas.', action: 'Abrir historial' }
+    : audit.status === 'PLANNED'
+      ? { section: 'plan' as AuditWorkspaceSection, title: 'Completa la preparación', detail: 'Confirma el alcance, el equipo y el plan antes de iniciar la ejecución.', action: 'Ir a planificación' }
+      : checklistPending > 0
+        ? { section: 'checklist' as AuditWorkspaceSection, title: 'Completa el checklist obligatorio', detail: `${checklistPending} ${wordForCount(checklistPending, 'criterio obligatorio requiere', 'criterios obligatorios requieren')} evaluación.`, action: 'Abrir checklist' }
+        : results.findingsOpen > 0
+          ? { section: 'hallazgos' as AuditWorkspaceSection, title: 'Revisa los hallazgos abiertos', detail: `${results.findingsOpen} ${wordForCount(results.findingsOpen, 'hallazgo sigue', 'hallazgos siguen')} en seguimiento.`, action: 'Ver hallazgos' }
+          : openActions > 0
+            ? { section: 'seguimiento' as AuditWorkspaceSection, title: 'Continúa el seguimiento CAPA', detail: `${openActions} ${wordForCount(openActions, 'acción obligatoria permanece', 'acciones obligatorias permanecen')} abierta.`, action: 'Ver seguimiento' }
+            : { section: 'informe' as AuditWorkspaceSection, title: 'Prepara el informe de auditoría', detail: 'No hay pendientes críticos visibles. Consolida los resultados y las conclusiones.', action: 'Abrir informe' }
+  const stageMeta: Record<AuditStageId, string> = {
+    planificacion: audit.status === 'PLANNED' ? 'Por iniciar' : 'Registrada',
+    ejecucion: checklistTotal > 0 ? `${checklistPercent}% evaluado` : 'Sin checklist',
+    hallazgos: results.findingsTotal > 0 ? `${results.findingsOpen} abiertos` : 'Sin hallazgos',
+    informe: audit.summary ? 'Resumen disponible' : 'Pendiente',
+    seguimiento: openActions > 0 ? `${openActions} pendientes` : 'Al día',
+  }
+  const checklistProcessOptions = processes.filter((process) => (audit.checklists ?? []).some((checklist) => checklist.items.some((item) => (item as AuditChecklistItem & { processId?: string }).processId === process.id)))
+  const checklistSearchTerm = checklistSearch.trim().toLowerCase()
+  const checklistMatches = (item: AuditChecklistItem) => {
+    const context = checklistItemContext(item.criteria)
+    const itemProcessId = (item as AuditChecklistItem & { processId?: string }).processId
+    const searchableText = `${item.description} ${context.verification} ${context.source} ${context.dimension}`.toLowerCase()
+    const dimensionLabel = checklistDimensionFilter ? auditChecklistAIDimensionLabels[checklistDimensionFilter] : ''
+    return (!checklistSearchTerm || searchableText.includes(checklistSearchTerm))
+      && (!checklistResultFilter || item.result === checklistResultFilter)
+      && (!checklistDimensionFilter || context.dimension.toLowerCase().includes(dimensionLabel.toLowerCase()) || context.dimension.toUpperCase().includes(checklistDimensionFilter))
+      && (!checklistProcessFilter || itemProcessId === checklistProcessFilter)
+  }
+  const filteredChecklists = (audit.checklists ?? []).map((checklist) => ({ checklist, items: checklist.items.filter(checklistMatches) }))
+  const visibleChecklistCount = filteredChecklists.reduce((count, entry) => count + entry.items.length, 0)
   const historyLoadedForCurrentAudit = historyLoaded && historyForCurrentAudit
   const historyLoadingForCurrentAudit = historyLoading && historyForCurrentAudit
+  const contextualChecklistItems = checklistActivityContext
+    ? (audit.checklists ?? []).flatMap((checklist) => checklist.items).filter((item) => checklistActivityContext.createdItemIds.includes(item.id))
+    : []
+  const contextualChecklistPendingIds = checklistActivityContext?.createdItemIds.filter((itemId) => !checklistActivityContext.linkedItemIds.includes(itemId)) ?? []
 
   async function reload() {
     const result = await api<{ audit: Audit }>(`/audits/${audit.id}`)
     setAudit(result.audit)
     await onChanged()
+    if (historyLoadedForCurrentAudit) await loadHistory()
   }
 
   function selectSection(section: AuditWorkspaceSection) {
     const nextSection = visibleSection(section)
     setActiveSection(nextSection)
     if (nextSection === 'historial' && !historyLoadedForCurrentAudit && !historyLoadingForCurrentAudit) void loadHistory()
+  }
+
+  function openChecklistCreationFromActivity(activity: AuditPlanActivity, mode: ChecklistActivityContext['mode']) {
+    if (activity.status !== 'IN_PROGRESS' || readonly || busy || aiGenerating) return
+    if (aiProposals.length > 0) {
+      selectSection('checklist')
+      onNotice('Termina, guarda o descarta la revisión actual antes de iniciar otra solicitud contextual.')
+      return
+    }
+    setAIError('')
+    setAIMissingInformation([])
+    setChecklistActivityContext({
+      activityId: activity.id,
+      activityTitle: activity.title,
+      activityStatus: activity.status,
+      processLabel: activity.process ? `${activity.process.code ?? 'Proceso'} · ${activity.process.name}` : null,
+      mode,
+      dimension: '',
+      createdItemIds: [],
+      linkedItemIds: [],
+    })
+    selectSection('checklist')
+    if (mode === 'manual') {
+      const targetChecklist = audit.checklists?.[0]
+      if (!targetChecklist) {
+        onNotice('Crea primero una lista de verificación oficial para añadir la pregunta.')
+        return
+      }
+      openNewChecklistItem(targetChecklist.id)
+      return
+    }
+  }
+
+  function openFindingCreationFromActivity(activity: AuditPlanActivity) {
+    if (activity.status !== 'IN_PROGRESS' || readonly || busy) return
+    setFindingActivityContext({
+      activityId: activity.id,
+      activityTitle: activity.title,
+      activityStatus: activity.status,
+      processId: activity.process?.id ?? null,
+      processLabel: activity.process ? `${activity.process.code ?? 'Proceso'} · ${activity.process.name}` : null,
+      createdFindingId: null,
+      linkedFindingId: null,
+    })
+    startFinding(undefined, activity)
+  }
+
+  function openEvidenceCreationFromActivity(activity: AuditPlanActivity) {
+    if (activity.status !== 'IN_PROGRESS' || readonly || busy || evidenceSaving) return
+    setEvidenceActivityContext({
+      activityId: activity.id,
+      activityTitle: activity.title,
+      activityStatus: activity.status,
+      processLabel: activity.process ? `${activity.process.code ?? 'Proceso'} · ${activity.process.name}` : null,
+      kind: 'url',
+      registeredResourceId: null,
+      linkError: null,
+    })
+    setEvidenceDraft(emptyEvidenceDraft)
+    setUploadFor(null)
+    selectSection('evidencias')
+  }
+
+  async function linkContextEvidence(kind: 'url' | 'pdf', resourceId: string, context: EvidenceActivityContext): Promise<boolean> {
+    if (busy || readonly) return false
+    setBusy(true)
+    setEvidenceActivityContext((current) => current ? { ...current, registeredResourceId: resourceId, linkError: null } : current)
+    try {
+      const planResult = await api<{ plan: AuditPlan }>(`/audits/${audit.id}/plan`)
+      const activity = planResult.plan.activities.find((candidate) => candidate.id === context.activityId)
+      if (!activity) {
+        const message = 'La actividad de origen ya no está disponible en el plan de auditoría.'
+        setEvidenceActivityContext((current) => current ? { ...current, registeredResourceId: resourceId, linkError: message } : current)
+        return false
+      }
+      if (activity.status !== 'IN_PROGRESS') {
+        const message = 'La evidencia oficial permanece guardada, pero la actividad ya no está en curso y no admite nuevos vínculos.'
+        setEvidenceActivityContext((current) => current ? { ...current, activityStatus: activity.status, registeredResourceId: resourceId, linkError: message } : current)
+        return false
+      }
+      const existingIds = (kind === 'url' ? activity.resources?.evidences : activity.resources?.evidenceFiles)?.map((resource) => resource.id) ?? []
+      const linkRequest = auditEvidenceActivityLinkRequest(kind, existingIds, resourceId)
+      const result = await api<{ plan: AuditPlan }>(`/audits/${audit.id}/plan/activities/${activity.id}/execution/${linkRequest.endpoint}`, {
+        method: 'PUT',
+        body: JSON.stringify({ [linkRequest.field]: linkRequest.ids }),
+      })
+      const updatedActivity = result.plan.activities.find((candidate) => candidate.id === activity.id)
+      setEvidenceActivityContext((current) => current ? { ...current, activityStatus: updatedActivity?.status ?? current.activityStatus, registeredResourceId: resourceId, linkError: null } : current)
+      setPlanRefreshKey((current) => current + 1)
+      await reload()
+      onNotice('La evidencia oficial quedó guardada y vinculada a la actividad.')
+      return true
+    } catch (requestError) {
+      const message = auditEvidenceActivityLinkErrorMessage(requestError instanceof ApiError ? requestError.status : 0, requestError instanceof ApiError ? requestError.reason : undefined, requestError instanceof ApiError ? requestError.message : '', 'La evidencia oficial permanece guardada, pero no se pudo vincular a la actividad.')
+      setEvidenceActivityContext((current) => current ? { ...current, registeredResourceId: resourceId, linkError: message } : current)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function retryEvidenceContextLink() {
+    const context = evidenceActivityContext
+    if (!context?.registeredResourceId || context.activityStatus !== 'IN_PROGRESS' || busy || readonly) return
+    await linkContextEvidence(context.kind, context.registeredResourceId, context)
+  }
+
+  function openOfficialEvidence(kind: 'url' | 'pdf', evidenceId: string) {
+    selectEvidenceContext(kind === 'url' ? { evidenceId } : { evidenceFileId: evidenceId })
+  }
+
+  function returnToEvidenceActivity() {
+    setEvidenceActivityContext(null)
+    setEvidenceDraft(emptyEvidenceDraft)
+    setUploadFor(null)
+    setPlanRefreshKey((current) => current + 1)
+    selectSection('plan')
+  }
+
+  function rememberContextItems(itemIds: string[]) {
+    if (itemIds.length === 0) return
+    setChecklistActivityContext((current) => current
+      ? { ...current, createdItemIds: [...new Set([...current.createdItemIds, ...itemIds])] }
+      : current)
+  }
+
+  async function linkContextItems() {
+    const context = checklistActivityContext
+    if (!context || contextualChecklistPendingIds.length === 0 || busy || readonly) return
+    setBusy(true)
+    try {
+      const planResult = await api<{ plan: AuditPlan }>(`/audits/${audit.id}/plan`)
+      const activity = planResult.plan.activities.find((candidate) => candidate.id === context.activityId)
+      if (!activity) {
+        onError('La actividad de origen ya no está disponible en el plan de auditoría.')
+        return
+      }
+      if (activity.status !== 'IN_PROGRESS') {
+        setChecklistActivityContext((current) => current ? { ...current, activityStatus: activity.status } : current)
+        onError('La actividad ya no está en curso; no se pueden añadir nuevos vínculos.')
+        return
+      }
+      const existingIds = (activity.resources?.checklistItems ?? []).map((item) => item.id)
+       const itemIds = mergeAuditChecklistActivityItemIds(existingIds, context.createdItemIds)
+      await api(`/audits/${audit.id}/plan/activities/${activity.id}/execution/checklist-items`, {
+        method: 'PUT',
+        body: JSON.stringify({ itemIds }),
+      })
+      setChecklistActivityContext((current) => current ? { ...current, linkedItemIds: current.createdItemIds } : current)
+      onNotice('Las preguntas aceptadas quedaron vinculadas a la actividad.')
+    } catch (requestError) {
+      onError(checklistAIError(requestError, 'No se pudieron vincular las preguntas a la actividad.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function linkContextFinding() {
+    const context = findingActivityContext
+    if (!context?.createdFindingId || busy || readonly) return
+    setBusy(true)
+    try {
+      const planResult = await api<{ plan: AuditPlan }>(`/audits/${audit.id}/plan`)
+      const activity = planResult.plan.activities.find((candidate) => candidate.id === context.activityId)
+      if (!activity) {
+        onError('La actividad de origen ya no está disponible en el plan de auditoría.')
+        return
+      }
+      if (activity.status !== 'IN_PROGRESS') {
+        setFindingActivityContext((current) => current ? { ...current, activityStatus: activity.status } : current)
+        onError('La actividad ya no está en curso; el hallazgo oficial permanece guardado y no se intentó vincular.')
+        return
+      }
+      const existingIds = (activity.resources?.findings ?? []).map((finding) => finding.id)
+      const findingIds = mergeAuditFindingActivityIds(existingIds, context.createdFindingId)
+      const result = await api<{ plan: AuditPlan }>(`/audits/${audit.id}/plan/activities/${activity.id}/execution/findings`, {
+        method: 'PUT',
+        body: JSON.stringify({ findingIds }),
+      })
+      setFindingActivityContext((current) => current ? { ...current, linkedFindingId: context.createdFindingId, activityStatus: result.plan.activities.find((candidate) => candidate.id === activity.id)?.status ?? current.activityStatus } : current)
+      setPlanRefreshKey((current) => current + 1)
+      await reload().catch(() => undefined)
+      onNotice('El hallazgo oficial quedó vinculado a la actividad.')
+    } catch (requestError) {
+      onError(findingActivityError(requestError, 'El hallazgo oficial permanece guardado, pero no se pudo vincular a la actividad.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function returnToChecklistActivity() {
+    selectSection('plan')
   }
 
   function goToActions() {
@@ -427,8 +717,16 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     selectSection('evidencias')
   }
 
+  function uploadAnchorFromEvidenceFilter(anchor: EvidenceAnchor | null): { findingId?: string; actionId?: string; itemId?: string } {
+    if (!anchor) return {}
+    if (anchor.findingId) return { findingId: anchor.findingId }
+    if (anchor.actionId) return { actionId: anchor.actionId }
+    if (anchor.itemId) return { itemId: anchor.itemId }
+    return {}
+  }
+
   function evidenceCountFor(anchor: EvidenceAnchor): number {
-    return evidenceFiles.filter((file) => (
+    return evidences.filter((evidence) => anchor.findingId && evidence.findingId === anchor.findingId).length + evidenceFiles.filter((file) => (
         (anchor.findingId && file.findingId === anchor.findingId)
         || (anchor.actionId && file.actionId === anchor.actionId)
         || (anchor.itemId && file.itemId === anchor.itemId)
@@ -436,6 +734,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
   }
 
   function evidenceContextLabel(anchor: EvidenceAnchor): string {
+    if (anchor.evidenceId) return `Enlace: ${evidences.find((evidence) => evidence.id === anchor.evidenceId)?.name ?? '—'}`
+    if (anchor.evidenceFileId) return `PDF: ${evidenceFiles.find((file) => file.id === anchor.evidenceFileId)?.filename ?? '—'}`
     if (anchor.findingId) return `Hallazgo: ${audit.findings.find((finding) => finding.id === anchor.findingId)?.title ?? '—'}`
     if (anchor.actionId) return `Acción: ${audit.findings.flatMap((finding) => finding.actions ?? []).find((action) => action.id === anchor.actionId)?.title ?? '—'}`
     if (anchor.itemId) return `Criterio: ${(audit.checklists ?? []).flatMap((checklist) => checklist.items).find((item) => item.id === anchor.itemId)?.description ?? '—'}`
@@ -454,17 +754,38 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     if (event.key === 'Home') next = 0
     if (event.key === 'End') next = buttons.length - 1
     buttons[next].focus()
-    selectSection(sectionTabs[next].id)
+    const section = buttons[next].dataset.section as AuditWorkspaceSection | undefined
+    if (section) selectSection(section)
   }
 
   function goToChecklistItem(itemId: string) {
-    setActiveSection('checklist')
+    const item = (audit.checklists ?? []).flatMap((checklist) => checklist.items).find((candidate) => candidate.id === itemId)
+    if (!item) {
+      onNotice('La pregunta vinculada ya no está disponible en el checklist oficial.')
+      return
+    }
+    selectSection('checklist')
     setHighlightItemId(itemId)
   }
 
-  function startFinding(itemId?: string) {
+  function goToFinding(findingId: string) {
+    if (!audit.findings.some((finding) => finding.id === findingId)) {
+      onNotice('El hallazgo oficial ya no está disponible en este expediente.')
+      return
+    }
+    setHighlightFindingId(findingId)
+    selectSection('hallazgos')
+  }
+
+  function startFinding(itemId?: string, activity?: AuditPlanActivity) {
+    if (!activity) setFindingActivityContext(null)
     setFindingFor({ finding: null })
-    setFindingDraft({ ...emptyFindingDraft, responsibleId: audit.responsible?.id ?? '', ...(itemId ? { itemId } : {}) })
+    setFindingDraft({
+      ...emptyFindingDraft,
+      responsibleId: audit.responsible?.id ?? '',
+      ...(itemId ? { itemId } : {}),
+      ...(activity?.process ? { processId: activity.process.id } : {}),
+    })
     setActiveSection('hallazgos')
   }
 
@@ -554,7 +875,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     }
   }
 
-  async function generateChecklistWithAI() {
+  async function generateChecklistWithAI(context: ChecklistActivityContext | null = null) {
     if (readonly || aiGenerating || busy) return
     setAIGenerating(true)
     setAIError('')
@@ -563,7 +884,10 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       const result = await api<{
         proposals: Array<Omit<AuditChecklistAIProposal, 'id' | 'selected'>>
         missingInformation: string[]
-      }>(`/audits/${audit.id}/checklists/generate`, { method: 'POST', body: JSON.stringify({}) })
+      }>(`/audits/${audit.id}/checklists/generate`, {
+        method: 'POST',
+        body: JSON.stringify(auditChecklistAIGenerationPayload(context?.mode === 'checky' ? context : null)),
+      })
       const existingQuestions = (audit.checklists ?? []).flatMap((checklist) => checklist.items.map((item) => item.description))
       const uniqueProposals = dedupeAuditChecklistAIProposals(existingQuestions, result.proposals)
       setAIProposals(uniqueProposals.map((proposal, index) => ({ ...proposal, id: `checky-${Date.now()}-${index}`, selected: true })))
@@ -572,7 +896,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       setAIMissingInformation(result.missingInformation)
       if (uniqueProposals.length === 0 && result.missingInformation.length === 0) setAIError('Checky no encontró preguntas sustentadas en la documentación disponible.')
     } catch (requestError) {
-      setAIError(findErrorMessage(requestError, 'No se pudieron generar preguntas con IA-Checky.'))
+      setAIError(checklistAIError(requestError, 'No se pudieron generar preguntas con IA-Checky.'))
     } finally {
       setAIGenerating(false)
     }
@@ -596,24 +920,31 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setBusy(true)
     setAIError('')
     const savedIds = new Set<string>()
+    const savedItemIds = new Set<string>()
     try {
       for (const proposal of selected) {
-        const criteria = [
-          `Evidencia esperada: ${proposal.expectedEvidence.trim()}`,
-          `Fuente: ${proposal.source.trim()}`,
-          `Dimensión: ${auditChecklistAIDimensionLabels[proposal.dimension]}`,
-        ].join('\n')
-        await api(`/audits/${audit.id}/checklists/${aiChecklistId}/items`, {
+        const criteria = checklistCriteriaFromAIProposal(proposal)
+        const result = await api<{ item: AuditChecklistItem }>(`/audits/${audit.id}/checklists/${aiChecklistId}/items`, {
           method: 'POST',
           body: JSON.stringify({ description: proposal.question.trim(), criteria, required: true }),
         })
         savedIds.add(proposal.id)
+        savedItemIds.add(result.item.id)
       }
       setAIProposals((current) => current.filter((proposal) => !savedIds.has(proposal.id)))
+      rememberContextItems([...savedItemIds])
       await reload()
       onNotice(`${savedIds.size} pregunta(s) de IA-Checky guardada(s).`)
     } catch (requestError) {
       setAIProposals((current) => current.filter((proposal) => !savedIds.has(proposal.id)))
+      rememberContextItems([...savedItemIds])
+      if (savedItemIds.size > 0) {
+        try {
+          await reload()
+        } catch {
+          // Conserva el error original; la siguiente apertura del detalle volverá a cargar el checklist.
+        }
+      }
       onError(findErrorMessage(requestError, savedIds.size > 0 ? 'Algunas propuestas se guardaron, pero otras no.' : 'No se pudieron guardar las propuestas.'))
     } finally {
       setBusy(false)
@@ -717,14 +1048,17 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setBusy(true)
     try {
       const payload = { description, criteria: checklistCriteriaFromDraft({ ...itemDraft, description, criteria }), required: itemDraft.required }
+      let createdItemId: string | null = null
       if (itemFor.item) {
         await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items/${itemFor.item.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       } else {
-        await api(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items`, { method: 'POST', body: JSON.stringify(payload) })
+        const result = await api<{ item: AuditChecklistItem }>(`/audits/${audit.id}/checklists/${itemFor.checklistId}/items`, { method: 'POST', body: JSON.stringify(payload) })
+        createdItemId = result.item.id
       }
       setItemFor(null)
       setItemDraft(emptyChecklistItemDraft)
       setItemError('')
+      if (createdItemId) rememberContextItems([createdItemId])
       await reload()
       onNotice(itemFor.item ? 'Pregunta actualizada.' : 'Pregunta manual guardada.')
     } catch (requestError) {
@@ -810,6 +1144,8 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     event.preventDefault()
     if (!findingFor || busy) return
     setBusy(true)
+    const activityContext = findingActivityContext
+    let createdFinding: AuditFinding | null = null
     const payload = {
       title: findingDraft.title,
       description: findingDraft.description,
@@ -826,7 +1162,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       if (findingFor.finding) {
         await api(`/audits/${audit.id}/findings/${findingFor.finding.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       } else {
-        await api(`/audits/${audit.id}/findings`, { method: 'POST', body: JSON.stringify(payload) })
+        const response = await api<{ finding: AuditFinding }>(`/audits/${audit.id}/findings`, { method: 'POST', body: JSON.stringify(payload) })
+        createdFinding = response.finding
+        if (activityContext) {
+          setFindingActivityContext((current) => current ? { ...current, createdFindingId: createdFinding!.id, linkedFindingId: null } : current)
+        }
         if (pendingNonConformity) {
           await api(`/audits/${audit.id}/checklists/${pendingNonConformity.checklistId}/items/${pendingNonConformity.itemId}`, {
             method: 'PATCH',
@@ -839,7 +1179,14 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
       await reload()
       onNotice(findingFor.finding ? 'Hallazgo actualizado.' : 'Hallazgo creado.')
     } catch (requestError) {
-      onError(findErrorMessage(requestError, 'No se pudo guardar el hallazgo.'))
+      if (createdFinding && activityContext) {
+        setFindingFor(null)
+        setPendingNonConformity(null)
+        await reload().catch(() => undefined)
+        onError(`El hallazgo «${createdFinding.title}» quedó guardado en el expediente, pero no se completó el resto del flujo. Puedes reintentar únicamente la vinculación desde este contexto. ${findErrorMessage(requestError, '')}`.trim())
+      } else {
+        onError(findErrorMessage(requestError, 'No se pudo guardar el hallazgo.'))
+      }
     } finally {
       setBusy(false)
     }
@@ -959,25 +1306,54 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     }
   }
 
-  async function watchEvidenceOperation(operationId: string) {
+  async function watchEvidenceOperation(operationId: string): Promise<string | null> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       try {
         const result = await api<{ operation: EvidenceStorageOperation }>(`/audits/${audit.id}/evidence-operations/${operationId}`)
         setEvidenceOperations((current) => ({ ...current, [operationId]: result.operation }))
         if (isTerminalStorageOperation(result.operation.status)) {
           await reload()
-          return
+          return result.operation.evidenceFileId
         }
       } catch {
-        return
+        return null
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    }
+    return null
+  }
+
+  async function saveEvidence(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (evidenceSaving || readonly || !evidenceActivityContext || evidenceActivityContext.kind !== 'url' || evidenceActivityContext.registeredResourceId) return
+    if (evidenceActivityContext.activityStatus !== 'IN_PROGRESS') {
+      setEvidenceActivityContext((current) => current ? { ...current, linkError: 'La actividad ya no está en curso y no admite nuevas evidencias.' } : current)
+      return
+    }
+    setEvidenceSaving(true)
+    try {
+      const result = await api<{ evidence: AuditEvidence }>(`/audits/${audit.id}/evidences`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: evidenceDraft.name.trim(),
+          description: evidenceDraft.description.trim(),
+          url: evidenceDraft.url.trim(),
+          findingId: evidenceDraft.findingId || null,
+        }),
+      })
+      await reload().catch(() => undefined)
+      await linkContextEvidence('url', result.evidence.id, evidenceActivityContext)
+    } catch (requestError) {
+      onError(findErrorMessage(requestError, 'No se pudo registrar la evidencia URL.'))
+    } finally {
+      setEvidenceSaving(false)
     }
   }
 
   async function uploadFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!uploadFor || uploading) return
+    const activityContext = evidenceActivityContext?.kind === 'pdf' ? evidenceActivityContext : null
+    if ((!uploadFor && !activityContext) || uploading) return
     const input = (event.currentTarget.elements.namedItem('file') as HTMLInputElement | null)
     const file = input?.files?.[0]
     if (!file) {
@@ -987,11 +1363,24 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
     setUploading(true)
     setUploadProgress(0)
     try {
-      const result = await apiUpload<EvidenceOperationResponse>(`/audits/${audit.id}/evidence-files`, file, uploadFor, setUploadProgress)
-      if (result.operationId) void watchEvidenceOperation(result.operationId)
+      const result = await apiUpload<EvidenceOperationResponse>(`/audits/${audit.id}/evidence-files`, file, uploadFor ?? {}, setUploadProgress)
+      let uploadedFileId = result.file?.id ?? null
+      if (result.operationId) {
+        const operation = watchEvidenceOperation(result.operationId)
+        if (activityContext) uploadedFileId = uploadedFileId ?? await operation
+        else void operation
+      }
       setUploadFor(null)
       await reload()
-      onNotice(result.operationId ? 'PDF registrado; se está procesando.' : 'PDF adjuntado correctamente.')
+      if (activityContext) {
+        if (!uploadedFileId) {
+          setEvidenceActivityContext((current) => current ? { ...current, linkError: 'El PDF oficial quedó registrado, pero todavía no pudimos identificarlo para vincularlo. Revisa las operaciones de almacenamiento e inténtalo de nuevo.' } : current)
+        } else {
+          await linkContextEvidence('pdf', uploadedFileId, activityContext)
+        }
+      } else {
+        onNotice(result.operationId ? 'PDF registrado; se está procesando.' : 'PDF adjuntado correctamente.')
+      }
     } catch (requestError) {
       onError(findErrorMessage(requestError, 'No se pudo subir el PDF.'))
     } finally {
@@ -1025,48 +1414,58 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
   return (
     <div className="quality-detail">
-      <div className="procedure-page-header">
-        <button type="button" className="text-button procedure-back-button" onClick={onBack}>← Volver al listado</button>
-        <div className="procedure-page-heading">
-          <div>
-            <p className="eyebrow">{audit.code} · {audit.process.name}</p>
+      <header className="quality-detail-header">
+        <button type="button" className="text-button procedure-back-button" onClick={onBack}>← Volver a auditorías</button>
+        <div className="quality-detail-heading">
+          <div className="quality-detail-title-block">
+            <div className="quality-detail-title-meta"><span className="audit-program-code">{audit.code}</span><span className={`badge quality-status ${audit.status.toLowerCase()}`}>{auditStatusLabels[audit.status]}</span></div>
             <h1>{audit.title}</h1>
             <p className="muted">{audit.scope}</p>
+            <div className="quality-detail-context"><span><small>Empresa</small><strong>{companyName ?? 'Empresa actual'}</strong></span><span><small>Proceso</small><strong>{audit.process.code} · {audit.process.name}</strong></span><span><small>Responsable</small><strong>{audit.responsible ? userOptionLabel(audit.responsible) : 'Sin asignar'}</strong></span></div>
           </div>
           <div className="quality-detail-actions">
-            <span className={`badge quality-status ${audit.status.toLowerCase()}`}>{auditStatusLabels[audit.status]}</span>
-            {canWrite && !terminal && <button type="button" className="button secondary" onClick={onEdit}>Editar</button>}
+            {canWrite && !terminal && <button type="button" className="button secondary" onClick={onEdit}>Editar auditoría</button>}
           </div>
         </div>
-      </div>
+      </header>
 
       {terminal && <p className="audit-terminal-note">Auditoría {auditStatusLabels[audit.status].toLowerCase()}: las escrituras quedan bloqueadas.</p>}
       <div className="quality-detail-overview">
         <div className="quality-detail-stat"><span className="quality-stat-mark blue">◷</span><span><small>Estado actual</small><strong>{auditStatusLabels[audit.status]}</strong></span></div>
-        <div className="quality-detail-stat"><span className="quality-stat-mark amber">□</span><span><small>Checklist</small><strong>{checklistCompleted}/{checklistTotal || '—'} evaluados</strong></span></div>
+        <div className="quality-detail-stat quality-detail-stat-progress"><span className="quality-stat-mark amber">□</span><span><small>Checklist</small><strong>{checklistPercent}% evaluado</strong><em>{checklistCompleted}/{checklistTotal || '—'} · {checklistPending} pendientes</em><span className="quality-detail-progress" role="progressbar" aria-label="Progreso del checklist" aria-valuemin={0} aria-valuemax={100} aria-valuenow={checklistPercent}><i style={{ width: `${checklistPercent}%` }} /></span></span></div>
         <div className="quality-detail-stat"><span className="quality-stat-mark red">!</span><span><small>Hallazgos abiertos</small><strong>{results.findingsOpen}</strong></span></div>
+        <div className="quality-detail-stat"><span className="quality-stat-mark purple">↗</span><span><small>Acciones CAPA abiertas</small><strong>{openActions}</strong></span></div>
         <div className="quality-detail-stat"><span className="quality-stat-mark purple">↗</span><span><small>Evidencias</small><strong>{evidenceCount} registradas</strong><button type="button" className="text-button" onClick={() => selectEvidenceContext()}>Ver evidencias</button></span></div>
       </div>
 
-      <div className="quality-workspace-tabs" role="tablist" aria-label="Secciones de la auditoría" onKeyDown={handleTabKeyDown}>
-        {sectionTabs.map((tab) => {
-          const badge = tabBadges[tab.id]
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              id={`quality-tab-${tab.id}`}
-              aria-selected={activeSection === tab.id}
-              aria-controls={`quality-panel-${tab.id}`}
-              className={`quality-tab${activeSection === tab.id ? ' active' : ''}`}
-              onClick={() => selectSection(tab.id)}
-            >
-              {tab.label}
-              {!!badge && badge > 0 && <span>{badge}</span>}
-            </button>
-          )
-        })}
+      <section className="quality-next-step" aria-labelledby="quality-next-step-title">
+        <span className="quality-next-step-mark" aria-hidden="true">→</span>
+        <div><p className="detail-label">Siguiente paso recomendado</p><h2 id="quality-next-step-title">{nextStep.title}</h2><p>{nextStep.detail}</p></div>
+        <button type="button" className="button secondary small-button" onClick={() => selectSection(nextStep.section)}>{nextStep.action}</button>
+      </section>
+
+      <nav className="audit-stage-route" aria-label="Etapas de la auditoría">
+        {auditStages.map((stage, index) => (
+          <button type="button" key={stage.id} className={`audit-stage-step${activeStage === stage.id ? ' active' : ''}`} aria-current={activeStage === stage.id ? 'step' : undefined} onClick={() => selectSection(stage.defaultSection)}>
+            <span className="audit-stage-marker">{index + 1}</span><span className="audit-stage-copy"><strong>{stage.label}</strong><small>{stageMeta[stage.id]}</small></span>
+          </button>
+        ))}
+        <button type="button" className={`audit-stage-history${activeSection === 'historial' ? ' active' : ''}`} onClick={() => selectSection('historial')}>Historial</button>
+      </nav>
+
+      <div className="audit-stage-tabs" role="tablist" aria-label="Secciones de la auditoría" onKeyDown={handleTabKeyDown}>
+        {auditStages.map((stage) => (
+          <div className={`audit-stage-tab-group${activeStage === stage.id ? ' active' : ''}`} key={stage.id}>
+            <span className="audit-stage-tab-label">{stage.label}</span>
+            <div className="audit-stage-tab-list">
+              {sectionTabs.filter((tab) => stage.sections.includes(tab.id)).map((tab) => {
+                const badge = tabBadges[tab.id]
+                return <button key={tab.id} type="button" role="tab" id={`quality-tab-${tab.id}`} data-section={tab.id} aria-selected={activeSection === tab.id} aria-controls={`quality-panel-${tab.id}`} className={`quality-tab${activeSection === tab.id ? ' active' : ''}`} onClick={() => selectSection(tab.id)}>{tab.label}{!!badge && badge > 0 && <span>{badge}</span>}</button>
+              })}
+            </div>
+          </div>
+        ))}
+        <button type="button" role="tab" id="quality-tab-historial" data-section="historial" aria-selected={activeSection === 'historial'} aria-controls="quality-panel-historial" className={`quality-tab audit-history-tab${activeSection === 'historial' ? ' active' : ''}`} onClick={() => selectSection('historial')}>Historial</button>
       </div>
 
       {activeSection === 'resumen' && (
@@ -1239,9 +1638,62 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
         </div>
       )}
 
+      {activeSection === 'equipo' && (
+        <div role="tabpanel" id="quality-panel-equipo" aria-labelledby="quality-tab-equipo" tabIndex={0} className="quality-tab-panel">
+          <AuditTeamSection auditId={audit.id} companyId={audit.companyId} canWrite={canWrite} readOnly={readonly} />
+        </div>
+      )}
+
+      {activeSection === 'plan' && (
+        <div role="tabpanel" id="quality-panel-plan" aria-labelledby="quality-tab-plan" tabIndex={0} className="quality-tab-panel">
+            <AuditPlanSection key={`${audit.id}:${planRefreshKey}`} audit={audit} users={users} processes={processes} canWrite={canWrite} readOnly={readonly} onNotice={onNotice} onOpenTeam={() => selectSection('equipo')} onOpenChecklistItem={goToChecklistItem} onCreateChecklistItem={(activity) => openChecklistCreationFromActivity(activity, 'manual')} onRequestChecklistProposals={(activity) => openChecklistCreationFromActivity(activity, 'checky')} onCreateFinding={openFindingCreationFromActivity} onOpenFinding={goToFinding} onCreateEvidence={openEvidenceCreationFromActivity} onOpenEvidence={openOfficialEvidence} />
+        </div>
+      )}
+
       {activeSection === 'checklist' && (
         <div role="tabpanel" id="quality-panel-checklist" aria-labelledby="quality-tab-checklist" tabIndex={0} className="quality-tab-panel">
           <section id="quality-checklists" className="panel quality-checklists">
+            {checklistActivityContext && (
+              <section className="quality-checklist-activity-context" aria-label="Contexto de actividad">
+                <div>
+                  <p className="detail-label">CONTEXTO DE ACTIVIDAD</p>
+                  <h3>{checklistActivityContext.mode === 'checky' ? 'Preguntas solicitadas a Checky' : 'Nueva pregunta para una actividad'}</h3>
+                  <p>Actividad de origen: <strong>{checklistActivityContext.activityTitle}</strong> · <strong>{checklistActivityContext.processLabel ?? 'Actividad general'}</strong></p>
+                  {checklistActivityContext.mode === 'checky' && (
+                    <div className="quality-checklist-context-generator">
+                      <label htmlFor="quality-checklist-context-dimension">Dimensión para Checky <span className="field-optional">Opcional</span>
+                        <select
+                          id="quality-checklist-context-dimension"
+                          value={checklistActivityContext.dimension}
+                          onChange={(event) => setChecklistActivityContext((current) => current ? { ...current, dimension: event.target.value as AuditChecklistAIDimension | '' } : current)}
+                          disabled={busy || aiGenerating || aiProposals.length > 0 || checklistActivityContext.activityStatus !== 'IN_PROGRESS'}
+                        >
+                          <option value="">Todas las dimensiones</option>
+                          {(Object.entries(auditChecklistAIDimensionLabels) as Array<[AuditChecklistAIDimension, string]>).map(([dimension, label]) => <option key={dimension} value={dimension}>{label}</option>)}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="button secondary small-button"
+                        onClick={() => void generateChecklistWithAI(checklistActivityContext)}
+                        disabled={busy || aiGenerating || checklistActivityContext.activityStatus !== 'IN_PROGRESS'}
+                        aria-busy={aiGenerating}
+                      >
+                        {aiGenerating ? 'Preparando sugerencias…' : 'Solicitar preguntas a Checky'}
+                      </button>
+                    </div>
+                  )}
+                  {checklistActivityContext.mode === 'checky' && <p>Dimensión enviada: <strong>{checklistActivityContext.dimension ? auditChecklistAIDimensionLabels[checklistActivityContext.dimension] : 'Todas las dimensiones'}</strong></p>}
+                  {contextualChecklistItems.length > 0 && <p>{contextualChecklistItems.length} pregunta(s) creada(s) en el checklist oficial.</p>}
+                  {checklistActivityContext.mode === 'checky' && contextualChecklistItems.length === 0 && <p>Revisa y acepta las propuestas; no se incorporarán hasta que las guardes explícitamente.</p>}
+                </div>
+                <div className="quality-checklist-activity-actions">
+                  {contextualChecklistPendingIds.length > 0 && checklistActivityContext.activityStatus === 'IN_PROGRESS' && !readonly && <button type="button" className="button secondary small-button" onClick={() => void linkContextItems()} disabled={busy}>Vincular preguntas aceptadas</button>}
+                  {checklistActivityContext.createdItemIds.length > 0 && contextualChecklistPendingIds.length === 0 && <span className="quality-checklist-activity-linked">Preguntas vinculadas a la actividad</span>}
+                  <button type="button" className="text-button" onClick={returnToChecklistActivity}>Volver a la actividad</button>
+                </div>
+              </section>
+            )}
             <div className="panel-heading">
               <div>
                 <p className="detail-label">LISTAS DE VERIFICACIÓN</p>
@@ -1250,16 +1702,29 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               {checklistTotal > 0 && (
                 <div className="quality-section-progress"><strong>{checklistPercent}%</strong><span>{checklistCompleted}/{checklistTotal} evaluados</span></div>
               )}
-              {!readonly && (
-                <button type="button" className="button secondary" onClick={() => void generateChecklistWithAI()} disabled={busy || aiGenerating}>
-                  {aiGenerating ? 'Preparando sugerencias…' : 'Sugerir con IA-Checky'}
-                </button>
-              )}
             </div>
+            {!checklistActivityContext && aiProposals.length === 0 && (
+              <section className="quality-checky-entry checky-context-header" aria-labelledby="quality-checky-entry-title">
+                <div className="quality-ai-avatar-frame checky-context-avatar"><img src={checkyImage} alt="IA-Checky" /></div>
+                <div className="quality-ai-review-identity">
+                  <p className="detail-label">ASISTENCIA CONTEXTUAL</p>
+                  <h3 id="quality-checky-entry-title">IA-Checky para tu checklist</h3>
+                  <p className="quality-ai-review-welcome">Genera preguntas sustentadas en la documentación de la auditoría y revísalas antes de incorporarlas al checklist oficial.</p>
+                </div>
+                {!readonly && <button type="button" className="button primary small-button" onClick={() => void generateChecklistWithAI(null)} disabled={busy || aiGenerating} aria-busy={aiGenerating}>{aiGenerating ? 'Preparando sugerencias…' : 'Sugerir con IA-Checky'}</button>}
+              </section>
+            )}
             <div className="quality-checklist-progress">
               <span><strong>{checklistCompleted}</strong> de <strong>{checklistTotal}</strong> criterios evaluados</span>
               <span className={checklistPending > 0 ? 'quality-pending-flag' : ''}><strong>{checklistPending}</strong> obligatorio(s) pendiente(s)</span>
               <span className="quality-progress-track"><i style={{ width: `${checklistPercent}%` }} /></span>
+            </div>
+            <div className="quality-checklist-toolbar" aria-label="Filtros del checklist">
+              <label className="quality-checklist-search">Buscar<input type="search" value={checklistSearch} onChange={(event) => setChecklistSearch(event.target.value)} placeholder="Pregunta, fuente o criterio…" /></label>
+              <label>Estado<select value={checklistResultFilter} onChange={(event) => setChecklistResultFilter(event.target.value as typeof checklistResults[number] | '')}><option value="">Todos</option>{checklistResults.map((result) => <option key={result} value={result}>{checklistResultLabels[result]}</option>)}</select></label>
+              <label>Dimensión<select value={checklistDimensionFilter} onChange={(event) => setChecklistDimensionFilter(event.target.value as AuditChecklistAIDimension | '')}><option value="">Todas</option>{(Object.entries(auditChecklistAIDimensionLabels) as Array<[AuditChecklistAIDimension, string]>).map(([dimension, label]) => <option key={dimension} value={dimension}>{label}</option>)}</select></label>
+              {checklistProcessOptions.length > 0 && <label>Proceso<select value={checklistProcessFilter} onChange={(event) => setChecklistProcessFilter(event.target.value)}><option value="">Todos</option>{checklistProcessOptions.map((process) => <option key={process.id} value={process.id}>{process.code} · {process.name}</option>)}</select></label>}
+              <span className="quality-checklist-visible-count">{visibleChecklistCount} visibles</span>
             </div>
             {checklistPending > 0 && !readonly && (
               <p className="quality-attention-note" role="status">Los criterios obligatorios pendientes y las no conformidades se resaltan; el cierre queda bloqueado hasta evaluarlos.</p>
@@ -1281,13 +1746,13 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             )}
             {aiProposals.length > 0 && (
               <section className="quality-ai-review" aria-labelledby="quality-ai-review-title">
-                <header className="quality-ai-review-head">
-                  <div className="quality-ai-avatar-frame"><img src={checkyImage} alt="IA-Checky" /></div>
-                  <div className="quality-ai-review-identity">
-                    <p className="detail-label">REVISIÓN HUMANA</p>
-                    <h3 id="quality-ai-review-title">IA-Checky</h3>
-                    <p className="quality-ai-review-role">Tu consultor experto en auditorías y gestión por procesos</p>
-                    <p className="quality-ai-review-welcome">Preparé estas preguntas para <strong>{audit.title}</strong>. Revisa cada propuesta y conserva solo las que tengan sentido para tu auditoría.</p>
+                  <header className="quality-ai-review-head checky-context-header">
+                    <div className="quality-ai-avatar-frame checky-context-avatar"><img src={checkyImage} alt="IA-Checky" /></div>
+                    <div className="quality-ai-review-identity">
+                      <p className="detail-label">ASISTENCIA CONTEXTUAL · REVISIÓN HUMANA</p>
+                      <h3 id="quality-ai-review-title">IA-Checky</h3>
+                      <p className="quality-ai-review-role">Tu consultor experto en auditorías y gestión por procesos</p>
+                      <p className="quality-ai-review-welcome">Preparé estas preguntas para <strong>{audit.title}</strong>. Revisa cada propuesta y conserva solo las que tengan sentido para tu auditoría.</p>
                   </div>
                   <div className="quality-ai-review-count" aria-label={`${aiProposals.length} preguntas generadas`}>
                     <strong>{aiProposals.length}</strong>
@@ -1387,7 +1852,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             {(audit.checklists ?? []).length === 0 ? (
               <p className="muted">Sin listas de verificación todavía.</p>
             ) : (
-              (audit.checklists ?? []).map((checklist) => (
+               filteredChecklists.map(({ checklist, items }) => (
                 <div key={checklist.id} className="quality-checklist">
                   <div className="quality-checklist-header">
                     <h3>{checklist.name}</h3>
@@ -1398,11 +1863,11 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                       </div>
                     )}
                   </div>
-                  {checklist.items.length === 0 ? (
-                    <p className="muted">Sin ítems.</p>
-                  ) : (
-                    <div className="quality-items">
-                      {checklist.items.map((item) => {
+                   {items.length === 0 ? (
+                     <p className="muted">{checklist.items.length === 0 ? 'Sin ítems.' : 'No hay preguntas con estos filtros.'}</p>
+                   ) : (
+                     <div className="quality-items">
+                       {items.map((item) => {
                         const context = checklistItemContext(item.criteria)
                         const editingResponse = responseEditorFor === item.id
                         const cardClasses = [
@@ -1533,6 +1998,29 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
       {activeSection === 'hallazgos' && (
         <div role="tabpanel" id="quality-panel-hallazgos" aria-labelledby="quality-tab-hallazgos" tabIndex={0} className="quality-tab-panel">
+          {findingActivityContext && (
+            <section className="quality-finding-activity-context" aria-label="Contexto de actividad">
+              <div>
+                <p className="detail-label">CONTEXTO DE ACTIVIDAD</p>
+                <h3>{findingActivityContext.createdFindingId ? 'Hallazgo oficial desde una actividad' : 'Nuevo hallazgo desde una actividad'}</h3>
+                <p>Actividad de origen: <strong>{findingActivityContext.activityTitle}</strong> · <strong>{findingActivityContext.processLabel ?? 'Actividad general'}</strong></p>
+                {findingActivityContext.createdFindingId && (
+                  <p role="status">
+                    {findingActivityContext.linkedFindingId
+                      ? 'El hallazgo está vinculado a la actividad.'
+                      : findingActivityContext.activityStatus === 'IN_PROGRESS'
+                        ? 'El hallazgo está guardado en el expediente. Vincúlalo explícitamente cuando quieras.'
+                        : 'El hallazgo está guardado en el expediente; la actividad ya no permite vincularlo.'}
+                  </p>
+                )}
+              </div>
+              <div className="quality-finding-activity-actions">
+                {findingActivityContext.createdFindingId && !findingActivityContext.linkedFindingId && findingActivityContext.activityStatus === 'IN_PROGRESS' && !readonly && <button type="button" className="button secondary small-button" onClick={() => void linkContextFinding()} disabled={busy}>Vincular hallazgo a actividad</button>}
+                {findingActivityContext.createdFindingId && findingActivityContext.linkedFindingId && <span className="quality-checklist-activity-linked">Vínculo confirmado</span>}
+                <button type="button" className="text-button" onClick={() => selectSection('plan')}>Volver a la actividad</button>
+              </div>
+            </section>
+          )}
           <section id="quality-findings" className="panel quality-findings">
             <div className="panel-heading">
               <div>
@@ -1550,7 +2038,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
               <p className="muted">Sin hallazgos registrados.</p>
             ) : (
               audit.findings.map((finding) => (
-                <article key={finding.id} className={`quality-finding quality-finding-card quality-finding-${finding.type.toLowerCase()} quality-finding-${finding.status.toLowerCase()}`}>
+                <article id={`quality-finding-${finding.id}`} key={finding.id} className={`quality-finding quality-finding-card quality-finding-${finding.type.toLowerCase()} quality-finding-${finding.status.toLowerCase()}${highlightFindingId === finding.id ? ' is-highlight' : ''}`}>
                   <div className="quality-finding-card-main">
                     <header className="quality-finding-header">
                       <div className="quality-finding-title-block">
@@ -1611,6 +2099,10 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
                     <footer className="quality-finding-footer">
                       <div className="quality-finding-links">
+                        <button type="button" className="quality-finding-link quality-finding-link-primary" onClick={() => setDossierFindingId(finding.id)}>
+                          <span className="quality-finding-link-icon" aria-hidden="true">▤</span>
+                          <span>Ver expediente</span>
+                        </button>
                         <button type="button" className="quality-finding-link" onClick={() => selectEvidenceContext({ findingId: finding.id })}>
                           <span className="quality-finding-link-icon" aria-hidden="true">▧</span>
                           <span>{evidenceCountFor({ findingId: finding.id }) > 0 ? `Evidencias (${evidenceCountFor({ findingId: finding.id })})` : 'Añadir evidencia'}</span>
@@ -1671,7 +2163,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                   </select>
                 </label>
                 <label>Proceso
-                  <select value={findingDraft.processId} onChange={(event) => setFindingDraft((current) => ({ ...current, processId: event.target.value }))}>
+                  <select value={findingDraft.processId} onChange={(event) => setFindingDraft((current) => ({ ...current, processId: event.target.value, procedureId: current.procedureId && findingProcedures.some((procedure) => procedure.id === current.procedureId && procedure.processId === event.target.value) ? current.procedureId : '' }))}>
                     <option value="">Sin vínculo</option>
                     {processes.filter((process) => relatedProcessIds.has(process.id)).map((process) => (
                       <option key={process.id} value={process.id}>{process.code} · {process.name}</option>
@@ -1681,7 +2173,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 <label>Procedimiento
                   <select value={findingDraft.procedureId} onChange={(event) => setFindingDraft((current) => ({ ...current, procedureId: event.target.value }))}>
                     <option value="">Sin vínculo</option>
-                    {linkedProcedures.map((procedure) => (
+                    {findingProcedures.map((procedure) => (
                       <option key={procedure.id} value={procedure.id}>{procedure.code} · {procedure.name}</option>
                     ))}
                   </select>
@@ -1703,18 +2195,94 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
 
       {activeSection === 'evidencias' && (
         <div role="tabpanel" id="quality-panel-evidencias" aria-labelledby="quality-tab-evidencias" tabIndex={0} className="quality-tab-panel">
+          {evidenceActivityContext && (
+            <section className="quality-evidence-activity-context" aria-label="Contexto de actividad">
+              <div className="quality-evidence-activity-context-copy">
+                <p className="detail-label">CONTEXTO DE ACTIVIDAD</p>
+                <h3>Añadir evidencia desde la actividad</h3>
+                <p>Actividad de origen: <strong>{evidenceActivityContext.activityTitle}</strong> · <strong>{evidenceActivityContext.processLabel ?? 'Actividad general'}</strong></p>
+                <EvidenceActivityComposer
+                  kind={evidenceActivityContext.kind}
+                  disabled={Boolean(evidenceActivityContext.registeredResourceId) || evidenceSaving || uploading}
+                  onKindChange={(kind) => {
+                    if (evidenceActivityContext.registeredResourceId) return
+                    setEvidenceActivityContext((current) => current ? { ...current, kind, linkError: null } : current)
+                    setUploadFor(kind === 'pdf' ? {} : null)
+                  }}
+                  urlForm={!evidenceActivityContext.registeredResourceId && !readonly ? (
+                    <form onSubmit={saveEvidence} className="quality-evidence-context-form">
+                      <label>Nombre de la evidencia
+                        <input value={evidenceDraft.name} onChange={(event) => setEvidenceDraft((current) => ({ ...current, name: event.target.value }))} minLength={1} maxLength={200} required placeholder="Ej. Acta de entrevista" />
+                      </label>
+                      <label>Enlace URL
+                        <input type="url" value={evidenceDraft.url} onChange={(event) => setEvidenceDraft((current) => ({ ...current, url: event.target.value }))} maxLength={500} required placeholder="https://..." />
+                      </label>
+                      <label className="quality-field-wide">Descripción
+                        <textarea value={evidenceDraft.description} onChange={(event) => setEvidenceDraft((current) => ({ ...current, description: event.target.value }))} maxLength={5000} rows={2} placeholder="Qué demuestra esta evidencia." />
+                      </label>
+                      <label>Hallazgo asociado
+                        <select value={evidenceDraft.findingId} onChange={(event) => setEvidenceDraft((current) => ({ ...current, findingId: event.target.value }))}>
+                          <option value="">Auditoría</option>
+                          {audit.findings.map((finding) => <option key={finding.id} value={finding.id}>{finding.title}</option>)}
+                        </select>
+                      </label>
+                      <div className="procedure-form-actions quality-field-wide">
+                        <button type="submit" className="button primary" disabled={evidenceSaving}>{evidenceSaving ? 'Guardando…' : 'Guardar enlace y vincular'}</button>
+                        <button type="button" className="button secondary" onClick={returnToEvidenceActivity} disabled={evidenceSaving}>Cancelar</button>
+                      </div>
+                    </form>
+                  ) : null}
+                  pdfForm={!evidenceActivityContext.registeredResourceId && !readonly ? (
+                    <form onSubmit={uploadFile} className="quality-inline-form quality-evidence-context-form">
+                      <label>Archivo PDF
+                        <input type="file" name="file" accept="application/pdf,.pdf" required />
+                      </label>
+                      <label>Anclar a
+                        <select
+                          value={uploadFor?.findingId ? `finding:${uploadFor.findingId}` : uploadFor?.actionId ? `action:${uploadFor.actionId}` : uploadFor?.itemId ? `item:${uploadFor.itemId}` : ''}
+                          onChange={(event) => {
+                            const value = event.target.value
+                            if (value.startsWith('finding:')) setUploadFor({ findingId: value.slice(8) })
+                            else if (value.startsWith('action:')) setUploadFor({ actionId: value.slice(7) })
+                            else if (value.startsWith('item:')) setUploadFor({ itemId: value.slice(5) })
+                            else setUploadFor({})
+                          }}
+                        >
+                          <option value="">Auditoría</option>
+                          {audit.findings.map((finding) => <option key={finding.id} value={`finding:${finding.id}`}>Hallazgo: {finding.title}</option>)}
+                          {audit.findings.flatMap((finding) => (finding.actions ?? []).map((action) => <option key={action.id} value={`action:${action.id}`}>Acción: {action.title}</option>))}
+                          {(audit.checklists ?? []).flatMap((checklist) => checklist.items.map((item) => <option key={item.id} value={`item:${item.id}`}>Ítem: {item.description.slice(0, 50)}</option>))}
+                        </select>
+                      </label>
+                      {uploading && <span className="quality-upload-progress" role="status" aria-live="polite">{uploadProgress === null ? 'Subiendo…' : `Subiendo… ${uploadProgress}%`}</span>}
+                      <button type="submit" className="button primary" disabled={uploading}>{uploading ? 'Subiendo…' : 'Adjuntar PDF'}</button>
+                      <button type="button" className="button secondary" onClick={returnToEvidenceActivity}>Cancelar</button>
+                    </form>
+                  ) : null}
+                />
+                {evidenceActivityContext.registeredResourceId && !evidenceActivityContext.linkError && <p className="quality-evidence-context-success" role="status">Evidencia oficial guardada y vinculada a la actividad.</p>}
+                {evidenceActivityContext.linkError && (
+                  <div className="quality-evidence-context-error" role="alert">
+                    <p>{evidenceActivityContext.linkError}</p>
+                    {evidenceActivityContext.registeredResourceId && evidenceActivityContext.activityStatus === 'IN_PROGRESS' && !readonly && <button type="button" className="button secondary small-button" onClick={() => void retryEvidenceContextLink()} disabled={busy}>Reintentar solo la vinculación</button>}
+                  </div>
+                )}
+              </div>
+              <button type="button" className="text-button" onClick={returnToEvidenceActivity}>Volver a la actividad</button>
+            </section>
+          )}
           <section id="quality-evidence" className="panel quality-evidence">
             <div className="panel-heading">
               <div>
-                <p className="detail-label">ARCHIVOS DE EVIDENCIA</p>
-                <h2>PDFs adjuntos</h2>
+                <p className="detail-label">RECURSOS OFICIALES</p>
+                <h2>Evidencias de la auditoría</h2>
                 <p className="quality-evidence-context">
-                  {hasEvidenceFilter ? <><span>Hallazgo asociado</span> {evidenceContextLabel(evidenceFilter!)}</> : `${evidenceCount} PDF(s) adjunto(s)`}
+                  {hasEvidenceFilter ? <><span>Contexto</span> {evidenceContextLabel(evidenceFilter!)}</> : `${evidenceCount} evidencia(s) registrada(s)`}
                 </p>
               </div>
               <div>
-                {!readonly && (
-                  <button type="button" className="button primary quality-evidence-add-button" onClick={() => setUploadFor(hasEvidenceFilter ? evidenceFilter : {})}>
+                {!readonly && !evidenceActivityContext && (
+                  <button type="button" className="button primary quality-evidence-add-button" onClick={() => setUploadFor(uploadAnchorFromEvidenceFilter(hasEvidenceFilter ? evidenceFilter : null))}>
                     <span aria-hidden="true">+</span> Añadir PDF
                   </button>
                 )}
@@ -1733,11 +2301,30 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             {visibleEvidenceCount === 0 ? (
               <div className="quality-evidence-empty" role="status">
                 <span className="quality-evidence-empty-icon" aria-hidden="true">▧</span>
-                <strong>Aún no hay evidencias adjuntas</strong>
-                <p>Adjunta un PDF para documentar los resultados de esta auditoría.</p>
+                <strong>Aún no hay evidencias registradas</strong>
+                <p>Registra un enlace o adjunta un PDF para documentar los resultados de esta auditoría.</p>
               </div>
             ) : (
               <ul className="quality-evidence-list">
+                {filteredEvidences.map((evidence) => (
+                  <li key={evidence.id} className="quality-evidence-card quality-evidence-url-card">
+                    <div className="quality-evidence-card-header">
+                      <div className="quality-evidence-file-heading">
+                        <span className="quality-evidence-url-mark" aria-hidden="true">↗</span>
+                        <div className="quality-evidence-file-info">
+                          <strong className="quality-evidence-file-name">{evidence.name}</strong>
+                          <p>{evidence.description || 'Sin descripción'} · {formatMaybeDate(evidence.createdAt)}</p>
+                        </div>
+                      </div>
+                      <span className="quality-evidence-status quality-evidence-status-ready">Enlace URL</span>
+                    </div>
+                    <div className="quality-evidence-relation">
+                      <span>Hallazgo asociado</span><strong>{evidence.findingId ? audit.findings.find((finding) => finding.id === evidence.findingId)?.title ?? 'No disponible' : 'Auditoría'}</strong>
+                      {evidence.findingId && audit.findings.find((finding) => finding.id === evidence.findingId)?.item?.description && <><span>Pregunta asociada</span><strong>{audit.findings.find((finding) => finding.id === evidence.findingId)?.item?.description}</strong></>}
+                    </div>
+                    <div className="quality-evidence-card-actions"><a className="button secondary small-button" href={evidence.url} target="_blank" rel="noreferrer">Abrir enlace oficial</a></div>
+                  </li>
+                ))}
                 {filteredEvidenceFiles.map((file) => (
                   <li key={file.id} className="quality-evidence-card">
                     <div className="quality-evidence-card-header">
@@ -1769,7 +2356,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                 ))}
               </ul>
             )}
-            {uploadFor && !readonly && (
+            {!evidenceActivityContext && uploadFor && !readonly && (
               <form onSubmit={uploadFile} className="quality-inline-form">
                 <label>Archivo PDF
                   <input type="file" name="file" accept="application/pdf,.pdf" required />
@@ -1943,6 +2530,18 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
         </div>
       )}
 
+      {activeSection === 'informe' && (
+        <div role="tabpanel" id="quality-panel-informe" aria-labelledby="quality-tab-informe" tabIndex={0} className="quality-tab-panel">
+          <AuditReportPanel auditId={audit.id} canWrite={canWrite} onError={onError} onNotice={onNotice} />
+        </div>
+      )}
+
+      {activeSection === 'seguimiento' && (
+        <div role="tabpanel" id="quality-panel-seguimiento" aria-labelledby="quality-tab-seguimiento" tabIndex={0} className="quality-tab-panel">
+          <AuditFollowUpPanel audit={audit} users={activeCompanyUsers} canWrite={canWrite} onChanged={reload} onError={onError} onNotice={onNotice} />
+        </div>
+      )}
+
       {activeSection === 'historial' && (
         <div role="tabpanel" id="quality-panel-historial" aria-labelledby="quality-tab-historial" tabIndex={0} className="quality-tab-panel">
           <section id="quality-history" className="panel risk-history-section" aria-label="Historial de la auditoría">
@@ -1973,6 +2572,7 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                   {history.map((event) => {
                     const comment = typeof event.metadata?.comment === 'string' ? event.metadata.comment : null
                     const presentation = auditHistoryPresentation(event)
+                    const changes = auditHistoryChanges(event)
                     return (
                       <article key={event.id} className="risk-history-entry">
                         <div className="risk-history-marker" aria-hidden="true"><span className="risk-history-glyph">{auditHistoryGlyph(event.eventType)}</span></div>
@@ -1983,22 +2583,28 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
                               <h3>{presentation.title}</h3>
                               {presentation.detail && <p className="quality-history-detail">{presentation.detail}</p>}
                             </div>
-                            <time dateTime={event.occurredAt}>{dateFormatter.format(new Date(event.occurredAt))}</time>
+                             <time dateTime={event.occurredAt}>{formatAuditDateTime(event.occurredAt)}</time>
                           </header>
                           <p className="risk-history-actor">Registrado por: <strong>{event.actorName ?? event.actor?.name ?? 'Sistema'}</strong>{event.actorEmail && <span> · {event.actorEmail}</span>}</p>
-                          {event.changes.length > 0 && (
+                          {changes.length > 0 && (
                             <div className="history-change-list">
-                              {event.changes.map((change) => (
+                              {changes.map((change) => (
                                 <div className="history-change" key={`${event.id}-${change.field}`}>
-                                  <span>{change.label}</span>
-                                  <strong>{auditHistoryValue(change.previousValue)}</strong>
-                                  <b aria-hidden="true">→</b>
-                                  <strong>{auditHistoryValue(change.newValue)}</strong>
+                                  <span>{auditHistoryChangeLabel(change)}</span>
+                                   <strong>{auditHistoryChangeValue(event, change, audit, change.previousValue)}</strong>
+                                   <b aria-hidden="true">→</b>
+                                   <strong>{auditHistoryChangeValue(event, change, audit)}</strong>
                                 </div>
                               ))}
                             </div>
                           )}
                           {comment && <p className="risk-history-comment">Motivo: «{comment}»</p>}
+                          <details className="quality-history-technical">
+                            <summary>Detalles técnicos</summary>
+                            <div><span>Tipo de evento</span><code>{event.eventType}</code></div>
+                            <div><span>Identificador</span><code>{event.id}</code></div>
+                            {event.metadata && <div><span>Metadatos estructurados</span><code>{JSON.stringify(event.metadata)}</code></div>}
+                          </details>
                         </div>
                       </article>
                     )
@@ -2008,6 +2614,24 @@ export function AuditDetailView({ audit: initial, users, processes, canWrite, on
             </div>
           </section>
         </div>
+      )}
+      {dossierFinding && (
+        <FindingDossier
+          key={dossierFinding.id}
+          auditId={audit.id}
+          finding={dossierFinding}
+          users={activeCompanyUsers}
+          canWrite={!readonly}
+          onClose={() => setDossierFindingId(null)}
+          onChanged={reload}
+          onError={onError}
+          onNotice={onNotice}
+          onGoToAction={(actionId) => {
+            setDossierFindingId(null)
+            setHighlightActionId(actionId)
+            selectSection('acciones')
+          }}
+        />
       )}
     </div>
   )

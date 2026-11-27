@@ -2221,6 +2221,81 @@ describe('AI analysis service and API', () => {
     expect(result.proposals[0].sourceId).toBe(sourceId)
   })
 
+  it('adds activity scope rules only to contextual checklist generation prompts', async () => {
+    const sourceId = 'cmuoch1430004uwl58z1940k'
+    let contextualPrompt = ''
+    const client = {
+      responses: {
+        create: vi.fn(async ({ input }: { input: string }) => {
+          contextualPrompt = input
+          return { output_text: JSON.stringify({ proposals: [], missingInformation: [] }) }
+        }),
+      },
+    }
+    const service = new AIService(client)
+    const result = await service.generateAuditChecklist({
+      audit: { title: 'Auditoría', objectives: 'Verificar controles', scope: 'Proceso comercial', criteria: 'Manual de calidad' },
+      activity: {
+        id: 'cmactivity0000000000000001',
+        type: 'OPENING_MEETING',
+        title: 'Reunión de apertura',
+        description: 'Alinear alcance y criterios.',
+        process: null,
+        requestedDimension: 'COMPLIANCE',
+      },
+      processes: [{ id: sourceId, code: 'PROC-01', name: 'Proceso principal', objective: 'Gestionar', description: null, sipoc: [], risks: [] }],
+      procedures: [],
+      sources: [{ id: sourceId, type: 'PROCESS', label: 'PROC-01 · Proceso principal' }],
+      existingQuestions: [],
+      maxQuestions: 8,
+    })
+
+    expect(result.proposals).toEqual([])
+    expect(contextualPrompt).toContain('GENERACIÓN CONTEXTUAL DESDE UNA ACTIVIDAD DE AUDITORÍA.')
+    expect(contextualPrompt).toContain('Reunión de apertura')
+    expect(contextualPrompt).toContain('COMPLIANCE')
+    expect(contextualPrompt).toContain('no conviertas automáticamente una reunión de apertura o cierre')
+
+    await service.generateAuditChecklist({
+      audit: { title: 'Auditoría general', objectives: null, scope: 'Toda la auditoría', criteria: 'Criterios generales' },
+      processes: [],
+      procedures: [],
+      sources: [],
+      existingQuestions: [],
+      maxQuestions: 8,
+    })
+    expect(contextualPrompt).not.toContain('GENERACIÓN CONTEXTUAL DESDE UNA ACTIVIDAD DE AUDITORÍA.')
+  })
+
+  it('rejects contextual proposals outside the requested dimension', async () => {
+    const sourceId = 'cmuoch1430004uwl58z1940k'
+    const client = {
+      responses: {
+        create: vi.fn(async () => ({ output_text: JSON.stringify({
+          proposals: [{ question: 'Is the control documented?', expectedEvidence: 'Approved record.', sourceId, sourceType: 'PROCESS', source: 'Process', dimension: 'EFFECTIVENESS' }],
+          missingInformation: [],
+        }) })),
+      },
+    }
+    const service = new AIService(client)
+    await expect(service.generateAuditChecklist({
+      audit: { title: 'Audit', objectives: null, scope: 'Scope', criteria: 'Criteria' },
+      activity: {
+        id: 'cmactivity0000000000000001',
+        type: 'PROCESS_REVIEW',
+        title: 'Process review',
+        description: null,
+        process: null,
+        requestedDimension: 'COMPLIANCE',
+      },
+      processes: [],
+      procedures: [],
+      sources: [{ id: sourceId, type: 'PROCESS', label: 'Process' }],
+      existingQuestions: [],
+      maxQuestions: 8,
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
   it('rejects audit proposals with an unknown source', async () => {
     const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({ proposals: [{ question: '¿Se cumple el procedimiento documentado?', expectedEvidence: 'Registro verificable.', sourceId: 'cmuoch1430004uwl58z1940k', sourceType: 'PROCEDURE', source: 'Fuente', dimension: 'COMPLIANCE' }], missingInformation: [] }) })) } }
     const service = new AIService(client)
@@ -2231,6 +2306,50 @@ describe('AI analysis service and API', () => {
       sources: [],
       existingQuestions: [],
       maxQuestions: 10,
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
+  it('validates Checky finding proposals against the finding context', async () => {
+    const analysisId = 'cmanalysis0000000000000001'
+    const evidenceId = 'cmevidence0000000000000001'
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({
+      suggestions: [{
+        kind: 'ROOT_CAUSE',
+        payload: { kind: 'ROOT_CAUSE', analysisId, description: 'La revisión documentada no se ejecuta de forma consistente.', justification: null, supportingEvidence: 'Se observa una brecha en el registro de revisión.', ishikawaCategory: null, position: 0 },
+        evidenceIds: [evidenceId],
+      }],
+      missingInformation: ['Confirmar el responsable del proceso.'],
+    }) })) } }
+    const service = new AIService(client)
+    const result = await service.suggestAuditFindingFollowUp({
+      audit: { title: 'Auditoría interna', scope: 'Proceso comercial', objectives: null, criteria: 'Manual de calidad' },
+      finding: { id: 'cmfinding0000000000000001', title: 'Revisión incompleta', description: 'No hay constancia suficiente.', type: 'NONCONFORMITY', severity: 'MAJOR', status: 'OPEN' },
+      evidence: [{ id: evidenceId, name: 'Registro', description: 'Registro de revisión' }],
+      analyses: [{ id: analysisId, methodology: 'FIVE_WHYS', status: 'DRAFT', problemDescription: 'Revisión incompleta', causes: [] }],
+      actions: [],
+      kinds: ['ROOT_CAUSE'],
+    })
+    expect(result.suggestions[0].kind).toBe('ROOT_CAUSE')
+    expect(result.suggestions[0].evidenceIds).toEqual([evidenceId])
+  })
+
+  it('rejects Checky finding proposals that cite an unknown evidence id', async () => {
+    const client = { responses: { create: vi.fn(async () => ({ output_text: JSON.stringify({
+      suggestions: [{
+        kind: 'CORRECTIVE_ACTION',
+        payload: { kind: 'CORRECTIVE_ACTION', title: 'Revisar el control', description: 'Revisar el control con el equipo.', objective: null, implementationPlan: null, resources: null, observations: null, responsibleId: null, priority: 'MEDIUM', required: true, evidenceRequired: false, dueDate: null, acceptanceCriteria: [], causeIds: [], methodology: null, observationPeriod: null },
+        evidenceIds: ['cmevidenceoutside0000000001'],
+      }],
+      missingInformation: [],
+    }) })) } }
+    const service = new AIService(client)
+    await expect(service.suggestAuditFindingFollowUp({
+      audit: { title: 'Auditoría interna', scope: 'Proceso comercial', objectives: null, criteria: 'Manual de calidad' },
+      finding: { id: 'cmfinding0000000000000001', title: 'Revisión incompleta', description: 'No hay constancia suficiente.', type: 'NONCONFORMITY', severity: 'MAJOR', status: 'OPEN' },
+      evidence: [],
+      analyses: [],
+      actions: [],
+      kinds: ['CORRECTIVE_ACTION'],
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 

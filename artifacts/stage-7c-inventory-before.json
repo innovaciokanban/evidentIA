@@ -1,0 +1,1599 @@
+{
+    "audit001": {
+        "events": [
+            {
+                "id": "cmvy7ekrl001azgl5x09edccp",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "code",
+                        "label": "Código",
+                        "newValue": "AUD-001",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "title",
+                        "label": "Título",
+                        "newValue": "Auditoría interna del Sistema de Gestión de Calidad",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "auditType",
+                        "label": "Tipo de auditoría",
+                        "newValue": "Interna",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "scope",
+                        "label": "Alcance",
+                        "newValue": "La auditoría comprende los procesos de Direccionamiento estratégico, Prestación del servicio de consultoría y Gestión administrativa y financiera. Incluye la revisión documental, entrevistas, evaluación de indicadores, identificación de riesgos, verificación de controles y seguimiento a acciones de mejora correspondientes al periodo de enero a octubre de 2026.",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "criteria",
+                        "label": "Criterios",
+                        "newValue": "ISO 9001:2015, especialmente numerales 4.4, 6.1, 6.2, 7.5, 8.1, 8.2, 9.1, 9.2 y 10.2.\nPolítica y objetivos de calidad.\nProcedimientos documentados de los tres procesos.\nMatriz de riesgos y controles.\nIndicadores KPI y registros de seguimiento.\nRequisitos contractuales aplicables.",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "plannedDate",
+                        "label": "Fecha planificada",
+                        "newValue": "2026-11-16",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "leadAuditorId",
+                        "label": "Auditor líder",
+                        "newValue": "Andres Zapata ocampo",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "responsibleId",
+                        "label": "Responsable",
+                        "newValue": "Andres Zapata ocampo",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Auditoría AUD-001 creada",
+                "metadata": {
+                    "procedureIds": [
+                    ],
+                    "relatedProcessIds": [
+                        "cmvy564610002zgl5gxi21ozo",
+                        "cmvy599mc0004zgl5hrgko9of"
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-01T19:09:09.921"
+            },
+            {
+                "id": "cmvyczd8r00004sl5c396i2q8",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Relaciones de procesos y procedimientos actualizadas",
+                "metadata": {
+                    "addedProcessIds": [
+                    ],
+                    "addedProcedureIds": [
+                        "cmvy5peih000lzgl53m2rvv78",
+                        "cmvy5y4sw000tzgl5opiuy0j8",
+                        "cmvy64moh0011zgl55lda6gia"
+                    ],
+                    "removedProcessIds": [
+                    ],
+                    "removedProcedureIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_RELATIONS_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-01T21:45:18.028"
+            },
+            {
+                "id": "cmvydemgg00024sl5ipkea4dp",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "name",
+                        "label": "Nombre",
+                        "newValue": "Verificación del Sistema de Gestión de Calidad — AUD-001",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Lista de verificación «Verificación del Sistema de Gestión de Calidad — AUD-001» creada",
+                "metadata": {
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-01T21:57:09.808"
+            },
+            {
+                "id": "cmvyjpi0p00044sl5jk7bo0np",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "¿El procedimiento de Planeación y seguimiento estratégico está formalmente aprobado, con control de versión y vigencia aplicable al periodo enero–octubre de 2026?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «¿El procedimiento de Planeación y seguimiento estratégico está formalmente aprob» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpi0h00034sl52j7zdai3",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:34.969"
+            },
+            {
+                "id": "cmvyjpi6s00064sl5l9w4jipw",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "¿El plan estratégico vigente fue elaborado y aprobado, y existe trazabilidad entre éste y los objetivos organizacionales definidos?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «¿El plan estratégico vigente fue elaborado y aprobado, y existe trazabilidad ent» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpi6p00054sl52w351joj",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:35.188"
+            },
+            {
+                "id": "cmvyjpic500084sl5jtctblf0",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "¿Se realizó el seguimiento trimestral a los objetivos estratégicos durante enero–octubre de 2026 y se registraron desviaciones y acciones de mejora cuando correspondía?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «¿Se realizó el seguimiento trimestral a los objetivos estratégicos durante enero» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpic100074sl58tth50df",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:35.381"
+            },
+            {
+                "id": "cmvyjpifg000a4sl5lxx5o3x3",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "Para el riesgo de incumplimiento de objetivos estratégicos, ¿se han definido e implementado controles y responsables, y se mantiene su seguimiento?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «Para el riesgo de incumplimiento de objetivos estratégicos, ¿se han definido e i» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpifd00094sl5eu9rsxlm",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:35.501"
+            },
+            {
+                "id": "cmvyjpijw000c4sl51zl3jwy1",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "¿Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos, con base en resultados y tendencias de desempeño?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «¿Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpijt000b4sl5wa9muco2",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:35.66"
+            },
+            {
+                "id": "cmvyjpimd000e4sl52if1nve5",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "En los servicios de consultoría, ¿la revisión del contrato y la definición del alcance se realizan y documentan antes del inicio de las actividades?",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «En los servicios de consultoría, ¿la revisión del contrato y la definición del a» añadido a la lista",
+                "metadata": {
+                    "itemId": "cmvyjpim9000d4sl58fsqq25a",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T00:53:35.749"
+            },
+            {
+                "id": "cmvzhyk720000rcl58n8pa4ul",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "status",
+                        "label": "Estado",
+                        "newValue": "IN_PROGRESS",
+                        "previousValue": "PLANNED"
+                    }
+                ],
+                "summary": "Auditoría En curso",
+                "metadata": {
+                    "newStatus": "IN_PROGRESS",
+                    "previousStatus": "PLANNED"
+                },
+                "actorName": "Superusuario",
+                "eventType": "STATUS_CHANGED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T16:52:24.638"
+            },
+            {
+                "id": "cmvzhz21e0001rcl5w34uj21j",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "result",
+                        "label": "Resultado",
+                        "newValue": "CONFORM",
+                        "previousValue": "PENDING"
+                    }
+                ],
+                "summary": "Ítem «¿El procedimiento de Planeación y seguimiento estratégico está formalmente aprob» actualizado",
+                "metadata": {
+                    "itemId": "cmvyjpi0h00034sl52j7zdai3",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T16:52:47.762"
+            },
+            {
+                "id": "cmvzhzfky0002rcl5fojtzv81",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "observations",
+                        "label": "Observaciones",
+                        "newValue": "añade una observacion",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «¿El procedimiento de Planeación y seguimiento estratégico está formalmente aprob» actualizado",
+                "metadata": {
+                    "itemId": "cmvyjpi0h00034sl52j7zdai3",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T16:53:05.314"
+            },
+            {
+                "id": "cmvzi3k030003rcl52ul9a9wz",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "result",
+                        "label": "Resultado",
+                        "newValue": "CONFORM",
+                        "previousValue": "PENDING"
+                    }
+                ],
+                "summary": "Ítem «¿El plan estratégico vigente fue elaborado y aprobado, y existe trazabilidad ent» actualizado",
+                "metadata": {
+                    "itemId": "cmvyjpi6p00054sl52w351joj",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-02T16:56:17.667"
+            },
+            {
+                "id": "cmw1h3v730001lwl5saxd6m2s",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "description",
+                        "label": "Descripción",
+                        "newValue": "Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos, con base en resultados y tendencias de desempeñ",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "required",
+                        "label": "Obligatorio",
+                        "newValue": "true",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Ítem «Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de » añadido a la lista",
+                "metadata": {
+                    "itemId": "cmw1h3v690000lwl5orxbxm6u",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T02:04:04.911"
+            },
+            {
+                "id": "cmw1h6vli0003lwl566mg3rb5",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "title",
+                        "label": "Título del hallazgo",
+                        "newValue": "Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "description",
+                        "label": "Descripción del hallazgo",
+                        "newValue": "Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos, con base en resultados y tendencias de desempeño",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "type",
+                        "label": "Tipo",
+                        "newValue": "NONCONFORMITY",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "severity",
+                        "label": "Severidad",
+                        "newValue": "MINOR",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "dueDate",
+                        "label": "Fecha límite",
+                        "newValue": "2026-11-26",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "responsibleId",
+                        "label": "Responsable del hallazgo",
+                        "newValue": "Andres Zapata ocampo",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Hallazgo «Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos» creado",
+                "metadata": {
+                    "itemId": "cmw1h3v690000lwl5orxbxm6u",
+                    "findingId": "cmw1h6vkz0002lwl5p8ert2lk",
+                    "linkedProcessId": "cmvy52tb70000zgl5rngbrklj",
+                    "linkedProcedureId": "cmvy5peih000lzgl53m2rvv78"
+                },
+                "actorName": "Superusuario",
+                "eventType": "FINDING_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T02:06:25.398"
+            },
+            {
+                "id": "cmw1h6vry0004lwl5z8gq0crc",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "result",
+                        "label": "Resultado",
+                        "newValue": "NON_CONFORM",
+                        "previousValue": "PENDING"
+                    }
+                ],
+                "summary": "Ítem «Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de » actualizado",
+                "metadata": {
+                    "itemId": "cmw1h3v690000lwl5orxbxm6u",
+                    "checklistId": "cmvydemfp00014sl56l7t18d7"
+                },
+                "actorName": "Superusuario",
+                "eventType": "CHECKLIST_ITEM_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T02:06:25.63"
+            },
+            {
+                "id": "cmw1h76kp0005lwl5hhnsuskl",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "status",
+                        "label": "Estado del hallazgo",
+                        "newValue": "IN_PROGRESS",
+                        "previousValue": "OPEN"
+                    }
+                ],
+                "summary": "Hallazgo «Se evalúa la eficacia de los controles asociados al riesgo de incumplimiento de objetivos estratégicos» en curso",
+                "metadata": {
+                    "findingId": "cmw1h6vkz0002lwl5p8ert2lk",
+                    "newStatus": "IN_PROGRESS",
+                    "previousStatus": "OPEN"
+                },
+                "actorName": "Superusuario",
+                "eventType": "FINDING_STATUS_CHANGED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T02:06:39.625"
+            },
+            {
+                "id": "cmw2qxdrz0001jsl5k6nyq8bi",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Evidencia «rut1053814119.pdf» adjuntada",
+                "metadata": {
+                    "evidenceFileId": "cmw2qxdoq0000jsl54lm8s0a5"
+                },
+                "actorName": "Superusuario",
+                "eventType": "EVIDENCE_FILE_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T23:26:44.735"
+            },
+            {
+                "id": "cmw2r6ezl0002jsl5q89vwxn7",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Evidencia «rut1053814119.pdf» eliminada",
+                "metadata": {
+                    "evidenceFileId": "cmw2qxdoq0000jsl54lm8s0a5"
+                },
+                "actorName": "Superusuario",
+                "eventType": "EVIDENCE_FILE_DELETED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-04T23:33:46.209"
+            },
+            {
+                "id": "cmw2v1ayi0004jsl590m4sun9",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Evidencia «rut1053814119.pdf» adjuntada",
+                "metadata": {
+                    "findingId": "cmw1h6vkz0002lwl5p8ert2lk",
+                    "evidenceFileId": "cmw2v1awc0003jsl5mwh1vzcu"
+                },
+                "actorName": "Superusuario",
+                "eventType": "EVIDENCE_FILE_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-05T01:21:46.17"
+            },
+            {
+                "id": "cmwqytphz0001col5cftve3gv",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Auditor Auditor Interno de Prueba asignado al equipo",
+                "metadata": {
+                    "role": "LEAD",
+                    "memberId": "cmwqytpfc0000col5dnj0dydq",
+                    "auditorId": "cmwpq13j100004gl5hdzyghok"
+                },
+                "actorName": "Superusuario",
+                "eventType": "TEAM_MEMBER_ASSIGNED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-21T22:14:18.455"
+            },
+            {
+                "id": "cmwqyxf6j0002col5o8r05cdk",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "independenceStatus",
+                        "newValue": "CONFLICT",
+                        "previousValue": "PENDING"
+                    },
+                    {
+                        "field": "independenceDeclaration",
+                        "newValue": "Evaluación de prueba: se identificó una posible falta de independencia respecto al proceso auditado.",
+                        "previousValue": null
+                    },
+                    {
+                        "field": "conflictDescription",
+                        "newValue": "El auditor participó en la elaboración de los procedimientos del proceso de Direccionamiento estratégico que ahora debe auditar.",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Independencia evaluada: CONFLICT",
+                "metadata": {
+                    "status": "CONFLICT",
+                    "memberId": "cmwqytpfc0000col5dnj0dydq",
+                    "auditorId": "cmwpq13j100004gl5hdzyghok"
+                },
+                "actorName": "Superusuario",
+                "eventType": "INDEPENDENCE_EVALUATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-21T22:17:11.707"
+            },
+            {
+                "id": "cmwqz0ixl0003col5nkis34xd",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "independenceStatus",
+                        "newValue": "MITIGATED",
+                        "previousValue": "CONFLICT"
+                    },
+                    {
+                        "field": "mitigationMeasures",
+                        "newValue": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Independencia evaluada: MITIGATED",
+                "metadata": {
+                    "status": "MITIGATED",
+                    "memberId": "cmwqytpfc0000col5dnj0dydq",
+                    "auditorId": "cmwpq13j100004gl5hdzyghok"
+                },
+                "actorName": "Superusuario",
+                "eventType": "INDEPENDENCE_EVALUATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-21T22:19:36.537"
+            },
+            {
+                "id": "cmwqz9m530005col5oyss3dtc",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Auditor Alimentos del Eje S.A.S. asignado al equipo",
+                "metadata": {
+                    "role": "MEMBER",
+                    "memberId": "cmwqz9m4c0004col5x8ljln0e",
+                    "auditorId": "cmwqu7hvv0000nol5lxmmewb3"
+                },
+                "actorName": "Superusuario",
+                "eventType": "TEAM_MEMBER_ASSIGNED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-21T22:26:40.599"
+            },
+            {
+                "id": "cmwqzbszi0006col5ob7y3vtu",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "independenceStatus",
+                        "newValue": "CLEAR",
+                        "previousValue": "PENDING"
+                    },
+                    {
+                        "field": "independenceDeclaration",
+                        "newValue": "Evaluación de prueba: no se identificaron relaciones, responsabilidades previas ni participación en las actividades del proceso auditado que comprometan la independencia del auditor externo.",
+                        "previousValue": null
+                    }
+                ],
+                "summary": "Independencia evaluada: CLEAR",
+                "metadata": {
+                    "status": "CLEAR",
+                    "memberId": "cmwqz9m4c0004col5x8ljln0e",
+                    "auditorId": "cmwqu7hvv0000nol5lxmmewb3"
+                },
+                "actorName": "Superusuario",
+                "eventType": "INDEPENDENCE_EVALUATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-21T22:28:22.782"
+            },
+            {
+                "id": "cmwr347310001qkl59ehvp4fj",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Plan de auditoría creado",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T00:14:26.269"
+            },
+            {
+                "id": "cmwr3chbc0003qkl5x6mhclyj",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Actividad de agenda creada: Reunión de apertura",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr3chao0002qkl5d1iiqnzj"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T00:20:52.776"
+            },
+            {
+                "id": "cmwr7e5yo0000wcl56hv0w16j",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Reunión de apertura",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr3chao0002qkl5d1iiqnzj"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:14:09.84"
+            },
+            {
+                "id": "cmwr7e6220003wcl59kilf90x",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqytpfc0000col5dnj0dydq",
+                            "cmwqz9m4c0004col5x8ljln0e"
+                        ],
+                        "previousValue": [
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr3chao0002qkl5d1iiqnzj",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr3chao0002qkl5d1iiqnzj",
+                    "addedTeamMemberIds": [
+                        "cmwqytpfc0000col5dnj0dydq",
+                        "cmwqz9m4c0004col5x8ljln0e"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:14:09.962"
+            },
+            {
+                "id": "cmwr7h7zl0005wcl52qkuvgmq",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Actividad de agenda creada: Revisión de Direccionamiento estratégico",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7h7xn0004wcl55o0i2p0c"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:16:32.434"
+            },
+            {
+                "id": "cmwr7h84h0007wcl5lfb4o8qb",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqytpfc0000col5dnj0dydq"
+                        ],
+                        "previousValue": [
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr7h7xn0004wcl55o0i2p0c",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                    "addedTeamMemberIds": [
+                        "cmwqytpfc0000col5dnj0dydq"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:16:32.609"
+            },
+            {
+                "id": "cmwr7jtzb0008wcl5izxmc6x0",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Revisión de Direccionamiento estratégico",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7h7xn0004wcl55o0i2p0c"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:18:34.247"
+            },
+            {
+                "id": "cmwr7ju1t000awcl5ey30new6",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqz9m4c0004col5x8ljln0e"
+                        ],
+                        "previousValue": [
+                            "cmwqytpfc0000col5dnj0dydq"
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr7h7xn0004wcl55o0i2p0c",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                    "addedTeamMemberIds": [
+                        "cmwqz9m4c0004col5x8ljln0e"
+                    ],
+                    "removedTeamMemberIds": [
+                        "cmwqytpfc0000col5dnj0dydq"
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:18:34.337"
+            },
+            {
+                "id": "cmwr7nx0z000cwcl516sxk9js",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Actividad de agenda creada: Revisión del proceso de Prestación del servicio de consultoría",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7nx0f000bwcl5375v2a80"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:21:44.819"
+            },
+            {
+                "id": "cmwr7nx3n000ewcl5qfq408lw",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqytpfc0000col5dnj0dydq"
+                        ],
+                        "previousValue": [
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr7nx0f000bwcl5375v2a80",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                    "addedTeamMemberIds": [
+                        "cmwqytpfc0000col5dnj0dydq"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:21:44.915"
+            },
+            {
+                "id": "cmwr7rc4j000gwcl5jc0isjh1",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Actividad de agenda creada: Revisión del proceso de Gestión administrativa y financiera",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7rc3z000fwcl50ro42ff4"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:24:24.355"
+            },
+            {
+                "id": "cmwr7rc75000iwcl55fq4d6do",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqytpfc0000col5dnj0dydq"
+                        ],
+                        "previousValue": [
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr7rc3z000fwcl50ro42ff4",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7rc3z000fwcl50ro42ff4",
+                    "addedTeamMemberIds": [
+                        "cmwqytpfc0000col5dnj0dydq"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T02:24:24.449"
+            },
+            {
+                "id": "cmws7qv600000bwl5v012yenf",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Revisión del proceso de Prestación del servicio de consultoría",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7nx0f000bwcl5375v2a80"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:11:48.552"
+            },
+            {
+                "id": "cmws7qv8z0002bwl5c1pzmdna",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqytpfc0000col5dnj0dydq",
+                            "cmwqz9m4c0004col5x8ljln0e"
+                        ],
+                        "previousValue": [
+                            "cmwqytpfc0000col5dnj0dydq"
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmwr7nx0f000bwcl5375v2a80",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                    "addedTeamMemberIds": [
+                        "cmwqz9m4c0004col5x8ljln0e"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:11:48.659"
+            },
+            {
+                "id": "cmws7t98a0003bwl5g669kli5",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Reunión de apertura",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr3chao0002qkl5d1iiqnzj"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:13:40.09"
+            },
+            {
+                "id": "cmws7u7hb0004bwl5kht5ankx",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Revisión del proceso de Prestación del servicio de consultoría",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmwr7nx0f000bwcl5375v2a80"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:14:24.479"
+            },
+            {
+                "id": "cmws7xd8h0006bwl59oh80pw3",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": null,
+                "summary": "Actividad de agenda creada: Revisión de evidencias",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmws7xd7x0005bwl5bm6l8qh8"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_CREATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:16:51.906"
+            },
+            {
+                "id": "cmws8rpj60007bwl5rd88gtrh",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "type"
+                    },
+                    {
+                        "field": "title"
+                    },
+                    {
+                        "field": "description"
+                    },
+                    {
+                        "field": "scheduledStart"
+                    },
+                    {
+                        "field": "scheduledEnd"
+                    },
+                    {
+                        "field": "location"
+                    },
+                    {
+                        "field": "responsibleId"
+                    },
+                    {
+                        "field": "processId"
+                    },
+                    {
+                        "field": "notes"
+                    }
+                ],
+                "summary": "Actividad de agenda actualizada: Revisión de evidencias",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmws7xd7x0005bwl5bm6l8qh8"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:40:27.522"
+            },
+            {
+                "id": "cmws8rpl90009bwl5zwjpto2r",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "auditors",
+                        "newValue": [
+                            "cmwqz9m4c0004col5x8ljln0e"
+                        ],
+                        "previousValue": [
+                        ]
+                    }
+                ],
+                "summary": "Auditores de actividad actualizados: cmws7xd7x0005bwl5bm6l8qh8",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb",
+                    "activityId": "cmws7xd7x0005bwl5bm6l8qh8",
+                    "addedTeamMemberIds": [
+                        "cmwqz9m4c0004col5x8ljln0e"
+                    ],
+                    "removedTeamMemberIds": [
+                    ]
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_ACTIVITY_UPDATED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:40:27.597"
+            },
+            {
+                "id": "cmws8s1ql000abwl51dpfv5s5",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "status",
+                        "newValue": "READY",
+                        "previousValue": "DRAFT"
+                    }
+                ],
+                "summary": "Estado del plan cambiado a READY",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_STATUS_CHANGED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:40:43.341"
+            },
+            {
+                "id": "cmws8vgyt000bbwl5m3w54jrk",
+                "actorId": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "changes": [
+                    {
+                        "field": "status",
+                        "newValue": "APPROVED",
+                        "previousValue": "READY"
+                    }
+                ],
+                "summary": "Estado del plan cambiado a APPROVED",
+                "metadata": {
+                    "planId": "cmwr3472b0000qkl5mn1vmzcb"
+                },
+                "actorName": "Superusuario",
+                "eventType": "AUDIT_PLAN_STATUS_CHANGED",
+                "actorEmail": "superusuario@kanbanconsultoria.com",
+                "occurredAt": "2026-11-22T19:43:23.045"
+            }
+        ],
+        "activities": [
+            {
+                "id": "cmwr3chao0002qkl5d1iiqnzj",
+                "type": "OPENING_MEETING",
+                "notes": "algunas notas",
+                "title": "Reunión de apertura",
+                "status": "PLANNED",
+                "location": "Presencial",
+                "position": 0,
+                "processId": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "descripcion",
+                "scheduledEnd": "2026-11-16T13:30:00",
+                "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+                "scheduledStart": "2026-11-16T13:00:00"
+            },
+            {
+                "id": "cmwr7h7xn0004wcl55o0i2p0c",
+                "type": "OTHER",
+                "notes": null,
+                "title": "Revisión de Direccionamiento estratégico",
+                "status": "PLANNED",
+                "location": null,
+                "position": 1,
+                "processId": "cmvy52tb70000zgl5rngbrklj",
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": null,
+                "scheduledEnd": "2026-11-16T15:00:00",
+                "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+                "scheduledStart": "2026-11-16T13:30:00"
+            },
+            {
+                "id": "cmwr7nx0f000bwcl5375v2a80",
+                "type": "PROCESS_REVIEW",
+                "notes": null,
+                "title": "Revisión del proceso de Prestación del servicio de consultoría",
+                "status": "PLANNED",
+                "location": "Sala",
+                "position": 2,
+                "processId": "cmvy564610002zgl5gxi21ozo",
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Evaluación del cumplimiento de los procedimientos de consultoría, requisitos del cliente, planificación y ejecución del servicio, indicadores de desempeño, controles operacionales y evidencias documentadas.",
+                "scheduledEnd": "2026-11-16T16:45:00",
+                "responsibleId": null,
+                "scheduledStart": "2026-11-16T15:15:00"
+            },
+            {
+                "id": "cmwr7rc3z000fwcl50ro42ff4",
+                "type": "PROCESS_REVIEW",
+                "notes": null,
+                "title": "Revisión del proceso de Gestión administrativa y financiera",
+                "status": "PLANNED",
+                "location": "presencial",
+                "position": 3,
+                "processId": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Verificación de la gestión de recursos, controles administrativos y financieros, cumplimiento de procedimientos, indicadores de desempeño, gestión de riesgos y registros que evidencien la eficacia del proceso.",
+                "scheduledEnd": "2026-11-17T14:30:00",
+                "responsibleId": null,
+                "scheduledStart": "2026-11-17T13:00:00"
+            },
+            {
+                "id": "cmws7xd7x0005bwl5bm6l8qh8",
+                "type": "OTHER",
+                "notes": null,
+                "title": "Revisión de evidencias",
+                "status": "PLANNED",
+                "location": null,
+                "position": 4,
+                "processId": null,
+                "auditPlanId": "cmwr3472b0000qkl5mn1vmzcb",
+                "description": "Consolidación y revisión de evidencias, verificación de hallazgos y evaluación del cumplimiento de los criterios de auditoría.",
+                "scheduledEnd": "2026-11-17T16:59:00",
+                "responsibleId": null,
+                "scheduledStart": "2026-11-17T15:00:00"
+            }
+        ],
+        "teamMembers": [
+            {
+                "id": "cmwqytpfc0000col5dnj0dydq",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "auditorId": "cmwpq13j100004gl5hdzyghok",
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "createdAt": "2026-11-21T22:14:18.36",
+                "removedAt": null,
+                "updatedAt": "2026-11-21T22:19:36.528",
+                "assignedAt": "2026-11-21T22:14:18.36",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "observations": "Asignación temporal para validar el equipo auditor de AUD-001",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "conflictDescription": "El auditor participó en la elaboración de los procedimientos del proceso de Direccionamiento estratégico que ahora debe auditar.",
+                "independenceDeclaration": "Evaluación de prueba: se identificó una posible falta de independencia respecto al proceso auditado.",
+                "independenceEvaluatedAt": "2026-11-21T22:19:36.524",
+                "independenceEvaluatedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147"
+            },
+            {
+                "id": "cmwqz9m4c0004col5x8ljln0e",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "auditorId": "cmwqu7hvv0000nol5lxmmewb3",
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "createdAt": "2026-11-21T22:26:40.572",
+                "removedAt": null,
+                "updatedAt": "2026-11-21T22:28:22.769",
+                "assignedAt": "2026-11-21T22:26:40.572",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "observations": null,
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "conflictDescription": null,
+                "independenceDeclaration": "Evaluación de prueba: no se identificaron relaciones, responsabilidades previas ni participación en las actividades del proceso auditado que comprometan la independencia del auditor externo.",
+                "independenceEvaluatedAt": "2026-11-21T22:28:22.763",
+                "independenceEvaluatedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147"
+            }
+        ],
+        "auditAndPlan": {
+            "id": "cmvy7eklk0019zgl5be78l2fy",
+            "code": "AUD-001",
+            "scope": "La auditoría comprende los procesos de Direccionamiento estratégico, Prestación del servicio de consultoría y Gestión administrativa y financiera. Incluye la revisión documental, entrevistas, evaluación de indicadores, identificación de riesgos, verificación de controles y seguimiento a acciones de mejora correspondientes al periodo de enero a octubre de 2026.",
+            "title": "Auditoría interna del Sistema de Gestión de Calidad",
+            "status": "IN_PROGRESS",
+            "endDate": null,
+            "plan_id": "cmwr3472b0000qkl5mn1vmzcb",
+            "summary": null,
+            "criteria": "ISO 9001:2015, especialmente numerales 4.4, 6.1, 6.2, 7.5, 8.1, 8.2, 9.1, 9.2 y 10.2.\nPolítica y objetivos de calidad.\nProcedimientos documentados de los tres procesos.\nMatriz de riesgos y controles.\nIndicadores KPI y registros de seguimiento.\nRequisitos contractuales aplicables.",
+            "auditType": "Interna",
+            "createdAt": "2026-11-01T19:09:09.704",
+            "processId": "cmvy52tb70000zgl5rngbrklj",
+            "startDate": "2026-11-02T16:52:24.577",
+            "updatedAt": "2026-11-02T16:52:24.603",
+            "objectives": "Evaluar la conformidad, implementación y eficacia del Sistema de Gestión de Calidad de la organización frente a los requisitos de ISO 9001:2015, los procedimientos internos y los objetivos organizacionales, identificando fortalezas, no conformidades y oportunidades de mejora.",
+            "plan_status": "APPROVED",
+            "plannedDate": "2026-11-16T00:00:00",
+            "driveFolderId": null,
+            "leadAuditorId": "cmvsjj8zs0001vgl51rwldgnl",
+            "responsibleId": "cmvsjj8zs0001vgl51rwldgnl",
+            "auditProgramId": null,
+            "storageDeletionRequestedAt": null
+        },
+        "resourceCounts": {
+            "events": 46,
+            "findings": 1,
+            "evidences": 0,
+            "checklists": 1,
+            "evidenceFiles": 1,
+            "checklistItems": 7,
+            "correctiveActions": 0
+        },
+        "activityAuditors": [
+            {
+                "id": "cmwr7e61p0001wcl54um0k1t5",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr3chao0002qkl5d1iiqnzj",
+                "assignedAt": "2026-11-22T02:14:09.949",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7e61x0002wcl5evpf6a3j",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr3chao0002qkl5d1iiqnzj",
+                "assignedAt": "2026-11-22T02:14:09.957",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7h84a0006wcl5v1etos2a",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": false,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": "2026-11-22T02:18:34.324",
+                "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                "assignedAt": "2026-11-22T02:16:32.602",
+                "removedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7ju1o0009wcl5iz2jv4d8",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7h7xn0004wcl55o0i2p0c",
+                "assignedAt": "2026-11-22T02:18:34.332",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7nx3f000dwcl5y724jp3y",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                "assignedAt": "2026-11-22T02:21:44.907",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmwr7rc70000hwcl5qxwln79l",
+                "role": "LEAD",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7rc3z000fwcl50ro42ff4",
+                "assignedAt": "2026-11-22T02:24:24.444",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Auditor Interno de Prueba",
+                "auditor_type": "INTERNAL",
+                "auditor_email": "auditor.interno.prueba@example.com",
+                "auditTeamMemberId": "cmwqytpfc0000col5dnj0dydq",
+                "independenceStatus": "MITIGATED",
+                "mitigationMeasures": "El auditor no evaluará los procedimientos que elaboró. Esa parte será revisada por otro auditor independiente y el líder no aprobará los hallazgos relacionados con su propio trabajo.",
+                "team_member_active": true
+            },
+            {
+                "id": "cmws7qv8u0001bwl5uxmxvtyg",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmwr7nx0f000bwcl5375v2a80",
+                "assignedAt": "2026-11-22T19:11:48.654",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            },
+            {
+                "id": "cmws8rpky0008bwl51ilgs9hz",
+                "role": "MEMBER",
+                "auditId": "cmvy7eklk0019zgl5be78l2fy",
+                "isActive": true,
+                "companyId": "cmvpvnmqw0001dsl5zjfh2zw8",
+                "removedAt": null,
+                "activityId": "cmws7xd7x0005bwl5bm6l8qh8",
+                "assignedAt": "2026-11-22T19:40:27.586",
+                "removedById": null,
+                "assignedById": "cafe89c0-079b-4f41-97d0-5d6de3b5f147",
+                "auditor_name": "Alimentos del Eje S.A.S.",
+                "auditor_type": "EXTERNAL",
+                "auditor_email": "auditor.externo.prueba@example.com",
+                "auditTeamMemberId": "cmwqz9m4c0004col5x8ljln0e",
+                "independenceStatus": "CLEAR",
+                "mitigationMeasures": null,
+                "team_member_active": true
+            }
+        ]
+    },
+    "database": "EvidentIA",
+    "migration": "20261122000000_add_audit_activity_execution",
+    "serverPort": 5432,
+    "generatedAt": "2026-11-22T18:11:07.039153-05:00",
+    "tableCounts": {
+        "Audit": 1,
+        "Auditor": 2,
+        "AuditPlan": 1,
+        "AuditEvent": 46,
+        "AuditFinding": 1,
+        "AuditProgram": 1,
+        "AuditEvidence": 0,
+        "AuditChecklist": 1,
+        "AuditTeamMember": 2,
+        "AuditEvidenceFile": 1,
+        "AuditPlanActivity": 5,
+        "AuditChecklistItem": 7,
+        "AuditCorrectiveAction": 0,
+        "AuditPlanActivityAuditor": 8
+    },
+    "newTablePresence": {
+        "AuditPlanActivityFinding": false,
+        "AuditPlanActivityEvidence": false,
+        "AuditPlanActivityEvidenceFile": false,
+        "AuditPlanActivityChecklistItem": false
+    }
+}

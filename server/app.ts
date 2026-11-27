@@ -5,11 +5,11 @@ import { z } from 'zod'
 import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import bcrypt from 'bcryptjs'
-import { ActionItemStatus, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, CheckySuggestionStatus, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditStatus, RiskAuditEventType, StrategicObjectiveHistoryEventType, StrategicObjectiveOrigin, StrategicObjectiveStatus, StrategicObjectiveStrategySource, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
+import { ActionItemStatus, AuditEfficacyEvaluationStatus, AuditEfficacyOutcome, Prisma, PrismaClient, Priority, CrossOrigin, CrossType, CheckyCategory, CheckyFindingBasis, CheckySuggestionStatus, ProcessType, ProcedureHistoryAction, ProcedureStatus, Role, UserStatusEventType, AuditChecklistResult, AuditCorrectiveActionStatus, AuditEventType, AuditFindingStatus, AuditImmediateCorrectionStatus, AuditRootCauseAnalysisStatus, AuditRootCauseStatus, AuditStatus, RiskAuditEventType, StrategicObjectiveHistoryEventType, StrategicObjectiveOrigin, StrategicObjectiveStatus, StrategicObjectiveStrategySource, TicketAssignmentApprovalSource, TicketAssignmentApprovalStatus, TicketAuditEventType, TicketPriority, TicketStatus } from '@prisma/client'
 import { env } from './env.js'
 import { prisma } from './prisma.js'
 import { authenticate, clearSessionCookie, createSessionForActiveUser, lockUserForUpdate, publicUser, requireRole, revokeUserSessions, setSessionCookie } from './auth.js'
-import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type AuditChecklistAISourceType, type AuditChecklistContext, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI, type StrategicObjectiveSuggestionContext } from './ai-service.js'
+import { AIService, AIServiceError, resolveWeightingBand, sanitizeAIAnalysisResult, sanitizeCheckyResult, type AuditCheckySuggestionContext, type AuditChecklistAISourceType, type AuditChecklistContext, type AuditChecklistContextActivity, type CheckyConsultResult, type CheckyConsolidatedStrategy, type CheckyContext, type CheckyWeighting, type CrossAnalysisResult, type GeneratedCrossForAI, type StrategicObjectiveSuggestionContext } from './ai-service.js'
 import { getDashboardData } from './dashboard-service.js'
 import { calculateWeightedScore, WEIGHTING_LEVEL_SCORE } from './weighting-service.js'
 import { AI_STRATEGY_QUADRANTS, collectStrategies, readAiStrategyTexts, type AiStrategySource, type CheckyStrategySource, type CrossStrategySource, type StrategyFactor, type StrategyForPrioritization } from './strategies-service.js'
@@ -29,11 +29,25 @@ import { findMultipartFile, MultipartError, MAX_UPLOAD_REQUEST_BYTES, parseMulti
 import { TicketAssignmentApprovalError, cancelPendingTicketAssignmentApprovals, cancelPendingTicketAssignmentApprovalsForTickets, cancelPendingTicketAssignmentApprovalsForUser, cancelTicketAssignmentApproval, createTicketAssignmentApproval, decideTicketAssignmentApproval, getTicketAssignmentApproval, listTicketAssignmentApprovals, supersedeTicketAssignmentApproval } from './ticket-assignment-approvals.js'
 import { createNotificationIfAbsent, lockNotificationRecipients } from './notifications.js'
 import { csrfProtection } from './csrf.js'
+import { registerAuditProgramRoutes } from './audit-program.service.js'
+import { registerAuditProgramProcessPriorityRoutes } from './audit-program-process-priority.service.js'
+import { registerAuditorRoutes } from './auditor.service.js'
+import { registerAuditTeamRoutes } from './audit-team.service.js'
+import { registerAuditPlanRoutes } from './audit-plan.service.js'
+import { registerAuditReportRoutes } from './audit-report.service.js'
+import { auditReportSourceFingerprint } from './audit-report.service.js'
+import { auditImmediateCorrectionInclude, auditImmediateCorrectionStatusNames, auditImmediateCorrectionView, canTransitionAuditImmediateCorrection, type AuditImmediateCorrectionWithInclude } from './audit-immediate-correction.service.js'
+import { auditRootCauseAnalysisInclude, auditRootCauseAnalysisView, auditRootCauseFiveWhyStepView, auditRootCauseInclude, auditRootCauseView, canTransitionAuditRootCause, canTransitionAuditRootCauseAnalysis, type AuditRootCauseAnalysisWithInclude } from './audit-root-cause.service.js'
+import { auditCorrectiveActionCauseInclude, auditCorrectiveActionCauseView, auditRootCauseEligibilityInclude, auditRootCauseEligibleView, type AuditCorrectiveActionCauseWithInclude } from './audit-corrective-action-cause.service.js'
+import { isActiveAuditFollowUpStatus, isTreatmentEvidenceCoherent } from './audit-follow-up.policy.js'
 import { registerLearningRoutes } from './learning/learning-routes.js'
 import { strategicObjectiveApprovalSchema, strategicObjectiveCreateSchema, strategicObjectiveHistoryQuerySchema, strategicObjectiveIndicatorSchema, strategicObjectiveStrategyLinkSchema, strategicObjectiveSuggestionAcceptanceSchema, strategicObjectiveSuggestionPayloadSchema, strategicObjectiveSuggestionRejectionSchema, strategicObjectiveSuggestionRequestSchema, strategicObjectiveSuggestionStrategyRefsSchema, strategicObjectiveSuggestionUpdateSchema, strategicObjectiveUpdateSchema } from './validation.js'
 import { strategicObjectiveSuggestionDedupeKey } from './strategic-objective-suggestions.js'
+import { auditCheckySuggestionDedupeKey } from './audit-checky-suggestions.js'
 import { embeddedKpiListSchema } from './validation.js'
+import { auditActionAcceptanceCriterionCreateSchema, auditActionAcceptanceCriterionUpdateSchema, auditCheckySuggestionAcceptanceSchema, auditCheckySuggestionPayloadSchema, auditCheckySuggestionRejectionSchema, auditCheckySuggestionRequestSchema, auditCheckySuggestionUpdateSchema, auditCorrectiveActionCauseLinkSchema, auditCorrectiveActionCauseQuerySchema, auditImmediateCorrectionCancelSchema, auditImmediateCorrectionCompleteSchema, auditImmediateCorrectionCreateSchema, auditImmediateCorrectionStartSchema, auditImmediateCorrectionUpdateSchema, auditRootCauseAnalysisCreateSchema, auditRootCauseAnalysisStatusChangeSchema, auditRootCauseAnalysisUpdateSchema, auditRootCauseCreateSchema, auditRootCauseFiveWhyStepCreateSchema, auditRootCauseFiveWhyStepUpdateSchema, auditRootCauseStatusChangeSchema, auditRootCauseUpdateSchema } from './validation.js'
 import { processIndicatorCreateSchema, processIndicatorUpdateSchema } from './validation.js'
+import { auditEfficacyCriterionResultUpdateSchema, auditEfficacyEvaluationCreateSchema, auditEfficacyEvaluationProgressCreateSchema, auditEfficacyEvaluationStatusChangeSchema, auditEfficacyEvaluationUpdateSchema, auditEfficacyEvidenceFileLinkSchema, auditEfficacyEvidenceLinkSchema } from './validation.js'
 import { procedureIndicatorCreateSchema, procedureIndicatorUpdateSchema, procedureStepSchema } from './validation.js'
 import { actionItemCreateSchema, actionItemUpdateSchema, actionPlanCreateSchema, actionPlanUpdateSchema, aiAnalysisSchema, auditActionProgressCreateSchema, auditChecklistAIGenerationRequestSchema, auditChecklistCreateSchema, auditChecklistItemCreateSchema, auditChecklistItemUpdateSchema, auditChecklistUpdateSchema, auditCorrectiveActionCreateSchema, auditCorrectiveActionStatusChangeSchema, auditCorrectiveActionUpdateSchema, auditCreateSchema, auditEvidenceCreateSchema, auditEvidenceUpdateSchema, auditFindingCreateSchema, auditFindingStatusChangeSchema, auditFindingUpdateSchema, auditHistoryQuerySchema, auditQuerySchema, auditRelationsUpdateSchema, auditStatusChangeSchema, auditUpdateSchema, checkyMessageCreateSchema, checkySessionCreateSchema, checkySuggestionDecisionSchema, companyCreateSchema, companyQuerySchema, companyUpdateSchema, crossAnalyzeSchema, crossAnalysisSchema, crossCreateSchema, crossTypeFor, crossUpdateSchema, crossWeightingSchema, diagnosticCreateSchema, diagnosticUpdateSchema, idReference, kpiCatalogQuerySchema, kpiCreateSchema, kpiQuerySchema, kpiUpdateSchema, loginSchema, mitigationActivityCreateSchema, processCreateSchema, processQuerySchema, processUpdateSchema, procedureCreateSchema, procedureHistoryQuerySchema, procedureQuerySchema, procedureStatusChangeSchema, procedureUpdateSchema, recommendationUpdateSchema, riskApprovalDecisionSchema, riskApprovalQuerySchema, riskAuditQuerySchema, riskControlCreateSchema, riskControlUpdateSchema, riskCreateSchema, riskEvidenceCreateSchema, riskEvidenceUpdateSchema, riskUpdateSchema, sipocItemCreateSchema, sipocItemUpdateSchema, sipocKindSchema, strategyTasksCreateSchema, strategyWeightingSchema, swotItemCreateSchema, swotItemUpdateSchema, ticketAssignmentApprovalCancelSchema, ticketAssignmentApprovalDecisionSchema, ticketAssignmentApprovalQuerySchema, ticketCreateSchema, ticketDriveReferenceCreateSchema, ticketHistoryQuerySchema, ticketQuerySchema, ticketUpdateSchema, userCreateSchema, userDeactivateSchema, userReactivateSchema, userUpdateSchema } from './validation.js'
 
@@ -73,6 +87,18 @@ class StrategicObjectiveSuggestionAcceptanceError extends Error {
     this.status = status
     this.details = details
     this.name = 'StrategicObjectiveSuggestionAcceptanceError'
+  }
+}
+
+class AuditCheckySuggestionAcceptanceError extends Error {
+  readonly status: 400 | 403 | 404 | 409
+  readonly details?: Record<string, unknown>
+
+  constructor(status: 400 | 403 | 404 | 409, message: string, details?: Record<string, unknown>) {
+    super(message)
+    this.status = status
+    this.details = details
+    this.name = 'AuditCheckySuggestionAcceptanceError'
   }
 }
 
@@ -1922,6 +1948,71 @@ const auditInclude = {
 } as const
 type AuditWithInclude = Prisma.AuditGetPayload<{ include: typeof auditInclude }>
 
+const auditEfficacyEvaluationInclude = {
+  finding: { select: { id: true, auditId: true, status: true, title: true } },
+  action: { select: { id: true, findingId: true, title: true, status: true, workflowVersion: true } },
+  responsible: { select: { id: true, name: true, isActive: true } },
+  createdBy: { select: { id: true, name: true, isActive: true } },
+  completedBy: { select: { id: true, name: true, isActive: true } },
+  criteria: { orderBy: { createdAt: 'asc' as const }, include: { criterion: { select: { id: true, type: true, description: true, expectedResult: true, required: true } }, evaluatedBy: { select: { id: true, name: true, isActive: true } } } },
+  progress: { orderBy: { createdAt: 'asc' as const }, include: { createdBy: { select: { id: true, name: true, isActive: true } } } },
+  evidenceLinks: { orderBy: { linkedAt: 'asc' as const }, include: { evidence: true, linkedBy: { select: { id: true, name: true, isActive: true } } } },
+  evidenceFileLinks: { orderBy: { linkedAt: 'asc' as const }, include: { evidenceFile: { select: { id: true, auditId: true, findingId: true, actionId: true, itemId: true, filename: true, mimeType: true, size: true, storageProvider: true, storageState: true, createdAt: true } }, linkedBy: { select: { id: true, name: true, isActive: true } } } },
+} as const
+type AuditEfficacyEvaluationWithInclude = Prisma.AuditEfficacyEvaluationGetPayload<{ include: typeof auditEfficacyEvaluationInclude }>
+
+const auditEfficacyEvaluationView = (evaluation: AuditEfficacyEvaluationWithInclude) => ({
+  id: evaluation.id,
+  auditId: evaluation.auditId,
+  findingId: evaluation.findingId,
+  finding: evaluation.finding,
+  actionId: evaluation.actionId,
+  action: evaluation.action,
+  status: evaluation.status,
+  outcome: evaluation.outcome,
+  responsible: evaluation.responsible,
+  scheduledDate: evaluation.scheduledDate,
+  methodology: evaluation.methodology,
+  methodologyOther: evaluation.methodologyOther,
+  observationPeriod: evaluation.observationPeriod,
+  observationStartDate: evaluation.observationStartDate,
+  observationEndDate: evaluation.observationEndDate,
+  scope: evaluation.scope,
+  observations: evaluation.observations,
+  conclusion: evaluation.conclusion,
+  recurrenceDetected: evaluation.recurrenceDetected,
+  recurrenceDescription: evaluation.recurrenceDescription,
+  recurrenceIdentifiedAt: evaluation.recurrenceIdentifiedAt,
+  startedAt: evaluation.startedAt,
+  completedAt: evaluation.completedAt,
+  completedBy: evaluation.completedBy,
+  createdBy: evaluation.createdBy,
+  criteria: evaluation.criteria.map((criterion) => ({
+    id: criterion.id,
+    evaluationId: criterion.evaluationId,
+    criterionId: criterion.criterionId,
+    description: criterion.description,
+    expectedResult: criterion.expectedResult,
+    required: criterion.required,
+    resultObtained: criterion.resultObtained,
+    measuredValue: criterion.measuredValue,
+    measurementUnit: criterion.measurementUnit,
+    sampleSize: criterion.sampleSize,
+    isMet: criterion.isMet,
+    observations: criterion.observations,
+    evaluatedBy: criterion.evaluatedBy,
+    evaluatedAt: criterion.evaluatedAt,
+    createdAt: criterion.createdAt,
+    updatedAt: criterion.updatedAt,
+    sourceCriterion: criterion.criterion,
+  })),
+  progress: evaluation.progress,
+  evidences: evaluation.evidenceLinks.map((link) => ({ ...auditEvidenceView(link.evidence), linkedBy: link.linkedBy, linkedAt: link.linkedAt })),
+  evidenceFiles: evaluation.evidenceFileLinks.map((link) => ({ ...link.evidenceFile, linkedBy: link.linkedBy, linkedAt: link.linkedAt })),
+  createdAt: evaluation.createdAt,
+  updatedAt: evaluation.updatedAt,
+})
+
 const auditFindingInclude = {
   responsible: { select: { id: true, name: true, isActive: true } },
   verifiedBy: { select: { id: true, name: true, isActive: true } },
@@ -1929,6 +2020,7 @@ const auditFindingInclude = {
   item: { select: { id: true, description: true, checklistId: true } },
   process: { select: { id: true, name: true, code: true } },
   procedure: { select: { id: true, code: true, name: true } },
+  efficacyEvaluations: { orderBy: { createdAt: 'desc' as const }, include: auditEfficacyEvaluationInclude },
 } as const
 type AuditFindingWithInclude = Prisma.AuditFindingGetPayload<{ include: typeof auditFindingInclude }>
 
@@ -1954,14 +2046,43 @@ const auditFindingView = (finding: AuditFindingWithInclude) => ({
   efficacyVerification: finding.efficacyVerification,
   efficacyVerifiedBy: finding.efficacyVerifiedBy ?? null,
   efficacyVerifiedAt: finding.efficacyVerifiedAt ?? null,
+  efficacyEvaluations: finding.efficacyEvaluations?.map(auditEfficacyEvaluationView) ?? [],
   createdAt: finding.createdAt,
   updatedAt: finding.updatedAt,
 })
 
-const auditEvidenceView = (evidence: { id: string; auditId: string; findingId: string | null; name: string; description: string; url: string; createdAt: Date; updatedAt: Date }) => ({
+const auditCheckySuggestionInclude = {
+  requestedBy: { select: { id: true, name: true, isActive: true } },
+  acceptedRootCause: { select: { id: true, analysisId: true, findingId: true, status: true } },
+  acceptedAnalysis: { select: { id: true, findingId: true, methodology: true, status: true } },
+  acceptedAction: { select: { id: true, findingId: true, title: true, status: true } },
+} as const
+type AuditCheckySuggestionWithInclude = Prisma.AuditCheckySuggestionGetPayload<{ include: typeof auditCheckySuggestionInclude }>
+
+const auditCheckySuggestionView = (suggestion: AuditCheckySuggestionWithInclude) => ({
+  id: suggestion.id,
+  auditId: suggestion.auditId,
+  findingId: suggestion.findingId,
+  kind: suggestion.kind,
+  originalPayload: suggestion.originalPayload,
+  editablePayload: suggestion.editablePayload,
+  evidenceIds: suggestion.evidenceIds,
+  status: suggestion.status,
+  decisionNote: suggestion.decisionNote,
+  decidedAt: suggestion.decidedAt,
+  requestedBy: suggestion.requestedBy,
+  acceptedRootCause: suggestion.acceptedRootCause,
+  acceptedAnalysis: suggestion.acceptedAnalysis,
+  acceptedAction: suggestion.acceptedAction,
+  createdAt: suggestion.createdAt,
+  updatedAt: suggestion.updatedAt,
+})
+
+const auditEvidenceView = (evidence: { id: string; auditId: string; findingId: string | null; actionId?: string | null; name: string; description: string; url: string; createdAt: Date; updatedAt: Date }) => ({
   id: evidence.id,
   auditId: evidence.auditId,
   findingId: evidence.findingId,
+  actionId: evidence.actionId ?? null,
   name: evidence.name,
   description: evidence.description,
   url: evidence.url,
@@ -1972,6 +2093,7 @@ const auditEvidenceView = (evidence: { id: string; auditId: string; findingId: s
 const auditView = (audit: AuditWithInclude) => ({
   id: audit.id,
   processId: audit.processId,
+  auditProgramId: audit.auditProgramId,
   companyId: audit.process.companyId,
   process: { id: audit.process.id, name: audit.process.name, code: audit.process.code },
   code: audit.code,
@@ -1987,7 +2109,7 @@ const auditView = (audit: AuditWithInclude) => ({
   summary: audit.summary,
   leadAuditor: audit.leadAuditor,
   responsible: audit.responsible,
-  findings: audit.findings.map(auditFindingView),
+  findings: audit.findings.map((finding) => auditFindingView(finding as unknown as AuditFindingWithInclude)),
   evidences: audit.evidences.map(auditEvidenceView),
   createdAt: audit.createdAt,
   updatedAt: audit.updatedAt,
@@ -2045,16 +2167,60 @@ const checklistProgress = (checklist: { items: Array<{ result: AuditChecklistRes
 const auditActionInclude = {
   responsible: { select: { id: true, name: true, isActive: true } },
   progress: { orderBy: { createdAt: 'desc' as const }, include: { createdBy: { select: { id: true, name: true, isActive: true } } } },
+  acceptanceCriteria: {
+    orderBy: { createdAt: 'asc' as const },
+    include: {
+      createdBy: { select: { id: true, name: true, isActive: true } },
+      completedBy: { select: { id: true, name: true, isActive: true } },
+    },
+  },
+  evidences: { orderBy: { createdAt: 'asc' as const } },
+  evidenceFiles: { select: { id: true, storageState: true }, orderBy: { createdAt: 'asc' as const } },
 } as const
 type AuditActionWithInclude = Prisma.AuditCorrectiveActionGetPayload<{ include: typeof auditActionInclude }>
+
+const actionProgressDetails = (entry: { note: string }) => {
+  const details: Record<string, string> = {}
+  for (const line of entry.note.split(/\r?\n/)) {
+    const separator = line.indexOf(':')
+    if (separator < 0) continue
+    const label = line.slice(0, separator).trim()
+    const value = line.slice(separator + 1).trim()
+    if (value) details[label] = value
+  }
+  return {
+    activities: details['Actividades realizadas'] ?? null,
+    results: details['Resultados obtenidos'] ?? null,
+    difficulties: details['Dificultades'] ?? null,
+    pendingActivities: details['Actividades pendientes'] ?? null,
+    observations: details['Observaciones'] ?? null,
+  }
+}
 
 const auditActionProgressView = (entry: AuditActionWithInclude['progress'][number]) => ({
   id: entry.id,
   actionId: entry.actionId,
   note: entry.note,
   percent: entry.percent,
+  ...actionProgressDetails(entry),
   createdBy: entry.createdBy,
   createdAt: entry.createdAt,
+})
+
+const auditActionAcceptanceCriterionView = (criterion: AuditActionWithInclude['acceptanceCriteria'][number]) => ({
+  id: criterion.id,
+  actionId: criterion.actionId,
+  type: criterion.type,
+  description: criterion.description,
+  expectedResult: criterion.expectedResult,
+  required: criterion.required,
+  isMet: criterion.isMet,
+  observations: criterion.observations,
+  completedAt: criterion.completedAt,
+  completedBy: criterion.completedBy,
+  createdBy: criterion.createdBy,
+  createdAt: criterion.createdAt,
+  updatedAt: criterion.updatedAt,
 })
 
 const auditActionView = (action: AuditActionWithInclude) => ({
@@ -2062,13 +2228,24 @@ const auditActionView = (action: AuditActionWithInclude) => ({
   findingId: action.findingId,
   title: action.title,
   description: action.description,
+  objective: action.objective,
+  implementationPlan: action.implementationPlan,
+  resources: action.resources,
+  observations: action.observations,
   responsible: action.responsible,
   priority: action.priority,
   status: action.status,
   required: action.required,
+  efficacyEvaluationId: action.efficacyEvaluationId,
+  evidenceRequired: action.evidenceRequired,
+  progressPercent: action.progressPercent,
+  workflowVersion: action.workflowVersion,
   dueDate: action.dueDate,
   completedAt: action.completedAt,
   progress: action.progress.map(auditActionProgressView),
+  acceptanceCriteria: action.acceptanceCriteria?.map(auditActionAcceptanceCriterionView) ?? [],
+  evidences: action.evidences?.map(auditEvidenceView) ?? [],
+  evidenceFiles: action.evidenceFiles ?? [],
   createdAt: action.createdAt,
   updatedAt: action.updatedAt,
 })
@@ -2163,16 +2340,17 @@ const auditFindingTransitions: Record<AuditFindingStatus, AuditFindingStatus[]> 
 const canTransitionAuditFinding = (from: AuditFindingStatus, to: AuditFindingStatus): boolean =>
   from !== to && auditFindingTransitions[from].includes(to)
 
-// Flujo de una acción correctiva. Solo avances hacia estados finales; CANCELLED y COMPLETED son
-// terminales. El servidor nunca "cierra" acciones automáticamente: cada cambio llega explícito.
+// Flujo de una acción correctiva. Las acciones integrales pueden pasar directamente de OPEN a
+// COMPLETED cuando la finalización explícita supera todas sus validaciones; las acciones legadas
+// mantienen la transición OPEN -> IN_PROGRESS -> COMPLETED. CANCELLED y COMPLETED son terminales.
 const auditActionTransitions: Record<AuditCorrectiveActionStatus, AuditCorrectiveActionStatus[]> = {
   [AuditCorrectiveActionStatus.OPEN]: [AuditCorrectiveActionStatus.IN_PROGRESS, AuditCorrectiveActionStatus.CANCELLED],
   [AuditCorrectiveActionStatus.IN_PROGRESS]: [AuditCorrectiveActionStatus.COMPLETED, AuditCorrectiveActionStatus.CANCELLED],
   [AuditCorrectiveActionStatus.COMPLETED]: [],
   [AuditCorrectiveActionStatus.CANCELLED]: [],
 }
-const canTransitionAuditAction = (from: AuditCorrectiveActionStatus, to: AuditCorrectiveActionStatus): boolean =>
-  from !== to && auditActionTransitions[from].includes(to)
+const canTransitionAuditAction = (from: AuditCorrectiveActionStatus, to: AuditCorrectiveActionStatus, workflowVersion?: number): boolean =>
+  from !== to && (auditActionTransitions[from].includes(to) || (workflowVersion === 1 && from === AuditCorrectiveActionStatus.OPEN && to === AuditCorrectiveActionStatus.COMPLETED))
 
 const auditActionStatusNames: Record<AuditCorrectiveActionStatus, string> = {
   [AuditCorrectiveActionStatus.OPEN]: 'Abierta',
@@ -2286,12 +2464,13 @@ const findingAuditChanges = (previous: { title: string; description: string; typ
   return rows.filter((row) => row.previousValue !== row.newValue)
 }
 
-const auditEvidenceAuditChanges = (previous: { name: string; description: string; url: string; findingId: string | null } | null, next: { name?: string; description?: string; url?: string; findingId?: string | null }): RiskAuditChange[] => {
+const auditEvidenceAuditChanges = (previous: { name: string; description: string; url: string; findingId: string | null; actionId?: string | null } | null, next: { name?: string; description?: string; url?: string; findingId?: string | null; actionId?: string | null }): RiskAuditChange[] => {
   const rows: Array<{ field: string; label: string; previousValue: ProcessChangeValue; newValue: ProcessChangeValue }> = [
     { field: 'name', label: 'Nombre de la evidencia', previousValue: previous?.name ?? null, newValue: next.name !== undefined ? next.name : previous?.name ?? null },
     { field: 'description', label: 'Descripción de la evidencia', previousValue: previous?.description ?? null, newValue: next.description !== undefined ? next.description : previous?.description ?? null },
     { field: 'url', label: 'Enlace de la evidencia', previousValue: previous?.url ?? null, newValue: next.url !== undefined ? next.url : previous?.url ?? null },
     { field: 'findingId', label: 'Hallazgo asociado', previousValue: previous?.findingId ?? null, newValue: next.findingId !== undefined ? next.findingId : previous?.findingId ?? null },
+    { field: 'actionId', label: 'Acción correctiva asociada', previousValue: previous?.actionId ?? null, newValue: next.actionId !== undefined ? next.actionId : previous?.actionId ?? null },
   ]
   return rows.filter((row) => row.previousValue !== row.newValue)
 }
@@ -2789,6 +2968,12 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
   const localEvidenceStorage = createLocalEvidenceStorage()
 
   registerLearningRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditProgramRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditProgramProcessPriorityRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditorRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditTeamRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditPlanRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
+  registerAuditReportRoutes({ app, db, authMiddleware, adminMiddleware: userWriteGuard })
 
   // Google Drive is retired for new traffic. Historical rows remain in PostgreSQL and are not
   // deleted by this change; callers must use the R2/local PDF evidence endpoints instead.
@@ -3395,7 +3580,7 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
    * Any user assigned to a process resource must belong to the process company. The id comes from
    * the client, so the company check stays on the server even when the UI filters the directory.
    */
-  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible' | 'lead auditor' | 'audit responsible' | 'finding responsible' | 'action responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
+  const resolveUserInCompany = async (userId: string | null | undefined, companyId: string, roleLabel: 'responsible' | 'risk owner' | 'mitigation responsible' | 'lead auditor' | 'audit responsible' | 'finding responsible' | 'action responsible' | 'immediate correction responsible' | 'root cause responsible'): Promise<{ ok: true; userId: string | null } | { ok: false; status: number; error: string }> => {
     if (!userId) return { ok: true, userId: null }
     const label = roleLabel === 'risk owner' ? 'Risk owner'
       : roleLabel === 'mitigation responsible' ? 'Mitigation responsible'
@@ -3403,6 +3588,8 @@ export const createApp = (db: PrismaClient = prisma, aiService: AIService = new 
       : roleLabel === 'audit responsible' ? 'Audit responsible'
       : roleLabel === 'finding responsible' ? 'Finding responsible'
       : roleLabel === 'action responsible' ? 'Action responsible'
+      : roleLabel === 'immediate correction responsible' ? 'Immediate correction responsible'
+      : roleLabel === 'root cause responsible' ? 'Root cause responsible'
       : 'Responsible'
     try {
       await assertActiveAssignmentUser(db, userId, companyId, label)
@@ -5735,6 +5922,30 @@ response.json({
   }
 
   /**
+   * Excepción explícita para CAPA: no reabre la auditoría ni permite escrituras generales. Solo
+   * devuelve la auditoría cerrada cuando existe un seguimiento activo y el hallazgo sigue sin
+   * verificar. Las rutas que usan este lock siguen validando el estado final de cada recurso.
+   */
+  const lockAuditForFollowUpWrite = async (tx: Prisma.TransactionClient, auditId: string, findingId: string): Promise<AuditWithInclude | null> => {
+    if (typeof tx.$queryRaw === 'function') await tx.$queryRaw`SELECT "id" FROM "Audit" WHERE "id" = ${auditId} FOR UPDATE`
+    const audit = await tx.audit.findUnique({ where: { id: auditId }, include: auditInclude })
+    if (!audit || audit.status === AuditStatus.CANCELLED || audit.storageDeletionRequestedAt) return null
+    if (!isTerminalAuditStatus(audit.status)) return audit
+    const followUp = await tx.auditFollowUp.findUnique({ where: { auditId }, select: { id: true, status: true } })
+    if (!followUp || !isActiveAuditFollowUpStatus(followUp.status)) return null
+    const finding = await tx.auditFinding.findUnique({ where: { id: findingId }, select: { auditId: true, status: true } })
+    if (!finding || finding.auditId !== auditId || finding.status === AuditFindingStatus.VERIFIED) return null
+    return audit
+  }
+
+  const auditHasActiveFollowUp = async (client: PrismaClient | Prisma.TransactionClient, auditId: string, findingId: string) => {
+    const followUp = await client.auditFollowUp.findUnique({ where: { auditId }, select: { status: true } })
+    if (!followUp || !isActiveAuditFollowUpStatus(followUp.status)) return false
+    const finding = await client.auditFinding.findUnique({ where: { id: findingId }, select: { auditId: true, status: true } })
+    return Boolean(finding && finding.auditId === auditId && finding.status !== AuditFindingStatus.VERIFIED)
+  }
+
+  /**
    * Resuelve una auditoría por su id comprobando que su proceso sea visible para la sesión. Es la
    * puerta de entrada de las rutas top-level (/api/audits/...): el proceso se deriva de la propia
    * auditoría, de modo que el cliente no necesita conocerlo para leer ni para escribir.
@@ -5748,14 +5959,78 @@ response.json({
     return process && audit.processId === process.id ? audit : null
   }
 
-  const buildAuditChecklistContext = async (audit: AuditWithInclude, maxQuestions: number): Promise<AuditChecklistContext> => {
+  type AuditChecklistActivityResolution =
+    | { ok: true; context: AuditChecklistContextActivity }
+    | { ok: false; status: 404 | 409; error: string }
+
+  const resolveAuditChecklistActivity = async (audit: AuditWithInclude, activityId: string, requestedDimension: AuditChecklistContextActivity['requestedDimension']): Promise<AuditChecklistActivityResolution> => {
+    const plan = await db.auditPlan.findUnique({
+      where: { auditId: audit.id },
+      select: {
+        status: true,
+        activities: {
+          where: { id: activityId },
+          select: {
+            id: true,
+            type: true,
+            title: true,
+            description: true,
+            status: true,
+            processId: true,
+            process: { select: { id: true, companyId: true, code: true, name: true, objective: true, description: true } },
+          },
+        },
+      },
+    })
+    if (!plan) return { ok: false, status: 409, error: 'Contextual checklist generation requires an audit plan' }
+    if (plan.status !== 'APPROVED') return { ok: false, status: 409, error: 'Contextual checklist generation requires an approved audit plan' }
+    const activity = plan.activities[0]
+    if (!activity) return { ok: false, status: 404, error: 'Audit plan activity not found' }
+    if (activity.status !== 'IN_PROGRESS') return { ok: false, status: 409, error: 'Contextual checklist generation requires an in-progress activity' }
+
+    if (activity.process) {
+      if (activity.process.companyId !== audit.process.companyId) return { ok: false, status: 404, error: 'Activity process not found' }
+      if (activity.process.id !== audit.processId) {
+        const relation = await db.auditProcess.findFirst({ where: { auditId: audit.id, processId: activity.process.id }, select: { auditId: true } })
+        if (!relation) return { ok: false, status: 409, error: 'Activity process is not related to this audit' }
+      }
+    } else if (activity.processId) {
+      return { ok: false, status: 404, error: 'Activity process not found' }
+    }
+
+    return {
+      ok: true,
+      context: {
+        id: activity.id,
+        type: activity.type,
+        title: activity.title,
+        description: activity.description,
+        process: activity.process
+          ? {
+              id: activity.process.id,
+              code: activity.process.code,
+              name: activity.process.name,
+              objective: activity.process.objective,
+              description: activity.process.description,
+            }
+          : null,
+        requestedDimension,
+      },
+    }
+  }
+
+  const buildAuditChecklistContext = async (audit: AuditWithInclude, maxQuestions: number, activity?: AuditChecklistContextActivity): Promise<AuditChecklistContext> => {
     const clip = (value: string | null | undefined, max: number) => (value ?? '').trim().slice(0, max)
     const [processLinks, procedureLinks] = await Promise.all([
       db.auditProcess.findMany({ where: { auditId: audit.id }, select: { processId: true } }),
       db.auditProcedure.findMany({ where: { auditId: audit.id }, select: { procedureId: true } }),
     ])
-    const processIds = [...new Set([audit.processId, ...processLinks.map((link) => link.processId)])].slice(0, 20)
-    const procedureIds = [...new Set(procedureLinks.map((link) => link.procedureId))].slice(0, 30)
+    const processIds = activity
+      ? [activity.process?.id ?? audit.processId]
+      : [...new Set([audit.processId, ...processLinks.map((link) => link.processId)])].slice(0, 20)
+    const procedureIds = activity
+      ? (activity.process ? [...new Set(procedureLinks.map((link) => link.procedureId))].slice(0, 30) : [])
+      : [...new Set(procedureLinks.map((link) => link.procedureId))].slice(0, 30)
     const [processes, procedures, existingItems] = await Promise.all([
       db.process.findMany({
         where: { id: { in: processIds }, companyId: audit.process.companyId },
@@ -5788,7 +6063,11 @@ response.json({
         take: 20,
       }),
       db.procedure.findMany({
-        where: { id: { in: procedureIds }, process: { companyId: audit.process.companyId } },
+        where: {
+          id: { in: procedureIds },
+          process: { companyId: audit.process.companyId },
+          ...(activity?.process ? { processId: activity.process.id } : {}),
+        },
         select: { id: true, processId: true, code: true, name: true, objective: true, scope: true, description: true, status: true, version: true },
         orderBy: [{ code: 'asc' }, { name: 'asc' }],
         take: 30,
@@ -5812,11 +6091,12 @@ response.json({
     ]
     const contextProcesses = processes.map((process) => {
       addSource(process.id, 'PROCESS', `${process.code ?? 'Proceso'} · ${process.name}`)
-      const sipoc = sipocRows(process).map((row) => {
+      const includeTechnicalProcessContext = !activity || activity.process !== null
+      const sipoc = includeTechnicalProcessContext ? sipocRows(process).map((row) => {
         addSource(row.id, 'SIPOC', `${process.name} · SIPOC ${row.type}`)
         return { id: row.id, type: row.type, description: clip(row.description, 500) }
-      })
-      const risks = process.risks.map((risk) => {
+      }) : []
+      const risks = includeTechnicalProcessContext ? process.risks.map((risk) => {
         addSource(risk.id, 'RISK', `${process.name} · Riesgo ${risk.code ?? risk.name}`)
         const controls = risk.controls.map((control) => {
           addSource(control.id, 'CONTROL', `${process.name} · Control de ${risk.name}`)
@@ -5831,7 +6111,7 @@ response.json({
           bpmnActivity: clip(risk.bpmnActivity, 300),
           controls,
         }
-      })
+      }) : []
       return {
         id: process.id,
         code: process.code,
@@ -5842,7 +6122,10 @@ response.json({
         risks,
       }
     })
-    const contextProcedures = procedures.map((procedure) => {
+    const relevantProcedures = activity
+      ? (activity.process ? procedures.filter((procedure) => procedure.processId === activity.process?.id) : [])
+      : procedures
+    const contextProcedures = relevantProcedures.map((procedure) => {
       addSource(procedure.id, 'PROCEDURE', `${procedure.code} · ${procedure.name}`)
       return {
         id: procedure.id,
@@ -5856,7 +6139,7 @@ response.json({
         version: procedure.version,
       }
     })
-    return {
+    const context: AuditChecklistContext = {
       audit: {
         title: clip(audit.title, 240),
         objectives: audit.objectives ? clip(audit.objectives, 1600) : null,
@@ -5869,6 +6152,22 @@ response.json({
       existingQuestions: existingItems.map((item) => clip(item.description, 500)),
       maxQuestions,
     }
+    if (activity) {
+      context.activity = {
+        ...activity,
+        title: clip(activity.title, 240),
+        description: activity.description ? clip(activity.description, 1600) : null,
+        process: activity.process
+          ? {
+              ...activity.process,
+              name: clip(activity.process.name, 240),
+              objective: clip(activity.process.objective, 1200),
+              description: activity.process.description ? clip(activity.process.description, 1200) : null,
+            }
+          : null,
+      }
+    }
+    return context
   }
 
   /**
@@ -5916,27 +6215,65 @@ response.json({
       where: { findingId, required: true, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
     })
 
-  /**
-   * Acciones correctivas obligatorias de TODA la auditoría sin estado final: además de frenar la
-   * resolución del hallazgo, bloquean el cierre de la auditoría. Se evalúa dentro de la transacción
-   * tras el bloqueo de fila, y toda escritura de acciones también pasa por ese bloqueo.
-   */
-  const pendingAuditRequiredActions = (client: Prisma.TransactionClient | PrismaClient, auditId: string) =>
-    client.auditCorrectiveAction.count({
-      where: { required: true, status: { notIn: ['COMPLETED', 'CANCELLED'] }, finding: { auditId } },
-    })
+  /** Actividades sin ejecución final o canceladas sin justificación escrita. */
+  const pendingAuditActivities = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
+    const plan = await client.auditPlan.findUnique({ where: { auditId }, select: { activities: { select: { status: true, notes: true } } } })
+    if (!plan) return 0
+    return plan.activities.filter((activity) => activity.status === 'PLANNED' || activity.status === 'IN_PROGRESS' || (activity.status === 'CANCELLED' && !activity.notes?.trim())).length
+  }
 
-  /**
-   * No conformidades ya resueltas sin verificación de eficacia: la misma regla que exige eficacia
-   * antes de verificar el hallazgo impide cerrar la auditoría mientras esas verificaciones sigan
-   * pendientes. Se filtra en memoria porque el umbral es de texto (>= 3 caracteres).
-   */
-  const pendingAuditEfficacyVerifications = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
-    const resolved = await client.auditFinding.findMany({
-      where: { auditId, type: 'NONCONFORMITY', status: 'RESOLVED' },
-      select: { efficacyVerification: true },
+  /** La independencia de todos los integrantes activos debe tener un resultado definitivo. */
+  const pendingAuditIndependence = (client: Prisma.TransactionClient | PrismaClient, auditId: string) =>
+    client.auditTeamMember.count({ where: { auditId, isActive: true, independenceStatus: { in: ['PENDING', 'CONFLICT'] } } })
+
+  /** Hallazgos no verificados requieren responsable, plazo y una acción formalmente planificada. */
+  const pendingAuditFollowUpPlanning = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
+    const findings = await client.auditFinding.findMany({
+      where: { auditId, status: { not: AuditFindingStatus.VERIFIED } },
+      select: {
+        id: true,
+        responsibleId: true,
+        dueDate: true,
+        actions: { where: { required: true, status: { not: AuditCorrectiveActionStatus.CANCELLED } }, select: { responsibleId: true, dueDate: true, implementationPlan: true } },
+      },
     })
-    return resolved.filter((finding) => !finding.efficacyVerification || finding.efficacyVerification.trim().length < 3).length
+    if (findings.length === 0) return 0
+    const userIds = [...new Set(findings.flatMap((finding) => [finding.responsibleId, ...finding.actions.map((action) => action.responsibleId)]).filter((id): id is string => Boolean(id)))]
+    const activeUsers = new Set(userIds.length > 0 ? (await client.user.findMany({ where: { id: { in: userIds }, isActive: true }, select: { id: true } })).map((user) => user.id) : [])
+    return findings.filter((finding) => {
+      const findingReady = Boolean(finding.responsibleId && activeUsers.has(finding.responsibleId) && finding.dueDate)
+      const treatmentReady = finding.actions.some((action) => Boolean(action.responsibleId && activeUsers.has(action.responsibleId) && action.dueDate && action.implementationPlan?.trim()))
+      return !findingReady || !treatmentReady
+    }).length
+  }
+
+  /** Informe aprobado, PDF disponible y snapshot vigente frente al expediente oficial. */
+  const auditReportClosureGate = async (client: Prisma.TransactionClient | PrismaClient, auditId: string) => {
+    const report = await client.auditReport.findUnique({
+      where: { auditId },
+      select: {
+        status: true,
+        approvedVersion: { select: { snapshotHash: true, snapshot: true, pdfEvidenceFile: { select: { storageState: true } } } },
+      },
+    })
+    if (!report || report.status !== 'APPROVED' || !report.approvedVersion || report.approvedVersion.pdfEvidenceFile?.storageState !== 'READY') return { reason: 'REPORT_PENDING' as const }
+    const currentFingerprint = await auditReportSourceFingerprint(client, auditId)
+    const snapshot = report.approvedVersion.snapshot
+    const sourceFingerprint = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) && 'sourceFingerprint' in snapshot && typeof snapshot.sourceFingerprint === 'string' ? snapshot.sourceFingerprint : null
+    if (!sourceFingerprint || sourceFingerprint !== currentFingerprint) return { reason: 'REPORT_STALE' as const }
+    return null
+  }
+
+  /** Structured efficacy evaluations supersede the legacy free-text gate when a workflow v1 action exists. */
+  const structuredFindingEfficacyGate = async (client: Prisma.TransactionClient | PrismaClient, findingId: string) => {
+    if (!client.auditEfficacyEvaluation || !client.auditCorrectiveAction) return null
+     const actions = await client.auditCorrectiveAction.findMany({ where: { findingId, required: true, workflowVersion: 1, efficacyEvaluationId: null, status: AuditCorrectiveActionStatus.COMPLETED }, select: { id: true, title: true } })
+    for (const action of actions) {
+      const latest = await client.auditEfficacyEvaluation.findFirst({ where: { findingId, actionId: action.id, status: AuditEfficacyEvaluationStatus.COMPLETED }, orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }], select: { outcome: true } })
+      if (!latest) return { reason: 'EFFICACY_EVALUATION_PENDING' as const, error: `The completed corrective action «${action.title}» requires a completed efficacy evaluation` }
+      if (latest.outcome !== AuditEfficacyOutcome.EFFECTIVE) return { reason: 'EFFICACY_NOT_SATISFACTORY' as const, error: `The latest efficacy evaluation for «${action.title}» is not effective` }
+    }
+    return null
   }
 
   /**
@@ -5997,6 +6334,7 @@ response.json({
     let processName: string | null = null
     let procedureId: string | null = null
     let procedureName: string | null = null
+    let procedureProcessId: string | null = null
     if (data.itemId !== undefined) {
       if (data.itemId) {
         const item = await db.auditChecklistItem.findFirst({
@@ -6023,14 +6361,24 @@ response.json({
     }
     if (data.procedureId !== undefined) {
       if (data.procedureId) {
-        const procedure = await db.procedure.findFirst({
-          where: { id: data.procedureId, process: { companyId: audit.process.companyId } },
-          select: { id: true, name: true },
-        })
-        if (!procedure) return { ok: false as const, status: 404 as const, error: 'Procedure not found in this company' }
+        const [procedure, auditProcedure] = await Promise.all([
+          db.procedure.findFirst({
+            where: { id: data.procedureId, process: { companyId: audit.process.companyId } },
+            select: { id: true, name: true, processId: true },
+          }),
+          db.auditProcedure.findFirst({
+            where: { auditId: audit.id, procedureId: data.procedureId },
+            select: { procedureId: true },
+          }),
+        ])
+        if (!procedure || !auditProcedure) return { ok: false as const, status: 404 as const, error: 'Procedure not found for this audit' }
         procedureId = procedure.id
         procedureName = procedure.name
+        procedureProcessId = procedure.processId
       }
+    }
+    if (processId && procedureProcessId && processId !== procedureProcessId) {
+      return { ok: false as const, status: 400 as const, error: 'The finding process and procedure must belong to the same process' }
     }
     return { ok: true as const, itemId, itemDescription, processId, processName, procedureId, procedureName }
   }
@@ -6263,7 +6611,7 @@ response.json({
     // 'blocked' in result no estrecha la unión y typeof result.blocked queda con undefined.
     type AuditStatusChangeResult =
       | null
-      | { blocked: 'CHECKLIST_PENDING' | 'CHECKLIST_FINDING_MISSING' | 'ACTIONS_PENDING' | 'EFFICACY_PENDING' | 'EVIDENCE_PENDING' | 'EVIDENCE_FAILED' | 'EVIDENCE_DELETE_PENDING'; pending: number }
+      | { blocked: 'CHECKLIST_PENDING' | 'CHECKLIST_FINDING_MISSING' | 'ACTIVITIES_PENDING' | 'INDEPENDENCE_PENDING' | 'FOLLOW_UP_PLAN_PENDING' | 'FOLLOW_UP_RESPONSIBLE_REQUIRED' | 'REPORT_PENDING' | 'REPORT_STALE' | 'EVIDENCE_PENDING' | 'EVIDENCE_FAILED' | 'EVIDENCE_DELETE_PENDING'; pending: number }
       | { invalidTransition: true }
       | { audit: AuditWithInclude }
     const result = await db.$transaction(async (tx): Promise<AuditStatusChangeResult> => {
@@ -6274,14 +6622,31 @@ response.json({
       // Las escrituras de ítems, hallazgos, acciones y archivos pasan por ese mismo lock, así que
       // no se cuela una creación o eliminación concurrente mientras se decide el cierre.
       if (parsed.data.status === AuditStatus.CLOSED) {
+        const reportGate = await auditReportClosureGate(tx, existing.id)
+        if (reportGate) return { blocked: reportGate.reason, pending: 1 }
+        const activities = await pendingAuditActivities(tx, existing.id)
+        if (activities > 0) return { blocked: 'ACTIVITIES_PENDING' as const, pending: activities }
+        const independence = await pendingAuditIndependence(tx, existing.id)
+        if (independence > 0) return { blocked: 'INDEPENDENCE_PENDING' as const, pending: independence }
         const pending = await pendingRequiredItems(tx, existing.id)
         if (pending > 0) return { blocked: 'CHECKLIST_PENDING' as const, pending }
         const missingFindings = await pendingChecklistFindingLinks(tx, existing.id)
         if (missingFindings > 0) return { blocked: 'CHECKLIST_FINDING_MISSING' as const, pending: missingFindings }
-        const openActions = await pendingAuditRequiredActions(tx, existing.id)
-        if (openActions > 0) return { blocked: 'ACTIONS_PENDING' as const, pending: openActions }
-        const pendingEfficacy = await pendingAuditEfficacyVerifications(tx, existing.id)
-        if (pendingEfficacy > 0) return { blocked: 'EFFICACY_PENDING' as const, pending: pendingEfficacy }
+        const followUpPlan = await pendingAuditFollowUpPlanning(tx, existing.id)
+        if (followUpPlan > 0) {
+          if (!locked.responsibleId) return { blocked: 'FOLLOW_UP_RESPONSIBLE_REQUIRED' as const, pending: followUpPlan }
+          try {
+            await assertActiveAssignmentUser(tx, locked.responsibleId, locked.process.companyId, 'Audit responsible')
+          } catch {
+            return { blocked: 'FOLLOW_UP_RESPONSIBLE_REQUIRED' as const, pending: followUpPlan }
+          }
+          const followUp = await tx.auditFollowUp.findUnique({ where: { auditId: existing.id } })
+          const followUpScope = `Seguimiento CAPA de ${followUpPlan} hallazgo(s) pendiente(s) al cierre`
+          const enabled = followUp
+            ? await tx.auditFollowUp.update({ where: { id: followUp.id }, data: { status: 'ENABLED', scope: followUpScope, responsibleId: locked.responsibleId, enabledById: request.user!.id, enabledAt: new Date(), completedById: null, completedAt: null }, select: { id: true } })
+            : await tx.auditFollowUp.create({ data: { auditId: existing.id, scope: followUpScope, responsibleId: locked.responsibleId, enabledById: request.user!.id }, select: { id: true } })
+          await auditEventWrite(tx, { auditId: existing.id, eventType: AuditEventType.AUDIT_FOLLOW_UP_ENABLED, summary: 'Seguimiento CAPA habilitado durante el cierre', actor, metadata: { followUpId: enabled.id, pendingFindings: followUpPlan } })
+        }
         const pendingEvidence = await pendingAuditEvidenceFiles(tx, existing.id, 'PENDING')
         if (pendingEvidence > 0) return { blocked: 'EVIDENCE_PENDING' as const, pending: pendingEvidence }
         const failedEvidence = await pendingAuditEvidenceFiles(tx, existing.id, 'FAILED')
@@ -6323,8 +6688,12 @@ response.json({
       const blockedMessages: Record<typeof result.blocked, string> = {
         CHECKLIST_PENDING: `The audit cannot be closed while ${result.pending} required checklist item(s) are still pending`,
         CHECKLIST_FINDING_MISSING: `The audit cannot be closed while ${result.pending} nonconform checklist item(s) have no linked finding`,
-        ACTIONS_PENDING: `The audit cannot be closed while ${result.pending} required corrective action(s) are still open`,
-        EFFICACY_PENDING: `The audit cannot be closed while ${result.pending} nonconformity(ies) still require an efficacy verification`,
+        ACTIVITIES_PENDING: `The audit cannot be closed while ${result.pending} planned activity(ies) remain unfinished or unjustified`,
+        INDEPENDENCE_PENDING: `The audit cannot be closed while ${result.pending} active auditor independence declaration(s) remain unresolved`,
+        FOLLOW_UP_PLAN_PENDING: `The audit cannot be closed while ${result.pending} finding(s) lack an active responsible, due date or formal treatment plan`,
+        FOLLOW_UP_RESPONSIBLE_REQUIRED: 'The audit cannot be closed with pending findings until an active audit responsible is assigned for CAPA follow-up',
+        REPORT_PENDING: 'The audit cannot be closed until the report is approved and its official PDF is available',
+        REPORT_STALE: 'The audit cannot be closed because the approved report is out of date with the official audit record',
         EVIDENCE_PENDING: `The audit cannot be closed while ${result.pending} evidence file(s) are pending storage synchronization`,
         EVIDENCE_FAILED: `The audit cannot be closed while ${result.pending} evidence file(s) have a failed storage operation`,
         EVIDENCE_DELETE_PENDING: `The audit cannot be closed while ${result.pending} evidence file deletion(s) are pending`,
@@ -6635,6 +7004,14 @@ response.json({
       response.status(409).json({ error: 'A verified finding cannot be edited' })
       return
     }
+    if (parsed.data.efficacyVerification !== undefined) {
+      const structuredEvaluationExists = (existing.efficacyEvaluations?.length ?? 0) > 0
+      const structuredActionGate = await structuredFindingEfficacyGate(db, existing.id)
+      if (structuredEvaluationExists || structuredActionGate) {
+        response.status(409).json({ error: 'Use the structured efficacy evaluation flow for this corrective action', reason: 'STRUCTURED_EFFICACY_REQUIRED' })
+        return
+      }
+    }
     const data: Prisma.AuditFindingUncheckedUpdateInput = {}
     if (parsed.data.title !== undefined) data.title = parsed.data.title
     if (parsed.data.description !== undefined) data.description = parsed.data.description
@@ -6704,12 +7081,17 @@ response.json({
       | null
       | { conflict: true }
       | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+      | { blocked: 'STRUCTURED_EFFICACY_REQUIRED' }
       | { finding: AuditFindingWithInclude }
     const result = await db.$transaction(async (tx): Promise<FindingUpdateResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
       const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.id }, include: auditFindingInclude })
       if (!lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED) return { conflict: true }
+      if (data.efficacyVerification !== undefined) {
+        const structuredActionGate = await structuredFindingEfficacyGate(tx, lockedFinding.id)
+        if ((lockedFinding.efficacyEvaluations?.length ?? 0) > 0 || structuredActionGate) return { blocked: 'STRUCTURED_EFFICACY_REQUIRED' }
+      }
       const nextType = data.type ?? lockedFinding.type
       const nextItemId = data.itemId !== undefined ? data.itemId : lockedFinding.itemId
       if (lockedFinding.type === 'NONCONFORMITY' && lockedFinding.itemId && (nextType !== 'NONCONFORMITY' || nextItemId !== lockedFinding.itemId)) {
@@ -6747,6 +7129,10 @@ response.json({
       return
     }
     if ('blocked' in result) {
+      if (result.blocked === 'STRUCTURED_EFFICACY_REQUIRED') {
+        response.status(409).json({ error: 'Use the structured efficacy evaluation flow for this corrective action', reason: result.blocked })
+        return
+      }
       response.status(409).json({ error: 'The last valid nonconformity finding for a NON_CONFORM checklist item cannot be unlinked or retyped', reason: result.blocked })
       return
     }
@@ -6785,7 +7171,7 @@ response.json({
       response.status(404).json({ error: 'Finding not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status)) {
+    if (isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.id))) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
@@ -6808,15 +7194,25 @@ response.json({
       response.status(400).json({ error: 'A nonconformity requires an efficacy verification of at least 3 characters before it can be verified' })
       return
     }
+    if (parsed.data.status === AuditFindingStatus.VERIFIED && existing.type === 'NONCONFORMITY') {
+      const efficacyGate = await structuredFindingEfficacyGate(db, existing.id)
+      if (efficacyGate) {
+        response.status(409).json({ error: efficacyGate.error, reason: efficacyGate.reason })
+        return
+      }
+    }
     const data: Prisma.AuditFindingUncheckedUpdateInput = { status: parsed.data.status }
     const actor = auditActorOf(request)
     type FindingStatusChangeResult =
       | null
       | { conflict: true }
       | { blocked: 'ACTIONS_PENDING'; pending: number }
+      | { blocked: 'EFFICACY_EVALUATION_PENDING' | 'EFFICACY_NOT_SATISFACTORY'; error: string }
       | { finding: AuditFindingWithInclude }
     const result = await db.$transaction(async (tx): Promise<FindingStatusChangeResult> => {
-      const locked = await lockAuditForWrite(tx, audit.id)
+      const locked = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.id)
+        : await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
       const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.id }, include: auditFindingInclude })
       if (!lockedFinding || lockedFinding.auditId !== audit.id || !canTransitionAuditFinding(lockedFinding.status, parsed.data.status)) {
@@ -6825,6 +7221,10 @@ response.json({
       if (parsed.data.status === AuditFindingStatus.VERIFIED && !lockedFinding.resolution) return { conflict: true }
       if (parsed.data.status === AuditFindingStatus.VERIFIED && lockedFinding.type === 'NONCONFORMITY' && (!lockedFinding.efficacyVerification || lockedFinding.efficacyVerification.trim().length < 3)) {
         return { conflict: true }
+      }
+      if (parsed.data.status === AuditFindingStatus.VERIFIED && lockedFinding.type === 'NONCONFORMITY') {
+        const efficacyGate = await structuredFindingEfficacyGate(tx, lockedFinding.id)
+        if (efficacyGate) return { blocked: efficacyGate.reason, error: efficacyGate.error }
       }
       if (parsed.data.status === AuditFindingStatus.RESOLVED) {
         data.resolution = parsed.data.resolution!.trim()
@@ -6840,7 +7240,7 @@ response.json({
       // Gate de acciones correctivas: ninguna obligatoria sin estado final impide resolver el
       // hallazgo. El recuento ocurre con la fila de la auditoría bloqueada, de modo que no se
       // cuela una creación concurrente de acciones mientras se resuelve.
-      if (parsed.data.status === AuditFindingStatus.RESOLVED) {
+      if (parsed.data.status === AuditFindingStatus.RESOLVED || parsed.data.status === AuditFindingStatus.VERIFIED) {
         const pending = await pendingRequiredActions(tx, lockedFinding.id)
         if (pending > 0) return { blocked: 'ACTIONS_PENDING' as const, pending }
       }
@@ -6876,11 +7276,17 @@ response.json({
       return
     }
     if ('blocked' in result) {
-      response.status(409).json({
-        error: `The finding cannot be resolved while ${result.pending} required corrective action(s) are still open`,
-        reason: result.blocked,
-        pending: result.pending,
-      })
+      if (result.blocked === 'EFFICACY_EVALUATION_PENDING' || result.blocked === 'EFFICACY_NOT_SATISFACTORY') {
+        response.status(409).json({ error: result.error, reason: result.blocked })
+        return
+      }
+      if ('pending' in result) {
+        response.status(409).json({
+           error: `The finding cannot be ${parsed.data.status === AuditFindingStatus.VERIFIED ? 'verified' : 'resolved'} while ${result.pending} required corrective action(s) are still open`,
+          reason: result.blocked,
+          pending: result.pending,
+        })
+      }
       return
     }
     response.json({ finding: auditFindingView(result.finding) })
@@ -6931,7 +7337,7 @@ response.json({
       return
     }
     const actor = auditActorOf(request)
-    type DeleteFindingResult = false | true | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
+    type DeleteFindingResult = false | true | { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' | 'FINDING_LINKED_TO_ACTIVITY' }
     const deleted = await db.$transaction(async (tx): Promise<DeleteFindingResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
@@ -6949,6 +7355,11 @@ response.json({
           if (remaining.length === 0) return { blocked: 'NON_CONFORMITY_FINDING_REQUIRED' }
         }
       }
+      const activityLink = await tx.auditPlanActivityFinding.findFirst({
+        where: { findingId: existing.id },
+        select: { id: true },
+      })
+      if (activityLink) return { blocked: 'FINDING_LINKED_TO_ACTIVITY' }
       // Las evidencias ancladas al hallazgo sobreviven con findingId en null (SET NULL en el
       // esquema): la evidencia documental no se pierde al retirar el hallazgo.
       await tx.auditEvidence.updateMany({ where: { findingId: existing.id }, data: { findingId: null } })
@@ -6968,6 +7379,10 @@ response.json({
       return
     }
     if (typeof deleted === 'object' && deleted !== null && 'blocked' in deleted) {
+      if (deleted.blocked === 'FINDING_LINKED_TO_ACTIVITY') {
+        response.status(409).json({ error: 'A finding linked to an audit activity cannot be deleted', reason: deleted.blocked })
+        return
+      }
       response.status(409).json({ error: 'The last valid nonconformity finding for a NON_CONFORM checklist item cannot be deleted', reason: deleted.blocked })
       return
     }
@@ -7039,14 +7454,26 @@ response.json({
         return
       }
     }
+    let linkedAction: { id: string; findingId: string; status: AuditCorrectiveActionStatus } | null = null
+    if (parsed.data.actionId) {
+      linkedAction = await db.auditCorrectiveAction.findFirst({ where: { id: parsed.data.actionId, finding: { auditId: existing.id } }, select: { id: true, findingId: true, status: true } })
+      if (!linkedAction) { response.status(404).json({ error: 'Corrective action not found' }); return }
+      if (linkedAction.status === AuditCorrectiveActionStatus.COMPLETED || linkedAction.status === AuditCorrectiveActionStatus.CANCELLED) { response.status(409).json({ error: 'A terminal corrective action cannot receive evidence' }); return }
+      if (parsed.data.findingId && parsed.data.findingId !== linkedAction.findingId) { response.status(400).json({ error: 'The evidence finding and corrective action must belong to the same finding' }); return }
+    }
     const actor = auditActorOf(request)
     const evidence = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, existing.id)
       if (!locked) return null
+      if (linkedAction) {
+        const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: linkedAction.id }, select: { id: true, findingId: true, status: true } })
+        if (!lockedAction || lockedAction.findingId !== linkedAction.findingId || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED) return null
+      }
       const created = await tx.auditEvidence.create({
         data: {
           auditId: existing.id,
           findingId: parsed.data.findingId || null,
+          actionId: parsed.data.actionId || null,
           name: parsed.data.name,
           description: parsed.data.description,
           url: parsed.data.url,
@@ -7058,7 +7485,7 @@ response.json({
         summary: `Evidencia «${created.name}» registrada`,
         actor,
         changes: auditEvidenceAuditChanges(null, created),
-        metadata: { evidenceId: created.id, ...(created.findingId ? { findingId: created.findingId } : {}) },
+        metadata: { evidenceId: created.id, ...(created.findingId ? { findingId: created.findingId } : {}), ...(created.actionId ? { actionId: created.actionId } : {}) },
       })
       return created
     })
@@ -7101,6 +7528,11 @@ response.json({
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
+    const efficacyEvidenceLink = await db.auditEfficacyEvaluationEvidence?.findFirst({ where: { evidenceId: existing.id }, select: { id: true } })
+    if (efficacyEvidenceLink) {
+      response.status(409).json({ error: 'Evidence linked to an efficacy evaluation cannot be modified', reason: 'EVIDENCE_LINKED_TO_EFFICACY_EVALUATION' })
+      return
+    }
     if (isTerminalAuditStatus(audit.status)) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
@@ -7124,11 +7556,25 @@ response.json({
         data.findingId = null
       }
     }
+    if (parsed.data.actionId !== undefined) {
+      if (parsed.data.actionId) {
+        const action = await db.auditCorrectiveAction.findFirst({ where: { id: parsed.data.actionId, finding: { auditId: audit.id } }, select: { id: true, findingId: true, status: true } })
+        if (!action) { response.status(404).json({ error: 'Corrective action not found' }); return }
+        if (action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) { response.status(409).json({ error: 'A terminal corrective action cannot receive evidence' }); return }
+        const nextFindingId = parsed.data.findingId !== undefined ? parsed.data.findingId : existing.findingId
+        if (nextFindingId && nextFindingId !== action.findingId) { response.status(400).json({ error: 'The evidence finding and corrective action must belong to the same finding' }); return }
+      } else if (existing.actionId) {
+        const action = await db.auditCorrectiveAction.findUnique({ where: { id: existing.actionId }, select: { status: true } })
+        if (action?.status === AuditCorrectiveActionStatus.COMPLETED || action?.status === AuditCorrectiveActionStatus.CANCELLED) { response.status(409).json({ error: 'Evidence linked to a terminal corrective action cannot be detached' }); return }
+      }
+      data.actionId = parsed.data.actionId || null
+    }
     const changes = auditEvidenceAuditChanges(existing, {
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
       ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
       ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
       ...(parsed.data.findingId !== undefined ? { findingId: parsed.data.findingId } : {}),
+      ...(parsed.data.actionId !== undefined ? { actionId: parsed.data.actionId } : {}),
     })
     if (changes.length === 0) {
       response.json({ evidence: auditEvidenceView(existing) })
@@ -7138,6 +7584,10 @@ response.json({
     const evidence = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      if (data.actionId) {
+        const linkedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: String(data.actionId) }, select: { status: true } })
+        if (!linkedAction || linkedAction.status === AuditCorrectiveActionStatus.COMPLETED || linkedAction.status === AuditCorrectiveActionStatus.CANCELLED) return null
+      }
       const updated = await tx.auditEvidence.update({ where: { id: existing.id }, data })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -7145,7 +7595,7 @@ response.json({
         summary: `Evidencia «${updated.name}» actualizada`,
         actor,
         changes,
-        metadata: { evidenceId: updated.id, ...(updated.findingId ? { findingId: updated.findingId } : {}) },
+        metadata: { evidenceId: updated.id, ...(updated.findingId ? { findingId: updated.findingId } : {}), ...(updated.actionId ? { actionId: updated.actionId } : {}) },
       })
       return updated
     })
@@ -7188,9 +7638,21 @@ response.json({
       return
     }
     const actor = auditActorOf(request)
-    const deleted = await db.$transaction(async (tx) => {
+    type DeleteAuditEvidenceResult = false | true | { blocked: 'EVIDENCE_LINKED_TO_ACTIVITY' | 'EVIDENCE_LINKED_TO_TERMINAL_ACTION' | 'EVIDENCE_LINKED_TO_EFFICACY_EVALUATION' }
+    const deleted = await db.$transaction(async (tx): Promise<DeleteAuditEvidenceResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
+      const activityLink = await tx.auditPlanActivityEvidence.findFirst({
+        where: { evidenceId: existing.id },
+        select: { id: true },
+      })
+      if (activityLink) return { blocked: 'EVIDENCE_LINKED_TO_ACTIVITY' }
+      const efficacyLink = await tx.auditEfficacyEvaluationEvidence?.findFirst({ where: { evidenceId: existing.id }, select: { id: true } })
+      if (efficacyLink) return { blocked: 'EVIDENCE_LINKED_TO_EFFICACY_EVALUATION' }
+      if (existing.actionId) {
+        const action = await tx.auditCorrectiveAction.findUnique({ where: { id: existing.actionId }, select: { status: true } })
+        if (action?.status === AuditCorrectiveActionStatus.COMPLETED || action?.status === AuditCorrectiveActionStatus.CANCELLED) return { blocked: 'EVIDENCE_LINKED_TO_TERMINAL_ACTION' }
+      }
       await tx.auditEvidence.delete({ where: { id: existing.id } })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -7198,12 +7660,24 @@ response.json({
         summary: `Evidencia «${existing.name}» eliminada`,
         actor,
         changes: auditEvidenceAuditChanges(existing, {}),
-        metadata: { evidenceId: existing.id, ...(existing.findingId ? { findingId: existing.findingId } : {}) },
+         metadata: { evidenceId: existing.id, ...(existing.findingId ? { findingId: existing.findingId } : {}), ...(existing.actionId ? { actionId: existing.actionId } : {}) },
       })
       return true
     })
     if (!deleted) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if (typeof deleted === 'object' && deleted.blocked === 'EVIDENCE_LINKED_TO_ACTIVITY') {
+      response.status(409).json({ error: 'Evidence linked to an audit activity cannot be deleted', reason: deleted.blocked })
+      return
+    }
+    if (typeof deleted === 'object' && deleted.blocked === 'EVIDENCE_LINKED_TO_TERMINAL_ACTION') {
+      response.status(409).json({ error: 'Evidence linked to a terminal corrective action cannot be deleted', reason: deleted.blocked })
+      return
+    }
+    if (typeof deleted === 'object' && deleted.blocked === 'EVIDENCE_LINKED_TO_EFFICACY_EVALUATION') {
+      response.status(409).json({ error: 'Evidence linked to an efficacy evaluation cannot be deleted', reason: deleted.blocked })
       return
     }
     response.status(204).send()
@@ -7353,12 +7827,17 @@ response.json({
       response.status(404).json({ error: 'Audit not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status)) {
-      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
-      return
-    }
     try {
-      const context = await buildAuditChecklistContext(audit, parsed.data.maxQuestions ?? 12)
+      let activity: AuditChecklistContextActivity | undefined
+      if (parsed.data.activityId) {
+        const resolved = await resolveAuditChecklistActivity(audit, parsed.data.activityId, parsed.data.dimension ?? null)
+        if (!resolved.ok) {
+          response.status(resolved.status).json({ error: resolved.error })
+          return
+        }
+        activity = resolved.context
+      }
+      const context = await buildAuditChecklistContext(audit, parsed.data.maxQuestions ?? 12, activity)
       const result = await aiService.generateAuditChecklist(context)
       response.json(result)
     } catch (error) {
@@ -7382,6 +7861,186 @@ response.json({
         response.status(502).json({ error: 'Checky is temporarily unavailable' })
         return
       }
+      throw error
+    }
+  }))
+
+  // ---- Checky: propuestas aisladas para un hallazgo ----
+  const checkySuggestionAuditAndFinding = async (request: Request, auditId: string, findingId: string) => {
+    const audit = await findCompanyAudit(request, auditId)
+    if (!audit) return null
+    const finding = await db.auditFinding.findFirst({ where: { id: findingId, auditId: audit.id }, select: { id: true, title: true, description: true, type: true, severity: true, status: true } })
+    return finding ? { audit, finding } : null
+  }
+
+  app.post('/api/audits/:auditId/findings/:findingId/checky/suggestions', authMiddleware, userWriteGuard, aiAnalysisLimiter, asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ auditId: idReference, findingId: idReference }).safeParse({ auditId: String(request.params.auditId), findingId: String(request.params.findingId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid finding id' }); return }
+    const parsed = auditCheckySuggestionRequestSchema.safeParse(request.body ?? {})
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid Checky suggestion request', details: parsed.error.issues }); return }
+    const target = await checkySuggestionAuditAndFinding(request, parsedIds.data.auditId, parsedIds.data.findingId)
+    if (!target) { response.status(404).json({ error: 'Finding not found' }); return }
+    if (isTerminalAuditStatus(target.audit.status) || target.finding.status === AuditFindingStatus.VERIFIED) {
+      response.status(409).json({ error: 'A verified or closed finding cannot receive Checky suggestions' }); return
+    }
+    const [evidence, analyses, actions] = await Promise.all([
+      db.auditEvidence.findMany({ where: { auditId: target.audit.id, findingId: target.finding.id }, select: { id: true, name: true, description: true }, orderBy: { createdAt: 'asc' } }),
+      db.auditRootCauseAnalysis.findMany({ where: { findingId: target.finding.id }, include: { causes: { select: { id: true, status: true, description: true, supportingEvidence: true }, orderBy: { position: 'asc' } } }, orderBy: { createdAt: 'asc' } }),
+      db.auditCorrectiveAction.findMany({ where: { findingId: target.finding.id }, select: { title: true, description: true, objective: true, implementationPlan: true, status: true }, orderBy: { createdAt: 'asc' } }),
+    ])
+    const draftAnalyses = analyses.filter((analysis) => analysis.status === AuditRootCauseAnalysisStatus.DRAFT)
+    if (parsed.data.analysisId && !draftAnalyses.some((analysis) => analysis.id === parsed.data.analysisId)) {
+      response.status(400).json({ error: 'The selected root cause analysis must belong to this finding and remain in DRAFT' }); return
+    }
+    const context: AuditCheckySuggestionContext = {
+      audit: { title: target.audit.title, scope: target.audit.scope, objectives: target.audit.objectives, criteria: target.audit.criteria },
+      finding: target.finding,
+      evidence,
+      analyses: analyses.map((analysis) => ({ id: analysis.id, methodology: analysis.methodology, status: analysis.status, problemDescription: analysis.problemDescription, causes: analysis.causes.map((cause) => ({ id: cause.id, status: cause.status, description: cause.description, supportingEvidence: cause.supportingEvidence })) })),
+      actions,
+      kinds: parsed.data.kinds,
+    }
+    let result
+    try {
+      result = await aiService.suggestAuditFindingFollowUp(context)
+    } catch (error) {
+      if (error instanceof AIServiceError) {
+        if (error.code === 'NOT_CONFIGURED') { response.status(503).json({ error: 'Checky is not configured' }); return }
+        if (error.code === 'CONTEXT_TOO_LARGE') { response.status(413).json({ error: 'The finding context is too large to analyze at once' }); return }
+        if (error.code === 'PROVIDER_QUOTA') { response.status(503).json({ error: 'Checky no tiene créditos disponibles para generar propuestas' }); return }
+        response.status(502).json({ error: 'Checky returned invalid finding proposals' }); return
+      }
+      throw error
+    }
+    const evidenceIds = new Set(evidence.map((item) => item.id))
+    const analysisIds = new Set(draftAnalyses.map((analysis) => analysis.id))
+    const prepared: Array<{ payload: z.infer<typeof auditCheckySuggestionPayloadSchema>; evidenceIds: string[]; dedupeKey: string }> = []
+    for (const proposal of result.suggestions) {
+      const payload = auditCheckySuggestionPayloadSchema.safeParse(proposal.payload)
+      if (!payload.success || payload.data.kind !== proposal.kind) { response.status(502).json({ error: 'Checky returned invalid finding proposals' }); return }
+      if (payload.data.kind === 'ROOT_CAUSE' && (!analysisIds.has(payload.data.analysisId) || (parsed.data.analysisId && payload.data.analysisId !== parsed.data.analysisId))) { response.status(502).json({ error: 'Checky returned a root cause for an invalid analysis' }); return }
+      if (proposal.evidenceIds.some((id) => !evidenceIds.has(id))) { response.status(502).json({ error: 'Checky returned evidence outside this finding' }); return }
+      prepared.push({ payload: payload.data, evidenceIds: [...new Set(proposal.evidenceIds)], dedupeKey: auditCheckySuggestionDedupeKey(target.audit.id, target.finding.id, payload.data, proposal.evidenceIds) })
+    }
+    const persisted = await db.$transaction(async (tx) => {
+      const records = []
+      for (const item of prepared) {
+        const existing = await tx.auditCheckySuggestion.findUnique({ where: { auditId_dedupeKey: { auditId: target.audit.id, dedupeKey: item.dedupeKey } }, include: auditCheckySuggestionInclude })
+        if (existing) { records.push(existing); continue }
+        const created = await tx.auditCheckySuggestion.create({
+          data: { auditId: target.audit.id, findingId: target.finding.id, requestedById: request.user!.id, kind: item.payload.kind, originalPayload: item.payload, editablePayload: item.payload, evidenceIds: item.evidenceIds, dedupeKey: item.dedupeKey },
+          include: auditCheckySuggestionInclude,
+        })
+        await auditEventWrite(tx, { auditId: target.audit.id, eventType: AuditEventType.CHECKY_SUGGESTION_CREATED, summary: `Propuesta de Checky creada para «${target.finding.title}»`, actor: auditActorOf(request), metadata: { findingId: target.finding.id, suggestionId: created.id, kind: created.kind, evidenceIds: created.evidenceIds } })
+        records.push(created)
+      }
+      return records
+    })
+    response.status(201).json({ suggestions: persisted.map(auditCheckySuggestionView), missingInformation: result.missingInformation })
+  }))
+
+  app.get('/api/audits/:auditId/findings/:findingId/checky/suggestions', authMiddleware, asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ auditId: idReference, findingId: idReference }).safeParse({ auditId: String(request.params.auditId), findingId: String(request.params.findingId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid finding id' }); return }
+    const target = await checkySuggestionAuditAndFinding(request, parsedIds.data.auditId, parsedIds.data.findingId)
+    if (!target) { response.status(404).json({ error: 'Finding not found' }); return }
+    const suggestions = await db.auditCheckySuggestion.findMany({ where: { auditId: target.audit.id, findingId: target.finding.id }, include: auditCheckySuggestionInclude, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    response.json({ suggestions: suggestions.map(auditCheckySuggestionView) })
+  }))
+
+  app.patch('/api/audit-checky-suggestions/:suggestionId', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = auditCheckySuggestionUpdateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid Checky suggestion data', details: parsed.error.issues }); return }
+    const existing = await db.auditCheckySuggestion.findUnique({ where: { id: String(request.params.suggestionId) }, include: { ...auditCheckySuggestionInclude, audit: { include: { process: { select: { companyId: true } } } }, finding: { select: { id: true, title: true, status: true } } } })
+    if (!existing || !canAccessCompany(request, { id: existing.audit.process.companyId })) { response.status(404).json({ error: 'Checky suggestion not found' }); return }
+    if (existing.status !== CheckySuggestionStatus.PENDING) { response.status(409).json({ error: 'This Checky suggestion was already decided' }); return }
+    if (parsed.data.editablePayload.kind !== existing.kind) { response.status(400).json({ error: 'The editable payload kind cannot change' }); return }
+    if (parsed.data.editablePayload.kind === 'ROOT_CAUSE') {
+      const analysis = await db.auditRootCauseAnalysis.findFirst({ where: { id: parsed.data.editablePayload.analysisId, findingId: existing.findingId, status: AuditRootCauseAnalysisStatus.DRAFT }, select: { id: true } })
+      if (!analysis) { response.status(400).json({ error: 'The selected root cause analysis must remain a DRAFT for this finding' }); return }
+    }
+    const updated = await db.$transaction(async (tx) => {
+      const changed = await tx.auditCheckySuggestion.updateMany({ where: { id: existing.id, status: CheckySuggestionStatus.PENDING }, data: { editablePayload: parsed.data.editablePayload as Prisma.InputJsonValue } })
+      if (changed.count !== 1) return null
+      await auditEventWrite(tx, { auditId: existing.auditId, eventType: AuditEventType.CHECKY_SUGGESTION_UPDATED, summary: `Propuesta de Checky actualizada para «${existing.finding.title}»`, actor: auditActorOf(request), metadata: { findingId: existing.findingId, suggestionId: existing.id, kind: existing.kind } })
+      return tx.auditCheckySuggestion.findUnique({ where: { id: existing.id }, include: auditCheckySuggestionInclude })
+    })
+    if (!updated) { response.status(409).json({ error: 'This Checky suggestion was already decided' }); return }
+    response.json({ suggestion: auditCheckySuggestionView(updated) })
+  }))
+
+  app.post('/api/audit-checky-suggestions/:suggestionId/reject', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = auditCheckySuggestionRejectionSchema.safeParse(request.body ?? {})
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid Checky suggestion rejection', details: parsed.error.issues }); return }
+    const existing = await db.auditCheckySuggestion.findUnique({ where: { id: String(request.params.suggestionId) }, include: { ...auditCheckySuggestionInclude, audit: { include: { process: { select: { companyId: true } } } }, finding: { select: { id: true, title: true } } } })
+    if (!existing || !canAccessCompany(request, { id: existing.audit.process.companyId })) { response.status(404).json({ error: 'Checky suggestion not found' }); return }
+    if (existing.status !== CheckySuggestionStatus.PENDING) { response.status(409).json({ error: 'This Checky suggestion was already decided' }); return }
+    const rejected = await db.$transaction(async (tx) => {
+      const changed = await tx.auditCheckySuggestion.updateMany({ where: { id: existing.id, status: CheckySuggestionStatus.PENDING }, data: { status: CheckySuggestionStatus.REJECTED, decisionNote: parsed.data.decisionNote ?? null, decidedAt: new Date() } })
+      if (changed.count !== 1) return null
+      await auditEventWrite(tx, { auditId: existing.auditId, eventType: AuditEventType.CHECKY_SUGGESTION_REJECTED, summary: `Propuesta de Checky rechazada para «${existing.finding.title}»`, actor: auditActorOf(request), metadata: { findingId: existing.findingId, suggestionId: existing.id, kind: existing.kind } })
+      return tx.auditCheckySuggestion.findUnique({ where: { id: existing.id }, include: auditCheckySuggestionInclude })
+    })
+    if (!rejected) { response.status(409).json({ error: 'This Checky suggestion was already decided' }); return }
+    response.json({ suggestion: auditCheckySuggestionView(rejected) })
+  }))
+
+  app.post('/api/audit-checky-suggestions/:suggestionId/accept', authMiddleware, userWriteGuard, asyncHandler(async (request, response) => {
+    const parsed = auditCheckySuggestionAcceptanceSchema.safeParse(request.body ?? {})
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid Checky suggestion acceptance', details: parsed.error.issues }); return }
+    try {
+      const accepted = await db.$transaction(async (tx) => {
+        const suggestion = await tx.auditCheckySuggestion.findUnique({ where: { id: String(request.params.suggestionId) }, include: { ...auditCheckySuggestionInclude, audit: { include: { process: { select: { companyId: true } } } }, finding: { select: { id: true, title: true, status: true } } } })
+        if (!suggestion || !canAccessCompany(request, { id: suggestion.audit.process.companyId })) throw new AuditCheckySuggestionAcceptanceError(404, 'Checky suggestion not found')
+        if (suggestion.status !== CheckySuggestionStatus.PENDING) throw new AuditCheckySuggestionAcceptanceError(409, 'This Checky suggestion was already decided')
+        const lockedAudit = await lockAuditForWrite(tx, suggestion.auditId)
+        const lockedFinding = await tx.auditFinding.findUnique({ where: { id: suggestion.findingId }, select: { id: true, auditId: true, title: true, status: true } })
+        if (!lockedAudit || !lockedFinding || lockedFinding.auditId !== suggestion.auditId) throw new AuditCheckySuggestionAcceptanceError(409, 'This audit is closed; no further changes are allowed')
+        if (lockedFinding.status === AuditFindingStatus.VERIFIED || isTerminalAuditStatus(lockedAudit.status)) throw new AuditCheckySuggestionAcceptanceError(409, 'A verified or closed finding cannot receive Checky changes')
+        const payload = auditCheckySuggestionPayloadSchema.safeParse(suggestion.editablePayload)
+        if (!payload.success) throw new AuditCheckySuggestionAcceptanceError(400, 'The editable proposal is invalid', { details: payload.error.issues })
+        let rootCause: unknown = null
+        let analysis: unknown = null
+        let action: unknown = null
+        if (payload.data.kind === 'ROOT_CAUSE_ANALYSIS') {
+          analysis = await tx.auditRootCauseAnalysis.create({ data: { findingId: lockedFinding.id, methodology: payload.data.methodology, status: AuditRootCauseAnalysisStatus.DRAFT, origin: 'CHECKY', problemDescription: payload.data.problemDescription, responsibleId: payload.data.responsibleId, createdById: request.user!.id }, include: auditRootCauseAnalysisInclude })
+        } else if (payload.data.kind === 'ROOT_CAUSE') {
+          const parent = await tx.auditRootCauseAnalysis.findUnique({ where: { id: payload.data.analysisId }, select: { id: true, findingId: true, status: true, methodology: true } })
+          if (!parent || parent.findingId !== lockedFinding.id || parent.status !== AuditRootCauseAnalysisStatus.DRAFT) throw new AuditCheckySuggestionAcceptanceError(409, 'The target root cause analysis is no longer a draft for this finding')
+          if (parent.methodology === 'ISHIKAWA' && !payload.data.ishikawaCategory?.trim()) throw new AuditCheckySuggestionAcceptanceError(400, 'Ishikawa causes require a category')
+          rootCause = await tx.auditRootCause.create({ data: { analysisId: parent.id, findingId: lockedFinding.id, description: payload.data.description, justification: payload.data.justification, supportingEvidence: payload.data.supportingEvidence, ishikawaCategory: payload.data.ishikawaCategory, position: payload.data.position, createdById: request.user!.id }, include: auditRootCauseInclude })
+        } else {
+          if (payload.data.responsibleId) await assertActiveAssignmentUser(tx, payload.data.responsibleId, suggestion.audit.process.companyId, 'Action responsible')
+          const causes = payload.data.causeIds.length === 0 ? [] : await tx.auditRootCause.findMany({
+            where: { id: { in: payload.data.causeIds }, findingId: lockedFinding.id, status: AuditRootCauseStatus.CONFIRMED, analysis: { status: AuditRootCauseAnalysisStatus.CONFIRMED } },
+            select: { id: true, analysisId: true },
+          })
+          if (causes.length !== payload.data.causeIds.length) throw new AuditCheckySuggestionAcceptanceError(409, 'All proposed causes must be confirmed and belong to a confirmed analysis of this finding')
+          const createdAction = await tx.auditCorrectiveAction.create({ data: { findingId: lockedFinding.id, title: payload.data.title, description: payload.data.description, objective: payload.data.objective, implementationPlan: payload.data.implementationPlan, resources: payload.data.resources, observations: payload.data.observations, responsibleId: payload.data.responsibleId, priority: payload.data.priority, required: payload.data.required, evidenceRequired: payload.data.evidenceRequired, workflowVersion: 1, dueDate: payload.data.dueDate ? calendarDateToUtc(payload.data.dueDate) : null, status: AuditCorrectiveActionStatus.OPEN }, include: auditActionInclude })
+          await auditEventWrite(tx, { auditId: suggestion.auditId, eventType: AuditEventType.ACTION_CREATED, summary: `Acción correctiva «${createdAction.title}» creada desde Checky`, actor: auditActorOf(request), changes: [{ field: 'workflowVersion', label: 'Flujo integral', previousValue: null, newValue: String(createdAction.workflowVersion) }], metadata: { findingId: lockedFinding.id, actionId: createdAction.id, suggestionId: suggestion.id } })
+          for (const criterion of payload.data.acceptanceCriteria) {
+            const createdCriterion = await tx.auditActionAcceptanceCriterion.create({ data: { actionId: createdAction.id, type: criterion.type, description: criterion.description, expectedResult: criterion.expectedResult, required: criterion.required, isMet: false, observations: null, completedAt: null, completedById: null, createdById: request.user!.id }, include: { createdBy: { select: { id: true, name: true, isActive: true } }, completedBy: { select: { id: true, name: true, isActive: true } } } })
+            await auditEventWrite(tx, { auditId: suggestion.auditId, eventType: AuditEventType.ACTION_UPDATED, summary: `Criterio de aceptación añadido a «${createdAction.title}» desde Checky`, actor: auditActorOf(request), changes: [{ field: 'acceptanceCriterion', label: 'Criterio de aceptación', previousValue: null, newValue: createdCriterion.description }], metadata: { findingId: lockedFinding.id, actionId: createdAction.id, criterionId: createdCriterion.id, criterionType: createdCriterion.type, suggestionId: suggestion.id } })
+          }
+          const now = new Date()
+          for (const cause of causes) {
+            const association = await tx.auditCorrectiveActionCause.create({ data: { findingId: lockedFinding.id, actionId: createdAction.id, causeId: cause.id, isActive: true, linkedAt: now, linkedById: request.user!.id }, include: auditCorrectiveActionCauseInclude })
+            await auditEventWrite(tx, { auditId: suggestion.auditId, eventType: AuditEventType.CORRECTIVE_ACTION_CAUSE_LINKED, summary: `Causa raíz vinculada a «${createdAction.title}» desde Checky`, actor: auditActorOf(request), metadata: { findingId: lockedFinding.id, actionId: createdAction.id, causeId: cause.id, analysisId: cause.analysisId, associationId: association.id, suggestionId: suggestion.id } })
+          }
+          action = await tx.auditCorrectiveAction.findUnique({ where: { id: createdAction.id }, include: auditActionInclude })
+        }
+        const acceptedId = rootCause && typeof rootCause === 'object' && 'id' in rootCause ? String(rootCause.id) : analysis && typeof analysis === 'object' && 'id' in analysis ? String(analysis.id) : action && typeof action === 'object' && 'id' in action ? String(action.id) : null
+        if (!acceptedId) throw new Error('Accepted Checky record could not be created')
+        const decided = await tx.auditCheckySuggestion.updateMany({ where: { id: suggestion.id, status: CheckySuggestionStatus.PENDING }, data: { status: CheckySuggestionStatus.ACCEPTED, decidedAt: new Date(), ...(payload.data.kind === 'ROOT_CAUSE' ? { acceptedRootCauseId: acceptedId } : payload.data.kind === 'ROOT_CAUSE_ANALYSIS' ? { acceptedAnalysisId: acceptedId } : { acceptedActionId: acceptedId }) } })
+        if (decided.count !== 1) throw new AuditCheckySuggestionAcceptanceError(409, 'This Checky suggestion was already decided')
+        await auditEventWrite(tx, { auditId: suggestion.auditId, eventType: AuditEventType.CHECKY_SUGGESTION_ACCEPTED, summary: `Propuesta de Checky aceptada para «${lockedFinding.title}»`, actor: auditActorOf(request), metadata: { findingId: lockedFinding.id, suggestionId: suggestion.id, kind: suggestion.kind, acceptedId, evidenceIds: suggestion.evidenceIds } })
+        const persistedSuggestion = await tx.auditCheckySuggestion.findUnique({ where: { id: suggestion.id }, include: auditCheckySuggestionInclude })
+        if (!persistedSuggestion) throw new Error('Accepted Checky suggestion could not be reloaded')
+        return { suggestion: persistedSuggestion, rootCause, analysis, action }
+      })
+      response.status(201).json({ suggestion: auditCheckySuggestionView(accepted.suggestion), ...(accepted.rootCause ? { cause: auditRootCauseView(accepted.rootCause as AuditRootCauseAnalysisWithInclude['causes'][number]) } : {}), ...(accepted.analysis ? { analysis: auditRootCauseAnalysisView(accepted.analysis as AuditRootCauseAnalysisWithInclude) } : {}), ...(accepted.action ? { action: auditActionView(accepted.action as AuditActionWithInclude) } : {}) })
+    } catch (error) {
+      if (error instanceof AuditCheckySuggestionAcceptanceError) { response.status(error.status).json({ error: error.message, ...(error.details ?? {}) }); return }
       throw error
     }
   }))
@@ -7841,9 +8500,12 @@ response.json({
     if (data.actionId) {
       const action = await db.auditCorrectiveAction.findFirst({
         where: { id: data.actionId, finding: { auditId: audit.id } },
-        select: { id: true },
+        select: { id: true, status: true },
       })
       if (!action) return { ok: false as const, status: 404 as const, error: 'Corrective action not found' }
+      if (action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) {
+        return { ok: false as const, status: 409 as const, error: 'A terminal corrective action cannot receive evidence' }
+      }
       anchors.actionId = action.id
     }
     if (data.itemId) {
@@ -7861,10 +8523,6 @@ response.json({
     const audit = await findCompanyAudit(request, String(request.params.auditId))
     if (!audit) {
       response.status(404).json({ error: 'Audit not found' })
-      return
-    }
-    if (isTerminalAuditStatus(audit.status)) {
-      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
     const contentTypeHeader = String(request.headers['content-type'] ?? '')
@@ -7891,6 +8549,11 @@ response.json({
       response.status(anchors.status).json({ error: anchors.error })
       return
     }
+    const anchoredFindingId = anchors.findingId ?? (anchors.actionId ? await db.auditCorrectiveAction.findUnique({ where: { id: anchors.actionId }, select: { findingId: true } }).then((action) => action?.findingId ?? null) : null)
+    if (isTerminalAuditStatus(audit.status) && (!anchoredFindingId || !(await auditHasActiveFollowUp(db, audit.id, anchoredFindingId)))) {
+      response.status(409).json({ error: 'Post-close evidence is allowed only for an active CAPA follow-up finding' })
+      return
+    }
     const upload = validateEvidenceUpload({ filename: sanitizeUploadFilename(file.filename ?? ''), contentType: file.contentType, data: file.data })
     const objectKeyContext = evidenceStorage.kind === 'R2'
       ? { companyId: audit.process.companyId, module: 'audits' as const, resourceId: audit.id }
@@ -7904,8 +8567,17 @@ response.json({
     try {
       const actor = auditActorOf(request)
       const created = await db.$transaction(async (tx) => {
-        const locked = await lockAuditForWrite(tx, audit.id)
+        const locked = isTerminalAuditStatus(audit.status)
+          ? await lockAuditForFollowUpWrite(tx, audit.id, anchoredFindingId!)
+          : await lockAuditForWrite(tx, audit.id)
         if (!locked) return null
+        if (anchors.actionId) {
+          const linkedAction = await tx.auditCorrectiveAction.findFirst({
+            where: { id: anchors.actionId, finding: { auditId: audit.id } },
+            select: { status: true },
+          })
+          if (!linkedAction || linkedAction.status === AuditCorrectiveActionStatus.COMPLETED || linkedAction.status === AuditCorrectiveActionStatus.CANCELLED) return null
+        }
         const saved = await tx.auditEvidenceFile.create({
           data: {
             auditId: audit.id,
@@ -8044,6 +8716,11 @@ response.json({
       response.status(404).json({ error: 'Evidence not found' })
       return
     }
+    const reportVersion = await db.auditReportVersion.findUnique({ where: { pdfEvidenceFileId: existing.id }, select: { id: true, version: true } })
+    if (reportVersion) {
+      response.status(409).json({ error: 'An approved audit report PDF is immutable and cannot be deleted', reason: 'REPORT_VERSION_IMMUTABLE' })
+      return
+    }
     if (isTerminalAuditStatus(audit.status)) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
@@ -8061,9 +8738,19 @@ response.json({
     }
     const actor = auditActorOf(request)
     const reference = { storedName: existing.storedName, objectKeyContext }
-    const deleted = await db.$transaction(async (tx) => {
+    type DeleteAuditEvidenceFileResult = false | true | { blocked: 'EVIDENCE_FILE_LINKED_TO_ACTIVITY' | 'EVIDENCE_FILE_LINKED_TO_EFFICACY_EVALUATION' | 'REPORT_VERSION_IMMUTABLE' }
+    const deleted = await db.$transaction(async (tx): Promise<DeleteAuditEvidenceFileResult> => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
+      const lockedReportVersion = await tx.auditReportVersion.findUnique({ where: { pdfEvidenceFileId: existing.id }, select: { id: true } })
+      if (lockedReportVersion) return { blocked: 'REPORT_VERSION_IMMUTABLE' }
+      const activityLink = await tx.auditPlanActivityEvidenceFile.findFirst({
+        where: { evidenceFileId: existing.id },
+        select: { id: true },
+      })
+      if (activityLink) return { blocked: 'EVIDENCE_FILE_LINKED_TO_ACTIVITY' }
+      const efficacyLink = await tx.auditEfficacyEvaluationEvidenceFile?.findFirst({ where: { evidenceFileId: existing.id }, select: { id: true } })
+      if (efficacyLink) return { blocked: 'EVIDENCE_FILE_LINKED_TO_EFFICACY_EVALUATION' }
       await tx.auditEvidenceFile.delete({ where: { id: existing.id } })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -8083,6 +8770,18 @@ response.json({
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
+    if (typeof deleted === 'object' && deleted.blocked === 'EVIDENCE_FILE_LINKED_TO_ACTIVITY') {
+      response.status(409).json({ error: 'Evidence file linked to an audit activity cannot be deleted', reason: deleted.blocked })
+      return
+    }
+    if (typeof deleted === 'object' && deleted.blocked === 'EVIDENCE_FILE_LINKED_TO_EFFICACY_EVALUATION') {
+      response.status(409).json({ error: 'Evidence file linked to an efficacy evaluation cannot be deleted', reason: deleted.blocked })
+      return
+    }
+    if (typeof deleted === 'object' && deleted.blocked === 'REPORT_VERSION_IMMUTABLE') {
+      response.status(409).json({ error: 'An approved audit report PDF is immutable and cannot be deleted', reason: deleted.blocked })
+      return
+    }
     try {
       const provider = existing.storageProvider === 'R2' ? evidenceStorage : localEvidenceStorage
       await provider.remove(reference)
@@ -8091,6 +8790,1297 @@ response.json({
     }
     response.status(204).send()
   }))
+
+  // ---- Correcciones inmediatas ----
+  const findAccessibleImmediateCorrection = async (auditId: string, findingId: string, correctionId: string) => {
+    const parsed = idReference.safeParse(correctionId)
+    if (!parsed.success) return null
+    return db.auditImmediateCorrection.findFirst({
+      where: { id: parsed.data, findingId, finding: { auditId } },
+      include: auditImmediateCorrectionInclude,
+    })
+  }
+
+  const findAuditFindingForCorrection = async (auditId: string, findingId: string) => db.auditFinding.findFirst({
+    where: { id: findingId, auditId },
+    select: { id: true, title: true, status: true },
+  })
+
+  const immediateCorrectionFindingGuard = (finding: { status: AuditFindingStatus } | null) => {
+    if (!finding) return { status: 404 as const, error: 'Finding not found' }
+    if (finding.status === AuditFindingStatus.VERIFIED) return { status: 409 as const, error: 'A verified finding cannot receive immediate corrections' }
+    return null
+  }
+
+  const listImmediateCorrectionsHandler = asyncHandler(async (request, response) => {
+    const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findAuditFindingForCorrection(audit.id, String(request.params.findingId))
+    const findingError = immediateCorrectionFindingGuard(finding)
+    if (findingError && findingError.status === 404) {
+      response.status(findingError.status).json({ error: findingError.error })
+      return
+    }
+    const corrections = await db.auditImmediateCorrection.findMany({
+      where: { findingId: finding!.id },
+      include: auditImmediateCorrectionInclude,
+      orderBy: [{ createdAt: 'asc' }],
+    })
+    response.json({ corrections: corrections.map(auditImmediateCorrectionView) })
+  })
+  app.get('/api/audits/:auditId/findings/:findingId/corrections', authMiddleware, withAuditProcessParam(listImmediateCorrectionsHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections', authMiddleware, listImmediateCorrectionsHandler)
+
+  const getImmediateCorrectionHandler = asyncHandler(async (request, response) => {
+    const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const correction = await findAccessibleImmediateCorrection(audit.id, String(request.params.findingId), String(request.params.correctionId))
+    if (!correction) {
+      response.status(404).json({ error: 'Immediate correction not found' })
+      return
+    }
+    response.json({ correction: auditImmediateCorrectionView(correction) })
+  })
+  app.get('/api/audits/:auditId/findings/:findingId/corrections/:correctionId', authMiddleware, withAuditProcessParam(getImmediateCorrectionHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections/:correctionId', authMiddleware, getImmediateCorrectionHandler)
+
+  const createImmediateCorrectionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid finding id' })
+      return
+    }
+    const parsed = auditImmediateCorrectionCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid immediate correction data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findAuditFindingForCorrection(audit.id, parsedIds.data.findingId)
+    const findingError = immediateCorrectionFindingGuard(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error })
+      return
+    }
+    const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'immediate correction responsible')
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const actor = auditActorOf(request)
+    type CreateImmediateCorrectionResult = null | { blocked: 'FINDING_VERIFIED' } | { correction: AuditImmediateCorrectionWithInclude }
+    const result = await db.$transaction(async (tx): Promise<CreateImmediateCorrectionResult> => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: finding!.id }, select: { id: true, title: true, status: true, auditId: true } })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id) return { blocked: 'FINDING_VERIFIED' }
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, audit.process.companyId, 'Immediate correction responsible')
+      const created = await tx.auditImmediateCorrection.create({
+        data: {
+          findingId: lockedFinding.id,
+          description: parsed.data.description,
+          containmentMeasures: parsed.data.containmentMeasures ?? null,
+          consequencesIdentified: parsed.data.consequencesIdentified ?? null,
+          consequencesTreatment: parsed.data.consequencesTreatment ?? null,
+          responsibleId: responsible.userId,
+          plannedDate: parsed.data.plannedDate ?? null,
+          observations: parsed.data.observations ?? null,
+          createdById: request.user!.id,
+        },
+        include: auditImmediateCorrectionInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'IMMEDIATE_CORRECTION_CREATED',
+        summary: `Corrección inmediata «${created.description}» creada`,
+        actor,
+        changes: [
+          { field: 'description', label: 'Descripción', previousValue: null, newValue: created.description },
+          { field: 'status', label: 'Estado', previousValue: null, newValue: created.status },
+        ],
+        metadata: { findingId: lockedFinding.id, correctionId: created.id },
+      })
+      return { correction: created }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive immediate corrections', reason: result.blocked })
+      return
+    }
+    response.status(201).json({ correction: auditImmediateCorrectionView(result.correction) })
+  })
+  app.post('/api/audits/:auditId/findings/:findingId/corrections', authMiddleware, userWriteGuard, withAuditProcessParam(createImmediateCorrectionHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections', authMiddleware, userWriteGuard, createImmediateCorrectionHandler)
+
+  const updateImmediateCorrectionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference, correctionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      correctionId: String(request.params.correctionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid immediate correction id' })
+      return
+    }
+    const parsed = auditImmediateCorrectionUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid immediate correction data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleImmediateCorrection(audit.id, parsedIds.data.findingId, parsedIds.data.correctionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Immediate correction not found' })
+      return
+    }
+    const finding = await findAuditFindingForCorrection(audit.id, existing.findingId)
+    const findingError = immediateCorrectionFindingGuard(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error })
+      return
+    }
+    if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
+      response.status(409).json({ error: 'A completed or cancelled immediate correction cannot be edited' })
+      return
+    }
+    const responsible = parsed.data.responsibleId !== undefined
+      ? await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'immediate correction responsible')
+      : { ok: true as const, userId: undefined }
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const data: Prisma.AuditImmediateCorrectionUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    const pushIfChanged = (field: string, label: string, previous: unknown, next: unknown) => {
+      if (next === undefined || auditValue(previous) === auditValue(next)) return
+      changes.push({ field, label, previousValue: auditValue(previous), newValue: auditValue(next) })
+    }
+    if (parsed.data.description !== undefined) {
+      data.description = parsed.data.description
+      pushIfChanged('description', 'Descripción', existing.description, parsed.data.description)
+    }
+    if (parsed.data.containmentMeasures !== undefined) {
+      data.containmentMeasures = parsed.data.containmentMeasures ?? null
+      pushIfChanged('containmentMeasures', 'Medidas de contención', existing.containmentMeasures, parsed.data.containmentMeasures)
+    }
+    if (parsed.data.consequencesIdentified !== undefined) {
+      data.consequencesIdentified = parsed.data.consequencesIdentified ?? null
+      pushIfChanged('consequencesIdentified', 'Consecuencias identificadas', existing.consequencesIdentified, parsed.data.consequencesIdentified)
+    }
+    if (parsed.data.consequencesTreatment !== undefined) {
+      data.consequencesTreatment = parsed.data.consequencesTreatment ?? null
+      pushIfChanged('consequencesTreatment', 'Tratamiento de consecuencias', existing.consequencesTreatment, parsed.data.consequencesTreatment)
+    }
+    if (parsed.data.responsibleId !== undefined) {
+      data.responsibleId = responsible.userId ?? null
+      pushIfChanged('responsibleId', 'Responsable', existing.responsible?.name ?? null, responsible.userId ? await db.user.findUnique({ where: { id: responsible.userId }, select: { name: true } }).then((user) => user?.name ?? null) : null)
+    }
+    if (parsed.data.plannedDate !== undefined) {
+      data.plannedDate = parsed.data.plannedDate ?? null
+      pushIfChanged('plannedDate', 'Fecha prevista', existing.plannedDate, parsed.data.plannedDate)
+    }
+    if (parsed.data.observations !== undefined) {
+      data.observations = parsed.data.observations ?? null
+      pushIfChanged('observations', 'Observaciones', existing.observations, parsed.data.observations)
+    }
+    if (changes.length === 0) {
+      response.json({ correction: auditImmediateCorrectionView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    type UpdateImmediateCorrectionResult = null | { conflict: true } | { blocked: 'FINDING_VERIFIED' } | { correction: AuditImmediateCorrectionWithInclude }
+    const result = await db.$transaction(async (tx): Promise<UpdateImmediateCorrectionResult> => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const lockedCorrection = await tx.auditImmediateCorrection.findUnique({ where: { id: existing.id }, include: auditImmediateCorrectionInclude })
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.findingId }, select: { id: true, auditId: true, status: true } })
+      if (!lockedCorrection || lockedCorrection.findingId !== existing.findingId || !lockedFinding || lockedFinding.auditId !== audit.id) return { conflict: true }
+      if (lockedCorrection.status === 'COMPLETED' || lockedCorrection.status === 'CANCELLED') return { conflict: true }
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, audit.process.companyId, 'Immediate correction responsible')
+      const updated = await tx.auditImmediateCorrection.update({ where: { id: existing.id }, data, include: auditImmediateCorrectionInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'IMMEDIATE_CORRECTION_UPDATED',
+        summary: `Corrección inmediata «${updated.description}» actualizada`,
+        actor,
+        changes,
+        metadata: { findingId: updated.findingId, correctionId: updated.id },
+      })
+      return { correction: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: 'The immediate correction changed before this update was applied; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive immediate correction changes', reason: result.blocked })
+      return
+    }
+    response.json({ correction: auditImmediateCorrectionView(result.correction) })
+  })
+  app.patch('/api/audits/:auditId/findings/:findingId/corrections/:correctionId', authMiddleware, userWriteGuard, withAuditProcessParam(updateImmediateCorrectionHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections/:correctionId', authMiddleware, userWriteGuard, updateImmediateCorrectionHandler)
+
+  const changeImmediateCorrectionStatusHandler = (target: AuditImmediateCorrectionStatus): RequestHandler => asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference, correctionId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      correctionId: String(request.params.correctionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid immediate correction id' })
+      return
+    }
+    const parsed = target === 'IN_PROGRESS'
+      ? auditImmediateCorrectionStartSchema.safeParse(request.body)
+      : target === 'COMPLETED'
+        ? auditImmediateCorrectionCompleteSchema.safeParse(request.body)
+        : auditImmediateCorrectionCancelSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: target === 'CANCELLED' ? 'Invalid cancellation data' : target === 'COMPLETED' ? 'Invalid completion data' : 'Invalid start data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleImmediateCorrection(audit.id, parsedIds.data.findingId, parsedIds.data.correctionId)
+    if (!existing) {
+      response.status(404).json({ error: 'Immediate correction not found' })
+      return
+    }
+    const finding = await findAuditFindingForCorrection(audit.id, existing.findingId)
+    const findingError = immediateCorrectionFindingGuard(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error })
+      return
+    }
+    if (!canTransitionAuditImmediateCorrection(existing.status, target)) {
+      response.status(409).json({ error: 'Invalid immediate correction status transition' })
+      return
+    }
+    if (target === 'COMPLETED' && (!existing.description.trim() || !existing.responsibleId)) {
+      response.status(400).json({ error: 'Completing an immediate correction requires a valid description and responsible user' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type StatusResult = null | { conflict: true } | { blocked: 'FINDING_VERIFIED' } | { correction: AuditImmediateCorrectionWithInclude }
+    const result = await db.$transaction(async (tx): Promise<StatusResult> => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const lockedCorrection = await tx.auditImmediateCorrection.findUnique({ where: { id: existing.id }, include: auditImmediateCorrectionInclude })
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.findingId }, select: { id: true, auditId: true, status: true } })
+      if (!lockedCorrection || lockedCorrection.findingId !== existing.findingId || !lockedFinding || lockedFinding.auditId !== audit.id) return { conflict: true }
+      if (!canTransitionAuditImmediateCorrection(lockedCorrection.status, target)) return { conflict: true }
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      if (target === 'COMPLETED') {
+        if (!lockedCorrection.description.trim() || !lockedCorrection.responsibleId) return { conflict: true }
+        await assertActiveAssignmentUser(tx, lockedCorrection.responsibleId, audit.process.companyId, 'Immediate correction responsible')
+      }
+      const data: Prisma.AuditImmediateCorrectionUncheckedUpdateInput = { status: target }
+      const changes: RiskAuditChange[] = [
+        { field: 'status', label: 'Estado', previousValue: lockedCorrection.status, newValue: target },
+      ]
+      if (target === 'COMPLETED') {
+        const observations = (parsed.data as { observations: string }).observations
+        data.observations = observations
+        data.executedAt = new Date()
+        changes.push(
+          { field: 'observations', label: 'Observaciones de ejecución', previousValue: auditValue(lockedCorrection.observations), newValue: observations },
+          { field: 'executedAt', label: 'Fecha real de ejecución', previousValue: auditValue(lockedCorrection.executedAt), newValue: auditValue(data.executedAt) },
+        )
+      }
+      if (target === 'CANCELLED') {
+        const justification = (parsed.data as { justification: string }).justification
+        const observations = lockedCorrection.observations ? `${lockedCorrection.observations}\nJustificación de cancelación: ${justification}` : `Justificación de cancelación: ${justification}`
+        data.observations = observations
+        changes.push({ field: 'observations', label: 'Justificación de cancelación', previousValue: auditValue(lockedCorrection.observations), newValue: observations })
+      }
+      const updated = await tx.auditImmediateCorrection.update({ where: { id: existing.id }, data, include: auditImmediateCorrectionInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'IMMEDIATE_CORRECTION_STATUS_CHANGED',
+        summary: `Corrección inmediata «${updated.description}» ${auditImmediateCorrectionStatusNames[target].toLowerCase()}`,
+        actor,
+        changes,
+        metadata: {
+          findingId: updated.findingId,
+          correctionId: updated.id,
+          previousStatus: lockedCorrection.status,
+          newStatus: target,
+          ...(target === 'CANCELLED' ? { justification: (parsed.data as { justification: string }).justification } : {}),
+        },
+      })
+      return { correction: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: 'The immediate correction changed before this transition was applied; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive immediate correction changes', reason: result.blocked })
+      return
+    }
+    response.json({ correction: auditImmediateCorrectionView(result.correction) })
+  })
+  app.post('/api/audits/:auditId/findings/:findingId/corrections/:correctionId/start', authMiddleware, userWriteGuard, withAuditProcessParam(changeImmediateCorrectionStatusHandler('IN_PROGRESS')))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections/:correctionId/start', authMiddleware, userWriteGuard, changeImmediateCorrectionStatusHandler('IN_PROGRESS'))
+  app.post('/api/audits/:auditId/findings/:findingId/corrections/:correctionId/complete', authMiddleware, userWriteGuard, withAuditProcessParam(changeImmediateCorrectionStatusHandler('COMPLETED')))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections/:correctionId/complete', authMiddleware, userWriteGuard, changeImmediateCorrectionStatusHandler('COMPLETED'))
+  app.post('/api/audits/:auditId/findings/:findingId/corrections/:correctionId/cancel', authMiddleware, userWriteGuard, withAuditProcessParam(changeImmediateCorrectionStatusHandler('CANCELLED')))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/corrections/:correctionId/cancel', authMiddleware, userWriteGuard, changeImmediateCorrectionStatusHandler('CANCELLED'))
+
+  // ---- Analisis de causa raiz ----
+  const rootCauseAnalysisIdsSchema = z.object({
+    processId: idReference,
+    auditId: idReference,
+    findingId: idReference,
+  })
+  const rootCauseAnalysisResourceIdsSchema = rootCauseAnalysisIdsSchema.extend({ analysisId: idReference })
+
+  const findAccessibleRootCauseAnalysis = async (findingId: string, analysisId: string) => {
+    const parsed = idReference.safeParse(analysisId)
+    if (!parsed.success) return null
+    return db.auditRootCauseAnalysis.findFirst({
+      where: { id: parsed.data, findingId },
+      include: auditRootCauseAnalysisInclude,
+    })
+  }
+
+  const findRootCauseFinding = async (auditId: string, findingId: string) => db.auditFinding.findFirst({
+    where: { id: findingId, auditId },
+    select: { id: true, title: true, status: true },
+  })
+
+  const verifiedRootCauseFindingError = (finding: { status: AuditFindingStatus } | null) => (
+    finding?.status === AuditFindingStatus.VERIFIED
+      ? { status: 409 as const, error: 'A verified finding cannot receive root cause changes', reason: 'FINDING_VERIFIED' as const }
+      : null
+  )
+
+  const lockRootCauseFinding = async (tx: Prisma.TransactionClient, auditId: string, findingId: string) =>
+    tx.auditFinding.findUnique({ where: { id: findingId }, select: { id: true, title: true, status: true, auditId: true } }).then((finding) => finding && finding.auditId === auditId ? finding : null)
+
+  const listRootCauseAnalysesHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid finding id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const analyses = await db.auditRootCauseAnalysis.findMany({
+      where: { findingId: finding.id },
+      include: auditRootCauseAnalysisInclude,
+      orderBy: [{ createdAt: 'asc' }],
+    })
+    response.json({ analyses: analyses.map(auditRootCauseAnalysisView) })
+  })
+
+  const getRootCauseAnalysisHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(finding.id, parsedIds.data.analysisId)
+    if (!analysis) {
+      response.status(404).json({ error: 'Root cause analysis not found' })
+      return
+    }
+    response.json({ analysis: auditRootCauseAnalysisView(analysis) })
+  })
+
+  const createRootCauseAnalysisHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid finding id' })
+      return
+    }
+    const parsed = auditRootCauseAnalysisCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status)) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'root cause responsible')
+    if (!responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const actor = auditActorOf(request)
+    type CreateRootCauseAnalysisResult = null | { blocked: 'FINDING_VERIFIED' } | { analysis: AuditRootCauseAnalysisWithInclude }
+    const result = await db.$transaction(async (tx): Promise<CreateRootCauseAnalysisResult> => {
+      const locked = await lockAuditForWrite(tx, audit.id)
+      if (!locked) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, finding.id)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, audit.process.companyId, 'Root cause responsible')
+      const created = await tx.auditRootCauseAnalysis.create({
+        data: {
+          findingId: lockedFinding.id,
+          methodology: parsed.data.methodology,
+          origin: 'MANUAL',
+          problemDescription: parsed.data.problemDescription,
+          responsibleId: responsible.userId,
+          createdById: request.user!.id,
+        },
+        include: auditRootCauseAnalysisInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_ANALYSIS_CREATED',
+        summary: `Root cause analysis for finding "${lockedFinding.title}" created`,
+        actor,
+        changes: [
+          { field: 'methodology', label: 'Methodology', previousValue: null, newValue: created.methodology },
+          { field: 'problemDescription', label: 'Problem description', previousValue: null, newValue: created.problemDescription },
+        ],
+        metadata: { findingId: lockedFinding.id, analysisId: created.id },
+      })
+      return { analysis: created }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    response.status(201).json({ analysis: auditRootCauseAnalysisView(result.analysis) })
+  })
+
+  const updateRootCauseAnalysisHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis id' })
+      return
+    }
+    const parsed = auditRootCauseAnalysisUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    if (!existing) {
+      response.status(404).json({ error: 'Root cause analysis not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, existing.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (existing.status !== AuditRootCauseAnalysisStatus.DRAFT) {
+      response.status(409).json({ error: 'A confirmed root cause analysis cannot be edited' })
+      return
+    }
+    const responsible = parsed.data.responsibleId === undefined
+      ? null
+      : await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'root cause responsible')
+    if (responsible && !responsible.ok) {
+      response.status(responsible.status).json({ error: responsible.error })
+      return
+    }
+    const data: Prisma.AuditRootCauseAnalysisUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    if (parsed.data.methodology !== undefined && parsed.data.methodology !== existing.methodology) {
+      data.methodology = parsed.data.methodology
+      changes.push({ field: 'methodology', label: 'Methodology', previousValue: existing.methodology, newValue: parsed.data.methodology })
+    }
+    if (parsed.data.problemDescription !== undefined && parsed.data.problemDescription !== existing.problemDescription) {
+      data.problemDescription = parsed.data.problemDescription
+      changes.push({ field: 'problemDescription', label: 'Problem description', previousValue: existing.problemDescription, newValue: parsed.data.problemDescription })
+    }
+    if (responsible && responsible.ok && responsible.userId !== existing.responsibleId) {
+      data.responsibleId = responsible.userId
+      changes.push({ field: 'responsibleId', label: 'Responsible', previousValue: existing.responsible?.name ?? null, newValue: responsible.userId })
+    }
+    if (changes.length === 0) {
+      response.json({ analysis: auditRootCauseAnalysisView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    type UpdateResult = null | { blocked: 'FINDING_VERIFIED' } | { conflict: string } | { analysis: AuditRootCauseAnalysisWithInclude }
+    const result = await db.$transaction(async (tx): Promise<UpdateResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, existing.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: existing.id }, include: auditRootCauseAnalysisInclude })
+      if (!locked || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT) return { conflict: 'The root cause analysis changed before this update was applied; reload and try again' }
+      if (data.methodology && data.methodology !== locked.methodology && locked.fiveWhySteps.length > 0) return { conflict: 'Remove the Five Whys steps before changing methodology' }
+      if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, audit.process.companyId, 'Root cause responsible')
+      const updated = await tx.auditRootCauseAnalysis.update({ where: { id: existing.id }, data, include: auditRootCauseAnalysisInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_ANALYSIS_UPDATED',
+        summary: `Root cause analysis ${updated.id} updated`,
+        actor,
+        changes,
+        metadata: { findingId: lockedFinding.id, analysisId: updated.id },
+      })
+      return { analysis: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ analysis: auditRootCauseAnalysisView(result.analysis) })
+  })
+
+  const changeRootCauseAnalysisStatusHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis id' })
+      return
+    }
+    const parsed = auditRootCauseAnalysisStatusChangeSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis status', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const existing = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    if (!existing) {
+      response.status(404).json({ error: 'Root cause analysis not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, existing.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (!canTransitionAuditRootCauseAnalysis(existing.status, parsed.data.status)) {
+      response.status(409).json({ error: 'Invalid root cause analysis status transition' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type StatusResult = null | { blocked: 'FINDING_VERIFIED' } | { conflict: string } | { analysis: AuditRootCauseAnalysisWithInclude }
+    const result = await db.$transaction(async (tx): Promise<StatusResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, existing.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: existing.id }, include: auditRootCauseAnalysisInclude })
+      if (!locked || locked.findingId !== parsedIds.data.findingId || !canTransitionAuditRootCauseAnalysis(locked.status, parsed.data.status)) return { conflict: 'The root cause analysis changed before this transition was applied; reload and try again' }
+      if (!locked.causes.some((cause) => cause.status === AuditRootCauseStatus.CONFIRMED)) return { conflict: 'At least one confirmed root cause is required' }
+      if (locked.methodology === 'FIVE_WHYS') {
+        const sequences = locked.fiveWhySteps.map((step) => step.sequence)
+        if (sequences.length === 0 || sequences.some((sequence, index) => sequence !== index + 1)) return { conflict: 'Five Whys steps must be consecutive before confirmation' }
+      }
+      if (locked.methodology === 'ISHIKAWA' && !locked.causes.some((cause) => cause.status === AuditRootCauseStatus.CONFIRMED && Boolean(cause.ishikawaCategory?.trim()))) return { conflict: 'A confirmed Ishikawa cause must have a category' }
+      const updated = await tx.auditRootCauseAnalysis.update({
+        where: { id: existing.id },
+        data: { status: AuditRootCauseAnalysisStatus.CONFIRMED, confirmedById: request.user!.id, confirmedAt: new Date() },
+        include: auditRootCauseAnalysisInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_ANALYSIS_STATUS_CHANGED',
+        summary: 'Root cause analysis confirmed',
+        actor,
+        changes: [{ field: 'status', label: 'Status', previousValue: locked.status, newValue: updated.status }],
+        metadata: { findingId: lockedFinding.id, analysisId: updated.id, previousStatus: locked.status, newStatus: updated.status },
+      })
+      return { analysis: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ analysis: auditRootCauseAnalysisView(result.analysis) })
+  })
+
+  app.get('/api/audits/:auditId/findings/:findingId/root-cause-analyses', authMiddleware, withAuditProcessParam(listRootCauseAnalysesHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses', authMiddleware, listRootCauseAnalysesHandler)
+  app.get('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId', authMiddleware, withAuditProcessParam(getRootCauseAnalysisHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId', authMiddleware, getRootCauseAnalysisHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/root-cause-analyses', authMiddleware, userWriteGuard, withAuditProcessParam(createRootCauseAnalysisHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses', authMiddleware, userWriteGuard, createRootCauseAnalysisHandler)
+  app.patch('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId', authMiddleware, userWriteGuard, withAuditProcessParam(updateRootCauseAnalysisHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId', authMiddleware, userWriteGuard, updateRootCauseAnalysisHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeRootCauseAnalysisStatusHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/status', authMiddleware, userWriteGuard, changeRootCauseAnalysisStatusHandler)
+
+  const createRootCauseHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis id' })
+      return
+    }
+    const parsed = auditRootCauseCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    if (!analysis) {
+      response.status(404).json({ error: 'Root cause analysis not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT) {
+      response.status(409).json({ error: 'A confirmed root cause analysis cannot be edited' })
+      return
+    }
+    if (analysis.methodology === 'ISHIKAWA' && !parsed.data.ishikawaCategory?.trim()) {
+      response.status(400).json({ error: 'Ishikawa causes require a category' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type CreateRootCauseResult = null | { blocked: 'FINDING_VERIFIED' } | { cause: AuditRootCauseAnalysisWithInclude['causes'][number] }
+    const result = await db.$transaction(async (tx): Promise<CreateRootCauseResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      if (!locked || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT) return null
+      const created = await tx.auditRootCause.create({
+        data: {
+          analysisId: locked.id,
+           findingId: lockedFinding.id,
+          description: parsed.data.description,
+          justification: parsed.data.justification ?? null,
+          supportingEvidence: parsed.data.supportingEvidence ?? null,
+          ishikawaCategory: parsed.data.ishikawaCategory ?? null,
+          position: parsed.data.position ?? 0,
+          createdById: request.user!.id,
+        },
+        include: auditRootCauseInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_CREATED',
+        summary: 'Root cause created',
+        actor,
+        changes: [{ field: 'description', label: 'Description', previousValue: null, newValue: created.description }],
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, causeId: created.id },
+      })
+      return { cause: created }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit or root cause analysis no longer accepts changes' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    response.status(201).json({ cause: auditRootCauseView(result.cause) })
+  })
+
+  const updateRootCauseHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.extend({ causeId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+      causeId: String(request.params.causeId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause id' })
+      return
+    }
+    const parsed = auditRootCauseUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    const existing = analysis?.causes.find((cause) => cause.id === parsedIds.data.causeId)
+    if (!analysis || !existing) {
+      response.status(404).json({ error: 'Root cause not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT || existing.status !== AuditRootCauseStatus.POTENTIAL) {
+      response.status(409).json({ error: 'Only potential causes in a draft analysis can be edited' })
+      return
+    }
+    const nextCategory = parsed.data.ishikawaCategory !== undefined ? parsed.data.ishikawaCategory : existing.ishikawaCategory
+    if (analysis.methodology === 'ISHIKAWA' && !nextCategory?.trim()) {
+      response.status(400).json({ error: 'Ishikawa causes require a category' })
+      return
+    }
+    const data: Prisma.AuditRootCauseUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    if (parsed.data.description !== undefined && parsed.data.description !== existing.description) {
+      data.description = parsed.data.description
+      changes.push({ field: 'description', label: 'Description', previousValue: existing.description, newValue: parsed.data.description })
+    }
+    if (parsed.data.justification !== undefined && parsed.data.justification !== existing.justification) data.justification = parsed.data.justification
+    if (parsed.data.supportingEvidence !== undefined && parsed.data.supportingEvidence !== existing.supportingEvidence) data.supportingEvidence = parsed.data.supportingEvidence
+    if (parsed.data.ishikawaCategory !== undefined && parsed.data.ishikawaCategory !== existing.ishikawaCategory) data.ishikawaCategory = parsed.data.ishikawaCategory
+    if (parsed.data.position !== undefined && parsed.data.position !== existing.position) data.position = parsed.data.position
+    if (changes.length === 0 && Object.keys(data).length === 0) {
+      response.json({ cause: auditRootCauseView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    type UpdateCauseResult = null | { blocked: 'FINDING_VERIFIED' } | { conflict: string } | { cause: AuditRootCauseAnalysisWithInclude['causes'][number] }
+    const result = await db.$transaction(async (tx): Promise<UpdateCauseResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      const lockedCause = locked?.causes.find((cause) => cause.id === existing.id)
+      if (!locked || !lockedCause || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT || lockedCause.status !== AuditRootCauseStatus.POTENTIAL) return { conflict: 'The root cause changed before this update was applied; reload and try again' }
+      const updated = await tx.auditRootCause.update({ where: { id: existing.id }, data, include: auditRootCauseInclude })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_UPDATED',
+        summary: 'Root cause updated',
+        actor,
+        changes,
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, causeId: updated.id },
+      })
+      return { cause: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ cause: auditRootCauseView(result.cause) })
+  })
+
+  const changeRootCauseStatusHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.extend({ causeId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+      causeId: String(request.params.causeId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause id' })
+      return
+    }
+    const parsed = auditRootCauseStatusChangeSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid root cause status', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    const existing = analysis?.causes.find((cause) => cause.id === parsedIds.data.causeId)
+    if (!analysis || !existing) {
+      response.status(404).json({ error: 'Root cause not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT) {
+      response.status(409).json({ error: 'A confirmed root cause analysis cannot be edited' })
+      return
+    }
+    if (!canTransitionAuditRootCause(existing.status, parsed.data.status)) {
+      response.status(409).json({ error: 'Invalid root cause status transition' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type CauseStatusResult = null | { blocked: 'FINDING_VERIFIED' } | { conflict: string } | { cause: AuditRootCauseAnalysisWithInclude['causes'][number] }
+    const result = await db.$transaction(async (tx): Promise<CauseStatusResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      const lockedCause = locked?.causes.find((cause) => cause.id === existing.id)
+      if (!locked || !lockedCause || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT || !canTransitionAuditRootCause(lockedCause.status, parsed.data.status)) return { conflict: 'The root cause changed before this transition was applied; reload and try again' }
+      const updated = await tx.auditRootCause.update({
+        where: { id: existing.id },
+        data: {
+          status: parsed.data.status,
+          ...(parsed.data.status === AuditRootCauseStatus.CONFIRMED ? { confirmedById: request.user!.id, confirmedAt: new Date() } : { confirmedById: null, confirmedAt: null }),
+        },
+        include: auditRootCauseInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_STATUS_CHANGED',
+        summary: `Root cause ${parsed.data.status.toLowerCase()}`,
+        actor,
+        changes: [{ field: 'status', label: 'Status', previousValue: lockedCause.status, newValue: updated.status }],
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, causeId: updated.id, previousStatus: lockedCause.status, newStatus: updated.status },
+      })
+      return { cause: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ cause: auditRootCauseView(result.cause) })
+  })
+
+  app.post('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes', authMiddleware, userWriteGuard, withAuditProcessParam(createRootCauseHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes', authMiddleware, userWriteGuard, createRootCauseHandler)
+  app.patch('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId', authMiddleware, userWriteGuard, withAuditProcessParam(updateRootCauseHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId', authMiddleware, userWriteGuard, updateRootCauseHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeRootCauseStatusHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/status', authMiddleware, userWriteGuard, changeRootCauseStatusHandler)
+
+  const createFiveWhyStepHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause analysis id' })
+      return
+    }
+    const parsed = auditRootCauseFiveWhyStepCreateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Five Whys step data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    if (!analysis) {
+      response.status(404).json({ error: 'Root cause analysis not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT || analysis.methodology !== 'FIVE_WHYS') {
+      response.status(409).json({ error: 'Five Whys steps require a draft FIVE_WHYS analysis' })
+      return
+    }
+    if (analysis.fiveWhySteps.some((step) => step.sequence === parsed.data.sequence)) {
+      response.status(409).json({ error: 'The Five Whys sequence already exists' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type CreateFiveWhyStepResult = null | { blocked: 'FINDING_VERIFIED' } | { step: AuditRootCauseAnalysisWithInclude['fiveWhySteps'][number] }
+    const result = await db.$transaction(async (tx): Promise<CreateFiveWhyStepResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      if (!locked || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT || locked.methodology !== 'FIVE_WHYS') return null
+      if (locked.fiveWhySteps.some((item) => item.sequence === parsed.data.sequence)) return null
+      const created = await tx.auditRootCauseFiveWhyStep.create({
+        data: {
+          analysisId: locked.id,
+          sequence: parsed.data.sequence,
+          question: parsed.data.question,
+          answer: parsed.data.answer,
+        },
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_FIVE_WHY_STEP_CREATED',
+        summary: `Five Whys step ${created.sequence} created`,
+        actor,
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, stepId: created.id, sequence: created.sequence },
+      })
+      return { step: created }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'The Five Whys step changed before it was created; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    response.status(201).json({ step: auditRootCauseFiveWhyStepView(result.step) })
+  })
+
+  const updateFiveWhyStepHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.extend({ stepId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+      stepId: String(request.params.stepId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid Five Whys step id' })
+      return
+    }
+    const parsed = auditRootCauseFiveWhyStepUpdateSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid Five Whys step data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    const existing = analysis?.fiveWhySteps.find((step) => step.id === parsedIds.data.stepId)
+    if (!analysis || !existing) {
+      response.status(404).json({ error: 'Five Whys step not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT || analysis.methodology !== 'FIVE_WHYS') {
+      response.status(409).json({ error: 'Only steps in a draft FIVE_WHYS analysis can be edited' })
+      return
+    }
+    if (parsed.data.sequence !== undefined && parsed.data.sequence !== existing.sequence && analysis.fiveWhySteps.some((step) => step.id !== existing.id && step.sequence === parsed.data.sequence)) {
+      response.status(409).json({ error: 'The Five Whys sequence already exists' })
+      return
+    }
+    const data: Prisma.AuditRootCauseFiveWhyStepUncheckedUpdateInput = {}
+    const changes: RiskAuditChange[] = []
+    if (parsed.data.sequence !== undefined && parsed.data.sequence !== existing.sequence) {
+      data.sequence = parsed.data.sequence
+      changes.push({ field: 'sequence', label: 'Sequence', previousValue: existing.sequence, newValue: parsed.data.sequence })
+    }
+    if (parsed.data.question !== undefined && parsed.data.question !== existing.question) {
+      data.question = parsed.data.question
+      changes.push({ field: 'question', label: 'Question', previousValue: existing.question, newValue: parsed.data.question })
+    }
+    if (parsed.data.answer !== undefined && parsed.data.answer !== existing.answer) {
+      data.answer = parsed.data.answer
+      changes.push({ field: 'answer', label: 'Answer', previousValue: existing.answer, newValue: parsed.data.answer })
+    }
+    if (changes.length === 0) {
+      response.json({ step: auditRootCauseFiveWhyStepView(existing) })
+      return
+    }
+    const actor = auditActorOf(request)
+    type UpdateStepResult = null | { blocked: 'FINDING_VERIFIED' } | { conflict: string } | { step: AuditRootCauseAnalysisWithInclude['fiveWhySteps'][number] }
+    const result = await db.$transaction(async (tx): Promise<UpdateStepResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      const lockedStep = locked?.fiveWhySteps.find((step) => step.id === existing.id)
+      if (!locked || !lockedStep || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT || locked.methodology !== 'FIVE_WHYS') return { conflict: 'The Five Whys step changed before this update was applied; reload and try again' }
+      if (typeof data.sequence === 'number' && locked.fiveWhySteps.some((step) => step.id !== existing.id && step.sequence === data.sequence)) return { conflict: 'The Five Whys sequence already exists' }
+      const updated = await tx.auditRootCauseFiveWhyStep.update({ where: { id: existing.id }, data })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_FIVE_WHY_STEP_UPDATED',
+        summary: `Five Whys step ${updated.sequence} updated`,
+        actor,
+        changes,
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, stepId: updated.id },
+      })
+      return { step: updated }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ step: auditRootCauseFiveWhyStepView(result.step) })
+  })
+
+  const deleteFiveWhyStepHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseAnalysisResourceIdsSchema.extend({ stepId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+      stepId: String(request.params.stepId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid Five Whys step id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    const stepExists = analysis?.fiveWhySteps.some((step) => step.id === parsedIds.data.stepId)
+    if (!analysis || !stepExists) {
+      response.status(404).json({ error: 'Five Whys step not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, analysis.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const findingError = verifiedRootCauseFindingError(finding)
+    if (findingError) {
+      response.status(findingError.status).json({ error: findingError.error, reason: findingError.reason })
+      return
+    }
+    if (analysis.status !== AuditRootCauseAnalysisStatus.DRAFT || analysis.methodology !== 'FIVE_WHYS') {
+      response.status(409).json({ error: 'Only steps in a draft FIVE_WHYS analysis can be deleted' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type DeleteFiveWhyStepResult = null | { blocked: 'FINDING_VERIFIED' } | { step: AuditRootCauseAnalysisWithInclude['fiveWhySteps'][number] }
+    const result = await db.$transaction(async (tx): Promise<DeleteFiveWhyStepResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await lockRootCauseFinding(tx, audit.id, analysis.findingId)
+      if (!lockedFinding) return null
+      if (lockedFinding.status === AuditFindingStatus.VERIFIED) return { blocked: 'FINDING_VERIFIED' }
+      const locked = await tx.auditRootCauseAnalysis.findUnique({ where: { id: analysis.id }, include: auditRootCauseAnalysisInclude })
+      const step = locked?.fiveWhySteps.find((item) => item.id === parsedIds.data.stepId)
+      if (!locked || !step || locked.findingId !== parsedIds.data.findingId || locked.status !== AuditRootCauseAnalysisStatus.DRAFT || locked.methodology !== 'FIVE_WHYS') return null
+      await tx.auditRootCauseFiveWhyStep.delete({ where: { id: step.id } })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'ROOT_CAUSE_FIVE_WHY_STEP_DELETED',
+        summary: `Five Whys step ${step.sequence} deleted`,
+        actor,
+        metadata: { findingId: lockedFinding.id, analysisId: locked.id, stepId: step.id, sequence: step.sequence },
+      })
+      return { step }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'The Five Whys step changed before it was deleted; reload and try again' })
+      return
+    }
+    if ('blocked' in result) {
+      response.status(409).json({ error: 'A verified finding cannot receive root cause changes', reason: result.blocked })
+      return
+    }
+    response.status(204).send()
+  })
+
+  app.post('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps', authMiddleware, userWriteGuard, withAuditProcessParam(createFiveWhyStepHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps', authMiddleware, userWriteGuard, createFiveWhyStepHandler)
+  app.patch('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps/:stepId', authMiddleware, userWriteGuard, withAuditProcessParam(updateFiveWhyStepHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps/:stepId', authMiddleware, userWriteGuard, updateFiveWhyStepHandler)
+  app.delete('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps/:stepId', authMiddleware, userWriteGuard, withAuditProcessParam(deleteFiveWhyStepHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/five-why-steps/:stepId', authMiddleware, userWriteGuard, deleteFiveWhyStepHandler)
+
+  // ---- Acciones correctivas ----
 
   // ---- Acciones correctivas ----
   const findAccessibleAction = async (auditId: string, actionId: string) => {
@@ -8101,6 +10091,310 @@ response.json({
       include: auditActionInclude,
     })
   }
+
+  const actionCauseIdsSchema = z.object({
+    processId: idReference,
+    auditId: idReference,
+    findingId: idReference,
+    actionId: idReference,
+  })
+  const actionCauseResourceIdsSchema = actionCauseIdsSchema.extend({ causeId: idReference })
+  const rootCauseActionsIdsSchema = rootCauseAnalysisResourceIdsSchema.extend({ causeId: idReference })
+
+  const findActionForFinding = async (auditId: string, findingId: string, actionId: string) => {
+    const action = await findAccessibleAction(auditId, actionId)
+    return action && action.findingId === findingId ? action : null
+  }
+
+  const parseCauseLinkQuery = (request: Request) => auditCorrectiveActionCauseQuerySchema.safeParse({ history: request.query.history })
+
+  const listActionCauseLinksHandler = asyncHandler(async (request, response) => {
+    const parsedIds = actionCauseIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid corrective action id' })
+      return
+    }
+    const parsedQuery = parseCauseLinkQuery(request)
+    if (!parsedQuery.success) {
+      response.status(400).json({ error: 'Invalid cause link query', details: parsedQuery.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    const action = await findActionForFinding(audit.id, parsedIds.data.findingId, parsedIds.data.actionId)
+    if (!finding || !action) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    const associations = await db.auditCorrectiveActionCause.findMany({
+      where: { findingId: finding.id, actionId: action.id, ...(parsedQuery.data.history ? {} : { isActive: true }) },
+      include: auditCorrectiveActionCauseInclude,
+      orderBy: [{ linkedAt: 'asc' }],
+    })
+    response.json({ associations: associations.map(auditCorrectiveActionCauseView) })
+  })
+
+  const listEligibleRootCausesHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, findingId: idReference }).safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid finding id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    if (!finding) {
+      response.status(404).json({ error: 'Finding not found' })
+      return
+    }
+    const causes = await db.auditRootCause.findMany({
+      where: { findingId: finding.id, status: 'CONFIRMED', analysis: { status: 'CONFIRMED' } },
+      include: auditRootCauseEligibilityInclude,
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+    })
+    response.json({ causes: causes.map(auditRootCauseEligibleView) })
+  })
+
+  const linkRootCausesHandler = asyncHandler(async (request, response) => {
+    const parsedIds = actionCauseIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid corrective action id' })
+      return
+    }
+    const parsed = auditCorrectiveActionCauseLinkSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ error: 'Invalid cause link data', details: parsed.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    const action = await findActionForFinding(audit.id, parsedIds.data.findingId, parsedIds.data.actionId)
+    if (!finding || !action) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status) || finding.status === AuditFindingStatus.VERIFIED || action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) {
+      response.status(409).json({ error: 'This audit, finding or corrective action does not accept cause links' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type LinkResult = null | { conflict: string } | { associations: AuditCorrectiveActionCauseWithInclude[] }
+    const result = await db.$transaction(async (tx): Promise<LinkResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: finding.id }, select: { id: true, auditId: true, status: true } })
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: action.id }, include: auditActionInclude })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED || !lockedAction || lockedAction.findingId !== finding.id || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED) return { conflict: 'The finding or corrective action changed before linking was applied' }
+      const causes = await tx.auditRootCause.findMany({
+        where: { id: { in: parsed.data.causeIds }, findingId: finding.id, status: 'CONFIRMED', analysis: { status: 'CONFIRMED' } },
+        include: auditRootCauseEligibilityInclude,
+      })
+      if (causes.length !== parsed.data.causeIds.length) return { conflict: 'All causes must be confirmed and belong to a confirmed analysis of this finding' }
+      const existingLinks = await tx.auditCorrectiveActionCause.findMany({
+        where: { findingId: finding.id, actionId: action.id, causeId: { in: parsed.data.causeIds } },
+        include: auditCorrectiveActionCauseInclude,
+      })
+      if (existingLinks.some((link) => link.isActive)) return { conflict: 'One or more causes are already linked to this corrective action' }
+      const now = new Date()
+      const associations: AuditCorrectiveActionCauseWithInclude[] = []
+      for (const cause of causes) {
+        const previous = existingLinks.find((link) => link.causeId === cause.id)
+        const association = previous
+          ? await tx.auditCorrectiveActionCause.update({
+              where: { id: previous.id },
+              data: { isActive: true, linkedAt: now, linkedById: request.user!.id, removedAt: null, removedById: null },
+              include: auditCorrectiveActionCauseInclude,
+            })
+          : await tx.auditCorrectiveActionCause.create({
+              data: { findingId: finding.id, actionId: action.id, causeId: cause.id, isActive: true, linkedAt: now, linkedById: request.user!.id },
+              include: auditCorrectiveActionCauseInclude,
+            })
+        associations.push(association)
+        await auditEventWrite(tx, {
+          auditId: audit.id,
+          eventType: 'CORRECTIVE_ACTION_CAUSE_LINKED',
+          summary: `Root cause linked to corrective action "${action.title}"`,
+          actor,
+          changes: [
+            { field: 'isActive', label: 'Active', previousValue: previous?.isActive ?? null, newValue: true },
+            { field: 'linkedAt', label: 'Linked at', previousValue: auditValue(previous?.linkedAt ?? null), newValue: auditValue(now) },
+          ],
+          metadata: {
+            findingId: finding.id,
+            analysisId: cause.analysis.id,
+            causeId: cause.id,
+            actionId: action.id,
+            associationId: association.id,
+            relinked: Boolean(previous),
+            previousRemovedAt: auditValue(previous?.removedAt ?? null),
+          },
+        })
+      }
+      return { associations }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.status(201).json({ associations: result.associations.map(auditCorrectiveActionCauseView) })
+  })
+
+  const unlinkRootCauseHandler = asyncHandler(async (request, response) => {
+    const parsedIds = actionCauseResourceIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      actionId: String(request.params.actionId),
+      causeId: String(request.params.causeId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid cause link id' })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const finding = await findRootCauseFinding(audit.id, parsedIds.data.findingId)
+    const action = await findActionForFinding(audit.id, parsedIds.data.findingId, parsedIds.data.actionId)
+    if (!finding || !action) {
+      response.status(404).json({ error: 'Corrective action not found' })
+      return
+    }
+    if (isTerminalAuditStatus(audit.status) || finding.status === AuditFindingStatus.VERIFIED || action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) {
+      response.status(409).json({ error: 'This audit, finding or corrective action does not accept cause link changes' })
+      return
+    }
+    const existing = await db.auditCorrectiveActionCause.findFirst({
+      where: { findingId: finding.id, actionId: action.id, causeId: parsedIds.data.causeId, isActive: true },
+      include: auditCorrectiveActionCauseInclude,
+    })
+    if (!existing) {
+      response.status(404).json({ error: 'Active cause link not found' })
+      return
+    }
+    const actor = auditActorOf(request)
+    type UnlinkResult = null | { conflict: string } | { association: AuditCorrectiveActionCauseWithInclude }
+    const result = await db.$transaction(async (tx): Promise<UnlinkResult> => {
+      const lockedAudit = await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: finding.id }, select: { id: true, auditId: true, status: true } })
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: action.id }, include: auditActionInclude })
+      const lockedLink = await tx.auditCorrectiveActionCause.findUnique({ where: { id: existing.id }, include: auditCorrectiveActionCauseInclude })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED || !lockedAction || lockedAction.findingId !== finding.id || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED || !lockedLink || !lockedLink.isActive) return { conflict: 'The cause link changed before it could be removed' }
+      const now = new Date()
+      const association = await tx.auditCorrectiveActionCause.update({
+        where: { id: lockedLink.id },
+        data: { isActive: false, removedAt: now, removedById: request.user!.id },
+        include: auditCorrectiveActionCauseInclude,
+      })
+      await auditEventWrite(tx, {
+        auditId: audit.id,
+        eventType: 'CORRECTIVE_ACTION_CAUSE_UNLINKED',
+        summary: `Root cause unlinked from corrective action "${action.title}"`,
+        actor,
+        changes: [
+          { field: 'isActive', label: 'Active', previousValue: true, newValue: false },
+          { field: 'removedAt', label: 'Removed at', previousValue: null, newValue: auditValue(now) },
+        ],
+        metadata: {
+          findingId: finding.id,
+          analysisId: lockedLink.cause.analysis.id,
+          causeId: lockedLink.causeId,
+          actionId: action.id,
+          associationId: association.id,
+          previousLinkedAt: auditValue(lockedLink.linkedAt),
+        },
+      })
+      return { association }
+    })
+    if (!result) {
+      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+      return
+    }
+    if ('conflict' in result) {
+      response.status(409).json({ error: result.conflict })
+      return
+    }
+    response.json({ association: auditCorrectiveActionCauseView(result.association) })
+  })
+
+  const listCauseActionLinksHandler = asyncHandler(async (request, response) => {
+    const parsedIds = rootCauseActionsIdsSchema.safeParse({
+      processId: String(request.params.processId),
+      auditId: String(request.params.auditId),
+      findingId: String(request.params.findingId),
+      analysisId: String(request.params.analysisId),
+      causeId: String(request.params.causeId),
+    })
+    if (!parsedIds.success) {
+      response.status(400).json({ error: 'Invalid root cause id' })
+      return
+    }
+    const parsedQuery = parseCauseLinkQuery(request)
+    if (!parsedQuery.success) {
+      response.status(400).json({ error: 'Invalid cause link query', details: parsedQuery.error.issues })
+      return
+    }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) {
+      response.status(404).json({ error: 'Audit not found' })
+      return
+    }
+    const analysis = await findAccessibleRootCauseAnalysis(parsedIds.data.findingId, parsedIds.data.analysisId)
+    const cause = analysis?.causes.find((item) => item.id === parsedIds.data.causeId)
+    if (!analysis || !cause) {
+      response.status(404).json({ error: 'Root cause not found' })
+      return
+    }
+    const associations = await db.auditCorrectiveActionCause.findMany({
+      where: { findingId: parsedIds.data.findingId, causeId: cause.id, ...(parsedQuery.data.history ? {} : { isActive: true }) },
+      include: auditCorrectiveActionCauseInclude,
+      orderBy: [{ linkedAt: 'asc' }],
+    })
+    response.json({ associations: associations.map(auditCorrectiveActionCauseView) })
+  })
+
+  app.get('/api/audits/:auditId/findings/:findingId/actions/:actionId/causes', authMiddleware, withAuditProcessParam(listActionCauseLinksHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/actions/:actionId/causes', authMiddleware, listActionCauseLinksHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/actions/:actionId/causes', authMiddleware, userWriteGuard, withAuditProcessParam(linkRootCausesHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/actions/:actionId/causes', authMiddleware, userWriteGuard, linkRootCausesHandler)
+  app.delete('/api/audits/:auditId/findings/:findingId/actions/:actionId/causes/:causeId', authMiddleware, userWriteGuard, withAuditProcessParam(unlinkRootCauseHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/findings/:findingId/actions/:actionId/causes/:causeId', authMiddleware, userWriteGuard, unlinkRootCauseHandler)
+  app.get('/api/audits/:auditId/findings/:findingId/eligible-root-causes', authMiddleware, withAuditProcessParam(listEligibleRootCausesHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/eligible-root-causes', authMiddleware, listEligibleRootCausesHandler)
+  app.get('/api/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/actions', authMiddleware, withAuditProcessParam(listCauseActionLinksHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/root-cause-analyses/:analysisId/causes/:causeId/actions', authMiddleware, listCauseActionLinksHandler)
 
   const listAuditActionsHandler = asyncHandler(async (request, response) => {
     const audit = await findAccessibleAudit(request, String(request.params.processId), String(request.params.auditId))
@@ -8146,9 +10440,30 @@ response.json({
       response.status(404).json({ error: 'Finding not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status) || finding.status === AuditFindingStatus.VERIFIED) {
+    if (finding.status === AuditFindingStatus.VERIFIED || (isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, finding.id)))) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
+    }
+    if (isTerminalAuditStatus(audit.status) && (!parsed.data.followUpId || !parsed.data.followUpReason || !parsed.data.followUpJustification?.trim())) {
+      response.status(400).json({ error: 'Post-close corrective actions require an active follow-up, a reason and a justification', reason: 'FOLLOW_UP_JUSTIFICATION_REQUIRED' })
+      return
+    }
+    let efficacyEvaluationId: string | null = null
+    if (parsed.data.efficacyEvaluationId) {
+      const evaluation = await db.auditEfficacyEvaluation.findFirst({
+        where: {
+          id: parsed.data.efficacyEvaluationId,
+           auditId: audit.id,
+           findingId: finding.id,
+           status: { in: [AuditEfficacyEvaluationStatus.IN_PROGRESS, AuditEfficacyEvaluationStatus.COMPLETED] },
+         },
+         select: { id: true, status: true, outcome: true },
+      })
+       if (!evaluation || (evaluation.status === AuditEfficacyEvaluationStatus.COMPLETED && evaluation.outcome !== AuditEfficacyOutcome.PARTIALLY_EFFECTIVE && evaluation.outcome !== AuditEfficacyOutcome.INEFFECTIVE)) {
+         response.status(409).json({ error: 'A follow-up corrective action must be linked to an in-progress or non-satisfactory efficacy evaluation', reason: 'EFFICACY_TREATMENT_REQUIRED' })
+        return
+      }
+      efficacyEvaluationId = evaluation.id
     }
     const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'action responsible')
     if (!responsible.ok) {
@@ -8157,17 +10472,33 @@ response.json({
     }
     const actor = auditActorOf(request)
     const action = await db.$transaction(async (tx) => {
-      const locked = await lockAuditForWrite(tx, audit.id)
+      const locked = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, finding.id)
+        : await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      const followUp = isTerminalAuditStatus(audit.status)
+        ? await tx.auditFollowUp.findFirst({ where: { id: parsed.data.followUpId!, auditId: audit.id, status: { in: ['ENABLED', 'IN_PROGRESS'] } }, select: { id: true } })
+        : null
+      if (isTerminalAuditStatus(audit.status) && !followUp) return null
       if (typeof responsible.userId === 'string') await assertActiveAssignmentUser(tx, responsible.userId, audit.process.companyId, 'Action responsible')
       const created = await tx.auditCorrectiveAction.create({
         data: {
           findingId: finding.id,
           title: parsed.data.title,
           description: parsed.data.description,
+          objective: parsed.data.objective ?? null,
+          implementationPlan: parsed.data.implementationPlan ?? null,
+          resources: parsed.data.resources ?? null,
+          observations: parsed.data.observations ?? null,
           responsibleId: responsible.userId,
           priority: parsed.data.priority ?? 'MEDIUM',
           required: parsed.data.required ?? true,
+          evidenceRequired: parsed.data.evidenceRequired ?? false,
+          workflowVersion: 1,
+          efficacyEvaluationId,
+          followUpId: followUp?.id ?? null,
+          followUpReason: followUp ? parsed.data.followUpReason : null,
+          followUpJustification: followUp ? parsed.data.followUpJustification?.trim() : null,
           dueDate: parsed.data.dueDate || null,
         },
         include: auditActionInclude,
@@ -8180,8 +10511,9 @@ response.json({
         changes: [
           { field: 'title', label: 'Título', previousValue: null, newValue: created.title },
           { field: 'required', label: 'Obligatoria', previousValue: null, newValue: String(created.required) },
+          { field: 'workflowVersion', label: 'Flujo integral', previousValue: null, newValue: String(created.workflowVersion) },
         ],
-        metadata: { findingId: finding.id, actionId: created.id },
+        metadata: { findingId: finding.id, actionId: created.id, ...(created.efficacyEvaluationId ? { efficacyEvaluationId: created.efficacyEvaluationId } : {}) },
       })
       return created
     })
@@ -8219,8 +10551,9 @@ response.json({
       response.status(404).json({ error: 'Corrective action not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status)) {
-      response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
+    const postCloseActionWrite = isTerminalAuditStatus(audit.status)
+    if (postCloseActionWrite && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) {
+      response.status(409).json({ error: 'Post-close corrective action changes require an active CAPA follow-up' })
       return
     }
     // Un estado final no se edita: el cambio de estado es la vía única de cerrar o cancelar.
@@ -8238,6 +10571,12 @@ response.json({
       data.description = parsed.data.description
       changes.push({ field: 'description', label: 'Descripción', previousValue: existing.description, newValue: parsed.data.description })
     }
+    for (const field of ['objective', 'implementationPlan', 'resources', 'observations'] as const) {
+      if (parsed.data[field] !== undefined && parsed.data[field] !== existing[field]) {
+        data[field] = parsed.data[field] ?? null
+        changes.push({ field, label: field === 'objective' ? 'Objetivo' : field === 'implementationPlan' ? 'Plan de implementación' : field === 'resources' ? 'Recursos' : 'Observaciones', previousValue: existing[field], newValue: parsed.data[field] ?? null })
+      }
+    }
     if (parsed.data.priority !== undefined && parsed.data.priority !== existing.priority) {
       data.priority = parsed.data.priority
       changes.push({ field: 'priority', label: 'Prioridad', previousValue: existing.priority, newValue: parsed.data.priority })
@@ -8245,6 +10584,10 @@ response.json({
     if (parsed.data.required !== undefined && parsed.data.required !== existing.required) {
       data.required = parsed.data.required
       changes.push({ field: 'required', label: 'Obligatoria', previousValue: String(existing.required), newValue: String(parsed.data.required) })
+    }
+    if (parsed.data.evidenceRequired !== undefined && parsed.data.evidenceRequired !== existing.evidenceRequired) {
+      data.evidenceRequired = parsed.data.evidenceRequired
+      changes.push({ field: 'evidenceRequired', label: 'Evidencia requerida', previousValue: String(existing.evidenceRequired), newValue: String(parsed.data.evidenceRequired) })
     }
     if (parsed.data.dueDate !== undefined) {
       const nextDate = parsed.data.dueDate || null
@@ -8273,7 +10616,9 @@ response.json({
     }
     const actor = auditActorOf(request)
     const action = await db.$transaction(async (tx) => {
-      const locked = await lockAuditForWrite(tx, audit.id)
+      const locked = postCloseActionWrite
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
       if (typeof data.responsibleId === 'string') await assertActiveAssignmentUser(tx, data.responsibleId, audit.process.companyId, 'Action responsible')
       const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
@@ -8321,29 +10666,47 @@ response.json({
       response.status(404).json({ error: 'Corrective action not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status)) {
+    if (isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    if (!canTransitionAuditAction(existing.status, parsed.data.status)) {
+    if (!canTransitionAuditAction(existing.status, parsed.data.status, existing.workflowVersion)) {
       response.status(409).json({ error: 'Invalid corrective action status transition' })
       return
     }
     const data: Prisma.AuditCorrectiveActionUncheckedUpdateInput = { status: parsed.data.status }
+    if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED && parsed.data.observations !== undefined) data.observations = parsed.data.observations || null
     if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED) data.completedAt = new Date()
     if (parsed.data.status === AuditCorrectiveActionStatus.CANCELLED || parsed.data.status === AuditCorrectiveActionStatus.OPEN) data.completedAt = null
     const actor = auditActorOf(request)
-    type ActionStatusChangeResult = null | { conflict: true } | { action: AuditActionWithInclude }
+    type ActionStatusChangeResult = null | { conflict: true } | { invalid: string } | { action: AuditActionWithInclude }
     const action = await db.$transaction(async (tx): Promise<ActionStatusChangeResult> => {
-      const locked = await lockAuditForWrite(tx, audit.id)
+      const locked = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
       const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: existing.id }, include: auditActionInclude })
-      if (!lockedAction || lockedAction.findingId !== existing.findingId || !canTransitionAuditAction(lockedAction.status, parsed.data.status)) {
+      if (!lockedAction || lockedAction.findingId !== existing.findingId || !canTransitionAuditAction(lockedAction.status, parsed.data.status, lockedAction.workflowVersion)) {
         return { conflict: true }
+      }
+      if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED && lockedAction.workflowVersion === 1) {
+        if (!lockedAction.responsibleId) return { invalid: 'Las acciones integrales requieren un responsable activo para completarse' }
+        await assertActiveAssignmentUser(tx, lockedAction.responsibleId, audit.process.companyId, 'Action responsible')
+        if (lockedAction.progressPercent !== 100) return { invalid: 'La acción debe tener un avance del 100% para completarse' }
+        if (!parsed.data.observations?.trim()) return { invalid: 'Registra las observaciones finales antes de completar la acción' }
+        const pendingImplementation = lockedAction.acceptanceCriteria?.some((criterion) => criterion.type === 'IMPLEMENTATION' && criterion.required && !criterion.isMet) ?? false
+        if (pendingImplementation) return { invalid: 'Completa todos los criterios de implementación obligatorios antes de finalizar la acción' }
+        if (lockedAction.evidenceRequired) {
+          const hasEvidence = (lockedAction.evidences?.length ?? 0) > 0 || lockedAction.evidenceFiles?.some((file) => file.storageState === 'READY') === true
+          if (!hasEvidence) return { invalid: 'Registra al menos una evidencia oficial antes de completar la acción' }
+        }
       }
       const changes: RiskAuditChange[] = [
         { field: 'status', label: 'Estado de la acción', previousValue: lockedAction.status, newValue: parsed.data.status },
       ]
+      if (parsed.data.status === AuditCorrectiveActionStatus.COMPLETED && parsed.data.observations !== undefined && parsed.data.observations !== lockedAction.observations) {
+        changes.push({ field: 'observations', label: 'Observaciones finales', previousValue: lockedAction.observations, newValue: parsed.data.observations || null })
+      }
       const updated = await tx.auditCorrectiveAction.update({ where: { id: existing.id }, data, include: auditActionInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
@@ -8361,6 +10724,10 @@ response.json({
     }
     if ('conflict' in action) {
       response.status(409).json({ error: 'The corrective action changed before this transition was applied; reload and try again' })
+      return
+    }
+    if ('invalid' in action) {
+      response.status(409).json({ error: action.invalid, reason: 'ACTION_COMPLETION_REQUIREMENTS' })
       return
     }
     response.json({ action: auditActionView(action.action) })
@@ -8393,7 +10760,7 @@ response.json({
       response.status(404).json({ error: 'Corrective action not found' })
       return
     }
-    if (isTerminalAuditStatus(audit.status)) {
+    if (isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
@@ -8401,37 +10768,543 @@ response.json({
       response.status(409).json({ error: 'A completed or cancelled corrective action cannot receive progress' })
       return
     }
+    const progressNote = [
+      parsed.data.note?.trim(),
+      parsed.data.activities?.trim() ? `Actividades realizadas: ${parsed.data.activities.trim()}` : null,
+      parsed.data.results?.trim() ? `Resultados obtenidos: ${parsed.data.results.trim()}` : null,
+      parsed.data.difficulties?.trim() ? `Dificultades: ${parsed.data.difficulties.trim()}` : null,
+      parsed.data.pendingActivities?.trim() ? `Actividades pendientes: ${parsed.data.pendingActivities.trim()}` : null,
+      parsed.data.observations?.trim() ? `Observaciones: ${parsed.data.observations.trim()}` : null,
+    ].filter((value): value is string => Boolean(value)).join('\n')
     const actor = auditActorOf(request)
     const entry = await db.$transaction(async (tx) => {
-      const locked = await lockAuditForWrite(tx, audit.id)
+      const locked = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
       if (!locked) return null
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: existing.id }, include: auditActionInclude })
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: existing.findingId }, select: { id: true, auditId: true, status: true } })
+      if (!lockedAction || lockedAction.findingId !== existing.findingId || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED || !lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED) return null
+      const nextPercent = parsed.data.percent ?? lockedAction.progressPercent
       const created = await tx.auditActionProgress.create({
         data: {
           actionId: existing.id,
-          note: parsed.data.note,
+          note: progressNote,
           percent: parsed.data.percent ?? null,
           createdById: request.user?.id ?? null,
         },
         include: { createdBy: { select: { id: true, name: true } } },
       })
+      const updated = parsed.data.percent === undefined || parsed.data.percent === null
+        ? lockedAction
+        : await tx.auditCorrectiveAction.update({ where: { id: lockedAction.id }, data: { progressPercent: nextPercent }, include: auditActionInclude })
       await auditEventWrite(tx, {
         auditId: audit.id,
         eventType: 'ACTION_PROGRESS_ADDED',
         summary: `Avance registrado en «${existing.title}»`,
         actor,
-        changes: [{ field: 'note', label: 'Avance', previousValue: null, newValue: created.note }],
-        metadata: { findingId: existing.findingId, actionId: existing.id, progressId: created.id },
+        changes: [
+          { field: 'note', label: 'Avance', previousValue: null, newValue: created.note },
+          ...(parsed.data.percent !== undefined && parsed.data.percent !== null ? [{ field: 'progressPercent', label: 'Porcentaje de avance', previousValue: lockedAction.progressPercent, newValue: nextPercent }] : []),
+        ],
+        metadata: { findingId: existing.findingId, actionId: existing.id, progressId: created.id, progressPercent: nextPercent },
       })
-      return created
+      return { created, progressPercent: updated.progressPercent }
     })
     if (!entry) {
       response.status(409).json({ error: 'This audit is closed; no further changes are allowed' })
       return
     }
-    response.status(201).json({ progress: auditActionProgressView(entry as never) })
+    response.status(201).json({ progress: auditActionProgressView(entry.created as never), progressPercent: entry.progressPercent })
   })
   app.post('/api/audits/:auditId/actions/:actionId/progress', authMiddleware, userWriteGuard, withAuditProcessParam(addAuditActionProgressHandler))
   app.post('/api/processes/:processId/audits/:auditId/actions/:actionId/progress', authMiddleware, userWriteGuard, addAuditActionProgressHandler)
+
+  const listActionAcceptanceCriteriaHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId), auditId: String(request.params.auditId), actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid action id' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const action = audit ? await findAccessibleAction(audit.id, parsedIds.data.actionId) : null
+    if (!audit || !action) { response.status(404).json({ error: 'Corrective action not found' }); return }
+    response.json({ criteria: action.acceptanceCriteria.map(auditActionAcceptanceCriterionView) })
+  })
+
+  const createActionAcceptanceCriterionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
+      processId: String(request.params.processId), auditId: String(request.params.auditId), actionId: String(request.params.actionId),
+    })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid action id' }); return }
+    const parsed = auditActionAcceptanceCriterionCreateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid acceptance criterion data', details: parsed.error.issues }); return }
+    if (parsed.data.type === 'EFFECTIVENESS' && parsed.data.isMet) { response.status(409).json({ error: 'Effectiveness criteria are reserved for formal evaluation in a later block' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const action = audit ? await findAccessibleAction(audit.id, parsedIds.data.actionId) : null
+    if (!audit || !action) { response.status(404).json({ error: 'Corrective action not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, action.findingId))) || action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) { response.status(409).json({ error: 'This audit or corrective action does not accept criterion changes' }); return }
+    const finding = await db.auditFinding.findFirst({ where: { id: action.findingId, auditId: audit.id }, select: { status: true } })
+    if (!finding) { response.status(404).json({ error: 'Finding not found' }); return }
+    if (finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'A verified finding cannot receive acceptance criteria', reason: 'FINDING_VERIFIED' }); return }
+    const actor = auditActorOf(request)
+    const criterion = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, action.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: action.id }, include: auditActionInclude })
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: action.findingId }, select: { id: true, auditId: true, status: true } })
+      if (!lockedAction || lockedAction.findingId !== action.findingId || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED || !lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED) return null
+      const created = await tx.auditActionAcceptanceCriterion.create({
+        data: {
+          actionId: lockedAction.id,
+          type: parsed.data.type ?? 'IMPLEMENTATION',
+          description: parsed.data.description,
+          expectedResult: parsed.data.expectedResult,
+          required: parsed.data.required ?? true,
+          isMet: parsed.data.isMet ?? false,
+          observations: parsed.data.observations ?? null,
+          completedAt: parsed.data.isMet ? new Date() : null,
+          completedById: parsed.data.isMet ? request.user!.id : null,
+          createdById: request.user!.id,
+        },
+        include: { createdBy: { select: { id: true, name: true, isActive: true } }, completedBy: { select: { id: true, name: true, isActive: true } } },
+      })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: 'ACTION_UPDATED', summary: `Criterio de aceptación añadido a «${lockedAction.title}»`, actor, changes: [{ field: 'acceptanceCriterion', label: 'Criterio de aceptación', previousValue: null, newValue: created.description }], metadata: { findingId: lockedAction.findingId, actionId: lockedAction.id, criterionId: created.id, criterionType: created.type } })
+      return created
+    })
+    if (!criterion) { response.status(409).json({ error: 'The action or finding changed before the criterion was added' }); return }
+    response.status(201).json({ criterion: auditActionAcceptanceCriterionView(criterion as never) })
+  })
+
+  const updateActionAcceptanceCriterionHandler = asyncHandler(async (request, response) => {
+    const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference, criterionId: idReference }).safeParse({
+      processId: String(request.params.processId), auditId: String(request.params.auditId), actionId: String(request.params.actionId), criterionId: String(request.params.criterionId),
+    })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid acceptance criterion id' }); return }
+    const parsed = auditActionAcceptanceCriterionUpdateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid acceptance criterion data', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const action = audit ? await findAccessibleAction(audit.id, parsedIds.data.actionId) : null
+    const existing = action ? await db.auditActionAcceptanceCriterion.findFirst({ where: { id: parsedIds.data.criterionId, actionId: action.id } }) : null
+    if (!audit || !action || !existing) { response.status(404).json({ error: 'Acceptance criterion not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, action.findingId))) || action.status === AuditCorrectiveActionStatus.COMPLETED || action.status === AuditCorrectiveActionStatus.CANCELLED) { response.status(409).json({ error: 'This audit or corrective action does not accept criterion changes' }); return }
+    const nextType = parsed.data.type ?? existing.type
+    const nextIsMet = parsed.data.isMet ?? existing.isMet
+    if (nextType === 'EFFECTIVENESS' && nextIsMet) { response.status(409).json({ error: 'Effectiveness criteria are reserved for formal evaluation in a later block' }); return }
+    const finding = await db.auditFinding.findFirst({ where: { id: action.findingId, auditId: audit.id }, select: { status: true } })
+    if (!finding) { response.status(404).json({ error: 'Finding not found' }); return }
+    if (finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'A verified finding cannot receive acceptance criterion changes', reason: 'FINDING_VERIFIED' }); return }
+    const actor = auditActorOf(request)
+    const criterion = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, action.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: action.id }, include: auditActionInclude })
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: action.findingId }, select: { id: true, auditId: true, status: true } })
+      const lockedCriterion = await tx.auditActionAcceptanceCriterion.findUnique({ where: { id: existing.id } })
+      if (!lockedAction || lockedAction.status === AuditCorrectiveActionStatus.COMPLETED || lockedAction.status === AuditCorrectiveActionStatus.CANCELLED || !lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED || !lockedCriterion || lockedCriterion.actionId !== lockedAction.id) return null
+      const data: Prisma.AuditActionAcceptanceCriterionUncheckedUpdateInput = {}
+      for (const field of ['type', 'description', 'expectedResult', 'required', 'observations'] as const) if (parsed.data[field] !== undefined) data[field] = parsed.data[field] as never
+      if (parsed.data.isMet !== undefined) {
+        data.isMet = parsed.data.isMet
+        data.completedAt = parsed.data.isMet ? new Date() : null
+        data.completedById = parsed.data.isMet ? request.user!.id : null
+      }
+      const updated = await tx.auditActionAcceptanceCriterion.update({ where: { id: lockedCriterion.id }, data, include: { createdBy: { select: { id: true, name: true, isActive: true } }, completedBy: { select: { id: true, name: true, isActive: true } } } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: 'ACTION_UPDATED', summary: `Criterio de aceptación actualizado en «${lockedAction.title}»`, actor, changes: [{ field: 'acceptanceCriterion', label: 'Criterio de aceptación', previousValue: lockedCriterion.description, newValue: updated.description }], metadata: { findingId: lockedAction.findingId, actionId: lockedAction.id, criterionId: updated.id, criterionType: updated.type } })
+      return updated
+    })
+    if (!criterion) { response.status(409).json({ error: 'The action or criterion changed before the update was applied' }); return }
+    response.json({ criterion: auditActionAcceptanceCriterionView(criterion as never) })
+  })
+
+  app.get('/api/audits/:auditId/actions/:actionId/acceptance-criteria', authMiddleware, withAuditProcessParam(listActionAcceptanceCriteriaHandler))
+  app.get('/api/processes/:processId/audits/:auditId/actions/:actionId/acceptance-criteria', authMiddleware, listActionAcceptanceCriteriaHandler)
+  app.post('/api/audits/:auditId/actions/:actionId/acceptance-criteria', authMiddleware, userWriteGuard, withAuditProcessParam(createActionAcceptanceCriterionHandler))
+  app.post('/api/processes/:processId/audits/:auditId/actions/:actionId/acceptance-criteria', authMiddleware, userWriteGuard, createActionAcceptanceCriterionHandler)
+  app.patch('/api/audits/:auditId/actions/:actionId/acceptance-criteria/:criterionId', authMiddleware, userWriteGuard, withAuditProcessParam(updateActionAcceptanceCriterionHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/actions/:actionId/acceptance-criteria/:criterionId', authMiddleware, userWriteGuard, updateActionAcceptanceCriterionHandler)
+
+  const efficacyEvaluationIdsSchema = z.object({ processId: idReference, auditId: idReference, evaluationId: idReference })
+  const efficacyFindingIdsSchema = z.object({ processId: idReference, auditId: idReference, findingId: idReference })
+  const efficacyEvaluationCriterionIdsSchema = efficacyEvaluationIdsSchema.extend({ criterionResultId: idReference })
+
+  const findAccessibleEfficacyEvaluation = async (auditId: string, evaluationId: string) => db.auditEfficacyEvaluation.findFirst({
+    where: { id: evaluationId, auditId },
+    include: auditEfficacyEvaluationInclude,
+  })
+
+  const efficacyEvaluationTransitionAllowed = (from: AuditEfficacyEvaluationStatus, to: AuditEfficacyEvaluationStatus) => (
+    (from === AuditEfficacyEvaluationStatus.PLANNED && (to === AuditEfficacyEvaluationStatus.IN_PROGRESS || to === AuditEfficacyEvaluationStatus.CANCELLED))
+    || (from === AuditEfficacyEvaluationStatus.IN_PROGRESS && (to === AuditEfficacyEvaluationStatus.COMPLETED || to === AuditEfficacyEvaluationStatus.CANCELLED))
+  )
+
+  const evaluationCompletionError = async (
+    client: Prisma.TransactionClient | PrismaClient,
+    evaluation: AuditEfficacyEvaluationWithInclude,
+    outcome: AuditEfficacyOutcome,
+    conclusion: string | null,
+    recurrenceDetected: boolean,
+    recurrenceDescription: string | null,
+  ): Promise<string | null> => {
+    if (evaluation.action.status !== AuditCorrectiveActionStatus.COMPLETED) return 'The corrective action must be completed before its efficacy can be evaluated'
+    await assertActiveAssignmentUser(client, evaluation.responsible.id, (await client.audit.findUnique({ where: { id: evaluation.auditId }, select: { process: { select: { companyId: true } } } }))?.process.companyId ?? '', 'Efficacy evaluation responsible')
+    const missingResults = evaluation.criteria.filter((criterion) => criterion.required && (criterion.isMet === null || (!criterion.resultObtained?.trim() && !criterion.measuredValue?.trim())))
+    if (missingResults.length > 0) return 'Complete every required efficacy criterion result before finalizing the evaluation'
+    if (!conclusion?.trim()) return 'A technical conclusion is required before finalizing the efficacy evaluation'
+    if (outcome === AuditEfficacyOutcome.PENDING) return 'Select a definitive efficacy outcome before finalizing the evaluation'
+    if (outcome === AuditEfficacyOutcome.EFFECTIVE && evaluation.criteria.some((criterion) => criterion.required && criterion.isMet !== true)) return 'An effective evaluation requires every required efficacy criterion to be met'
+    if (outcome === AuditEfficacyOutcome.EFFECTIVE && recurrenceDetected) return 'A recurring issue cannot receive an effective efficacy outcome'
+    if (recurrenceDetected && !recurrenceDescription?.trim()) return 'Describe the recurrence before finalizing the evaluation'
+    if (evaluation.observationEndDate && evaluation.observationEndDate.getTime() > Date.now()) return 'The observation period has not ended yet'
+    const evidenceReady = evaluation.evidenceLinks.length > 0 || evaluation.evidenceFileLinks.some((link) => link.evidenceFile.storageState === 'READY')
+    if (!evidenceReady) return 'Attach at least one objective URL or READY PDF evidence before finalizing the evaluation'
+    if (outcome === AuditEfficacyOutcome.PARTIALLY_EFFECTIVE || outcome === AuditEfficacyOutcome.INEFFECTIVE) {
+      const treatmentCount = await client.auditCorrectiveAction.count({ where: { efficacyEvaluationId: evaluation.id, status: { notIn: [AuditCorrectiveActionStatus.CANCELLED] } } })
+      if (treatmentCount === 0) return 'Create a follow-up corrective action before finalizing a partially effective or ineffective evaluation'
+    }
+    return null
+  }
+
+  const listEfficacyEvaluationsHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyFindingIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), findingId: String(request.params.findingId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid finding id' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const finding = audit ? await db.auditFinding.findFirst({ where: { id: parsedIds.data.findingId, auditId: audit.id }, select: { id: true } }) : null
+    if (!audit || !finding) { response.status(404).json({ error: 'Finding not found' }); return }
+    const evaluations = await db.auditEfficacyEvaluation.findMany({ where: { auditId: audit.id, findingId: finding.id }, include: auditEfficacyEvaluationInclude, orderBy: [{ createdAt: 'desc' }] })
+    response.json({ evaluations: evaluations.map(auditEfficacyEvaluationView) })
+  })
+
+  const createEfficacyEvaluationHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyFindingIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), findingId: String(request.params.findingId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid finding id' }); return }
+    const parsed = auditEfficacyEvaluationCreateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy evaluation plan', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    if (!audit) { response.status(404).json({ error: 'Audit not found' }); return }
+    const finding = await db.auditFinding.findFirst({ where: { id: parsedIds.data.findingId, auditId: audit.id }, select: { id: true, status: true } })
+    const action = finding ? await db.auditCorrectiveAction.findFirst({ where: { id: parsed.data.actionId, findingId: finding.id }, include: { acceptanceCriteria: { where: { type: 'EFFECTIVENESS' }, orderBy: { createdAt: 'asc' } } } }) : null
+    if (!finding || !action) { response.status(404).json({ error: 'Corrective action not found for this finding' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, finding.id))) || finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'This audit or finding does not accept efficacy evaluations' }); return }
+    if (action.status !== AuditCorrectiveActionStatus.COMPLETED) { response.status(409).json({ error: 'Only completed corrective actions can be evaluated for efficacy', reason: 'ACTION_NOT_COMPLETED' }); return }
+    const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'action responsible')
+    if (!responsible.ok) { response.status(responsible.status).json({ error: responsible.error }); return }
+    if (!responsible.userId) { response.status(400).json({ error: 'An efficacy evaluation responsible is required' }); return }
+    const actor = auditActorOf(request)
+    const evaluation = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, finding.id)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const followUp = isTerminalAuditStatus(audit.status)
+        ? await tx.auditFollowUp.findFirst({ where: { auditId: audit.id, status: { in: ['ENABLED', 'IN_PROGRESS'] } }, select: { id: true } })
+        : null
+      if (isTerminalAuditStatus(audit.status) && !followUp) return null
+      const lockedFinding = await tx.auditFinding.findUnique({ where: { id: finding.id }, select: { id: true, auditId: true, status: true } })
+      const lockedAction = await tx.auditCorrectiveAction.findUnique({ where: { id: action.id }, include: { acceptanceCriteria: { where: { type: 'EFFECTIVENESS' }, orderBy: { createdAt: 'asc' } } } })
+      if (!lockedFinding || lockedFinding.auditId !== audit.id || lockedFinding.status === AuditFindingStatus.VERIFIED || !lockedAction || lockedAction.findingId !== lockedFinding.id || lockedAction.status !== AuditCorrectiveActionStatus.COMPLETED) return null
+      await assertActiveAssignmentUser(tx, responsible.userId!, audit.process.companyId, 'Action responsible')
+      const created = await tx.auditEfficacyEvaluation.create({
+        data: {
+          auditId: audit.id,
+          findingId: lockedFinding.id,
+          actionId: lockedAction.id,
+          responsibleId: responsible.userId!,
+          scheduledDate: parsed.data.scheduledDate ?? null,
+          methodology: parsed.data.methodology,
+          methodologyOther: parsed.data.methodologyOther ?? null,
+          observationPeriod: parsed.data.observationPeriod ?? null,
+          observationStartDate: parsed.data.observationStartDate ?? null,
+          observationEndDate: parsed.data.observationEndDate ?? null,
+          scope: parsed.data.scope,
+          observations: parsed.data.observations ?? null,
+          createdById: request.user!.id,
+          followUpId: followUp?.id ?? null,
+        },
+      })
+      for (const criterion of lockedAction.acceptanceCriteria) {
+        await tx.auditEfficacyCriterionResult.create({ data: { evaluationId: created.id, criterionId: criterion.id, description: criterion.description, expectedResult: criterion.expectedResult, required: criterion.required } })
+      }
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_CREATED, summary: `Evaluación de eficacia planificada para «${lockedAction.title}»`, actor, metadata: { findingId: lockedFinding.id, actionId: lockedAction.id, evaluationId: created.id, criterionCount: lockedAction.acceptanceCriteria.length } })
+      return tx.auditEfficacyEvaluation.findUnique({ where: { id: created.id }, include: auditEfficacyEvaluationInclude })
+    })
+    if (!evaluation) { response.status(409).json({ error: 'The action or finding changed before the efficacy plan was created' }); return }
+    response.status(201).json({ evaluation: auditEfficacyEvaluationView(evaluation) })
+  })
+
+  const getEfficacyEvaluationHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const evaluation = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !evaluation) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    response.json({ evaluation: auditEfficacyEvaluationView(evaluation) })
+  })
+
+  const updateEfficacyEvaluationHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const parsed = auditEfficacyEvaluationUpdateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy evaluation plan', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const existing = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !existing) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) || existing.status === AuditEfficacyEvaluationStatus.COMPLETED || existing.status === AuditEfficacyEvaluationStatus.CANCELLED) { response.status(409).json({ error: 'A completed or cancelled efficacy evaluation cannot be edited' }); return }
+    if (existing.action.status !== AuditCorrectiveActionStatus.COMPLETED || existing.finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'The action must remain completed and the finding must remain unverified' }); return }
+    if (parsed.data.responsibleId) {
+      const responsible = await resolveUserInCompany(parsed.data.responsibleId, audit.process.companyId, 'action responsible')
+      if (!responsible.ok) { response.status(responsible.status).json({ error: responsible.error }); return }
+    }
+    const changes: RiskAuditChange[] = Object.keys(parsed.data).map((field) => ({ field, label: `Evaluación: ${field}`, previousValue: auditValue((existing as unknown as Record<string, unknown>)[field]), newValue: auditValue((parsed.data as unknown as Record<string, unknown>)[field]) }))
+    const actor = auditActorOf(request)
+    const updated = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const locked = await tx.auditEfficacyEvaluation.findUnique({ where: { id: existing.id }, include: auditEfficacyEvaluationInclude })
+      if (!locked || locked.status === AuditEfficacyEvaluationStatus.COMPLETED || locked.status === AuditEfficacyEvaluationStatus.CANCELLED || locked.finding.status === AuditFindingStatus.VERIFIED || locked.action.status !== AuditCorrectiveActionStatus.COMPLETED) return null
+      if (parsed.data.responsibleId) await assertActiveAssignmentUser(tx, parsed.data.responsibleId, audit.process.companyId, 'Efficacy evaluation responsible')
+      const result = await tx.auditEfficacyEvaluation.update({ where: { id: locked.id }, data: parsed.data, include: auditEfficacyEvaluationInclude })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_UPDATED, summary: `Evaluación de eficacia actualizada`, actor, changes, metadata: { findingId: result.findingId, actionId: result.actionId, evaluationId: result.id } })
+      return result
+    })
+    if (!updated) { response.status(409).json({ error: 'The efficacy evaluation changed before the update was applied' }); return }
+    response.json({ evaluation: auditEfficacyEvaluationView(updated) })
+  })
+
+  const addEfficacyEvaluationProgressHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const parsed = auditEfficacyEvaluationProgressCreateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy evaluation progress', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const existing = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !existing) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) || existing.status !== AuditEfficacyEvaluationStatus.IN_PROGRESS || existing.finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'Progress can only be recorded on an in-progress efficacy evaluation' }); return }
+    const actor = auditActorOf(request)
+    const progress = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const locked = await tx.auditEfficacyEvaluation.findUnique({ where: { id: existing.id }, select: { id: true, status: true, findingId: true, actionId: true } })
+      if (!locked || locked.status !== AuditEfficacyEvaluationStatus.IN_PROGRESS) return null
+      const created = await tx.auditEfficacyEvaluationProgress.create({ data: { evaluationId: locked.id, note: parsed.data.note, results: parsed.data.results ?? null, difficulties: parsed.data.difficulties ?? null, pendingActivities: parsed.data.pendingActivities ?? null, percent: parsed.data.percent ?? null, createdById: request.user!.id }, include: { createdBy: { select: { id: true, name: true, isActive: true } } } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_PROGRESS_ADDED, summary: `Avance registrado en la evaluación de eficacia`, actor, metadata: { findingId: locked.findingId, actionId: locked.actionId, evaluationId: locked.id, progressId: created.id, percent: created.percent } })
+      return created
+    })
+    if (!progress) { response.status(409).json({ error: 'The efficacy evaluation changed before progress was recorded' }); return }
+    response.status(201).json({ progress })
+  })
+
+  const updateEfficacyCriterionResultHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationCriterionIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId), criterionResultId: String(request.params.criterionResultId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy criterion result id' }); return }
+    const parsed = auditEfficacyCriterionResultUpdateSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy criterion result', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const existing = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !existing) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) || existing.status === AuditEfficacyEvaluationStatus.COMPLETED || existing.status === AuditEfficacyEvaluationStatus.CANCELLED || existing.finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'A final efficacy evaluation cannot be edited' }); return }
+    const result = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const criterion = await tx.auditEfficacyCriterionResult.findFirst({ where: { id: parsedIds.data.criterionResultId, evaluationId: existing.id } })
+      if (!criterion) return null
+      const updated = await tx.auditEfficacyCriterionResult.update({ where: { id: criterion.id }, data: { ...parsed.data, ...(parsed.data.isMet !== undefined ? { evaluatedById: request.user!.id, evaluatedAt: new Date() } : {}) }, include: { criterion: { select: { id: true, type: true, description: true, expectedResult: true, required: true } }, evaluatedBy: { select: { id: true, name: true, isActive: true } } } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_UPDATED, summary: `Resultado de criterio de eficacia actualizado`, actor: auditActorOf(request), changes: [{ field: 'criterionResult', label: 'Resultado de criterio', previousValue: criterion.resultObtained ?? criterion.measuredValue, newValue: updated.resultObtained ?? updated.measuredValue }], metadata: { findingId: existing.findingId, actionId: existing.actionId, evaluationId: existing.id, criterionResultId: updated.id, criterionId: updated.criterionId } })
+      return updated
+    })
+    if (!result) { response.status(409).json({ error: 'The efficacy criterion result changed before the update was applied' }); return }
+    response.json({ criterion: result })
+  })
+
+  const changeEfficacyEvaluationStatusHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const parsed = auditEfficacyEvaluationStatusChangeSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy evaluation status change', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const existing = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !existing) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, existing.findingId))) || existing.finding.status === AuditFindingStatus.VERIFIED) { response.status(409).json({ error: 'This audit or finding does not accept efficacy evaluation changes' }); return }
+    if (!efficacyEvaluationTransitionAllowed(existing.status, parsed.data.status)) { response.status(409).json({ error: 'Invalid efficacy evaluation status transition' }); return }
+    const actor = auditActorOf(request)
+    const result = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, existing.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const locked = await tx.auditEfficacyEvaluation.findUnique({ where: { id: existing.id }, include: auditEfficacyEvaluationInclude })
+      if (!locked || !efficacyEvaluationTransitionAllowed(locked.status, parsed.data.status) || locked.finding.status === AuditFindingStatus.VERIFIED || locked.action.status !== AuditCorrectiveActionStatus.COMPLETED) return { conflict: true as const }
+      const nextOutcome = parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED ? (parsed.data.outcome ?? AuditEfficacyOutcome.PENDING) : locked.outcome
+      const recurrenceDetected = parsed.data.recurrenceDetected ?? locked.recurrenceDetected
+      const recurrenceDescription = parsed.data.recurrenceDescription !== undefined ? parsed.data.recurrenceDescription : locked.recurrenceDescription
+      const conclusion = parsed.data.conclusion !== undefined ? parsed.data.conclusion : locked.conclusion
+      if (parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED) {
+        const invalid = await evaluationCompletionError(tx, locked, nextOutcome, conclusion, recurrenceDetected, recurrenceDescription)
+        if (invalid) return { invalid } as const
+      }
+       const now = new Date()
+       const cancellationObservation = parsed.data.status === AuditEfficacyEvaluationStatus.CANCELLED
+         ? `Cancelación de la evaluación: ${parsed.data.justification!.trim()}`
+         : null
+       const updated = await tx.auditEfficacyEvaluation.update({
+        where: { id: locked.id },
+        data: {
+          status: parsed.data.status,
+          ...(parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED ? { outcome: nextOutcome, conclusion, recurrenceDetected, recurrenceDescription, recurrenceIdentifiedAt: recurrenceDetected ? (locked.recurrenceIdentifiedAt ?? now) : null, completedAt: now, completedById: request.user!.id } : {}),
+           ...(parsed.data.status === AuditEfficacyEvaluationStatus.IN_PROGRESS ? { startedAt: locked.startedAt ?? now } : {}),
+           ...(cancellationObservation ? { observations: [locked.observations, cancellationObservation].filter(Boolean).join('\n') } : {}),
+        },
+        include: auditEfficacyEvaluationInclude,
+      })
+      if (parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED) {
+        const legacyText = `Dictamen de eficacia: ${nextOutcome === AuditEfficacyOutcome.EFFECTIVE ? 'Eficaz' : nextOutcome === AuditEfficacyOutcome.PARTIALLY_EFFECTIVE ? 'Parcialmente eficaz' : 'No eficaz'}. ${conclusion}`
+        await tx.auditFinding.update({ where: { id: locked.findingId }, data: { efficacyVerification: legacyText } })
+      }
+       await auditEventWrite(tx, { auditId: audit.id, eventType: parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED ? AuditEventType.EFFICACY_EVALUATION_COMPLETED : parsed.data.status === AuditEfficacyEvaluationStatus.CANCELLED ? AuditEventType.EFFICACY_EVALUATION_CANCELLED : AuditEventType.EFFICACY_EVALUATION_STARTED, summary: parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED ? `Evaluación de eficacia finalizada` : parsed.data.status === AuditEfficacyEvaluationStatus.CANCELLED ? `Evaluación de eficacia cancelada` : `Evaluación de eficacia iniciada`, actor, changes: [{ field: 'status', label: 'Estado de evaluación', previousValue: locked.status, newValue: updated.status }, ...(parsed.data.status === AuditEfficacyEvaluationStatus.COMPLETED ? [{ field: 'outcome', label: 'Dictamen de eficacia', previousValue: locked.outcome, newValue: updated.outcome }, { field: 'conclusion', label: 'Conclusión técnica', previousValue: locked.conclusion, newValue: updated.conclusion }] : []), ...(cancellationObservation ? [{ field: 'justification', label: 'Justificación de cancelación', previousValue: null, newValue: parsed.data.justification!.trim() }] : [])], metadata: { findingId: locked.findingId, actionId: locked.actionId, evaluationId: locked.id, outcome: updated.outcome, recurrenceDetected: updated.recurrenceDetected, ...(cancellationObservation ? { cancellationJustification: parsed.data.justification!.trim() } : {}) } })
+      return { evaluation: updated } as const
+    })
+    if (!result) { response.status(409).json({ error: 'The audit was closed before the efficacy transition was applied' }); return }
+    if ('conflict' in result) { response.status(409).json({ error: 'The efficacy evaluation changed before this transition was applied; reload and try again' }); return }
+    if ('invalid' in result) { response.status(409).json({ error: result.invalid, reason: 'EFFICACY_COMPLETION_REQUIREMENTS' }); return }
+    response.json({ evaluation: auditEfficacyEvaluationView(result.evaluation) })
+  })
+
+  const linkEfficacyEvidenceHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const parsed = auditEfficacyEvidenceLinkSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy URL evidence link', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const evaluation = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    const evidence = audit ? await db.auditEvidence.findFirst({ where: { id: parsed.data.evidenceId, auditId: audit.id } }) : null
+    if (!audit || !evaluation || !evidence) { response.status(404).json({ error: 'Efficacy evaluation or evidence not found' }); return }
+    if (!isTreatmentEvidenceCoherent({ evaluationAuditId: evaluation.auditId, evaluationFindingId: evaluation.findingId, evaluationActionId: evaluation.actionId, evidenceAuditId: evidence.auditId, evidenceFindingId: evidence.findingId, evidenceActionId: evidence.actionId })) { response.status(409).json({ error: 'Evidence does not belong to the evaluation audit, finding or action', reason: 'EVIDENCE_SCOPE_MISMATCH' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, evaluation.findingId))) || evaluation.status === AuditEfficacyEvaluationStatus.COMPLETED || evaluation.status === AuditEfficacyEvaluationStatus.CANCELLED) { response.status(409).json({ error: 'A final efficacy evaluation cannot change its evidence' }); return }
+    const linked = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, evaluation.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const current = await tx.auditEfficacyEvaluation.findUnique({ where: { id: evaluation.id }, select: { id: true, findingId: true, actionId: true, status: true } })
+      if (!current || current.status === AuditEfficacyEvaluationStatus.COMPLETED || current.status === AuditEfficacyEvaluationStatus.CANCELLED) return null
+      const existing = await tx.auditEfficacyEvaluationEvidence.findUnique({ where: { evaluationId_evidenceId: { evaluationId: current.id, evidenceId: evidence.id } } })
+      if (existing) return existing
+      const created = await tx.auditEfficacyEvaluationEvidence.create({ data: { evaluationId: current.id, evidenceId: evidence.id, linkedById: request.user!.id } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_EVIDENCE_LINKED, summary: `Evidencia URL vinculada a la evaluación de eficacia`, actor: auditActorOf(request), metadata: { findingId: current.findingId, actionId: current.actionId, evaluationId: current.id, evidenceId: evidence.id } })
+      return created
+    })
+    if (!linked) { response.status(409).json({ error: 'The efficacy evaluation changed before evidence was linked' }); return }
+    response.status(201).json({ link: linked })
+  })
+
+  const linkEfficacyEvidenceFileHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evaluation id' }); return }
+    const parsed = auditEfficacyEvidenceFileLinkSchema.safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'Invalid efficacy PDF evidence link', details: parsed.error.issues }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const evaluation = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    const evidenceFile = audit ? await db.auditEvidenceFile.findFirst({
+      where: { id: parsed.data.evidenceFileId, auditId: audit.id },
+      select: { id: true, auditId: true, findingId: true, actionId: true, reportVersion: { select: { id: true } }, storageState: true },
+    }) : null
+    if (!audit || !evaluation || !evidenceFile) { response.status(404).json({ error: 'Efficacy evaluation or evidence file not found' }); return }
+    if (evidenceFile.reportVersion) { response.status(409).json({ error: 'The official audit report PDF cannot be used as treatment evidence', reason: 'REPORT_VERSION_IMMUTABLE' }); return }
+    if (!isTreatmentEvidenceCoherent({ evaluationAuditId: evaluation.auditId, evaluationFindingId: evaluation.findingId, evaluationActionId: evaluation.actionId, evidenceAuditId: evidenceFile.auditId, evidenceFindingId: evidenceFile.findingId, evidenceActionId: evidenceFile.actionId, isOfficialReportPdf: Boolean(evidenceFile.reportVersion) })) { response.status(409).json({ error: 'Evidence file does not belong to the evaluation audit, finding or action', reason: evidenceFile.reportVersion ? 'REPORT_VERSION_IMMUTABLE' : 'EVIDENCE_SCOPE_MISMATCH' }); return }
+    if (evidenceFile.storageState !== 'READY') { response.status(409).json({ error: 'Only READY PDF evidence can be linked to an efficacy evaluation', reason: 'EVIDENCE_NOT_READY' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, evaluation.findingId))) || evaluation.status === AuditEfficacyEvaluationStatus.COMPLETED || evaluation.status === AuditEfficacyEvaluationStatus.CANCELLED) { response.status(409).json({ error: 'A final efficacy evaluation cannot change its evidence' }); return }
+    const linked = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, evaluation.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return null
+      const current = await tx.auditEfficacyEvaluation.findUnique({ where: { id: evaluation.id }, select: { id: true, findingId: true, actionId: true, status: true } })
+      if (!current || current.status === AuditEfficacyEvaluationStatus.COMPLETED || current.status === AuditEfficacyEvaluationStatus.CANCELLED) return null
+      const existing = await tx.auditEfficacyEvaluationEvidenceFile.findUnique({ where: { evaluationId_evidenceFileId: { evaluationId: current.id, evidenceFileId: evidenceFile.id } } })
+      if (existing) return existing
+      const created = await tx.auditEfficacyEvaluationEvidenceFile.create({ data: { evaluationId: current.id, evidenceFileId: evidenceFile.id, linkedById: request.user!.id } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_EVIDENCE_LINKED, summary: `Evidencia PDF vinculada a la evaluación de eficacia`, actor: auditActorOf(request), metadata: { findingId: current.findingId, actionId: current.actionId, evaluationId: current.id, evidenceFileId: evidenceFile.id } })
+      return created
+    })
+    if (!linked) { response.status(409).json({ error: 'The efficacy evaluation changed before PDF evidence was linked' }); return }
+    response.status(201).json({ link: linked })
+  })
+
+  const unlinkEfficacyEvidenceHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.extend({ evidenceId: idReference }).safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId), evidenceId: String(request.params.evidenceId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy evidence link id' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const evaluation = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !evaluation) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, evaluation.findingId))) || evaluation.status === AuditEfficacyEvaluationStatus.COMPLETED || evaluation.status === AuditEfficacyEvaluationStatus.CANCELLED) { response.status(409).json({ error: 'A final efficacy evaluation cannot change its evidence' }); return }
+    const deleted = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, evaluation.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return false
+      const link = await tx.auditEfficacyEvaluationEvidence.findFirst({ where: { evaluationId: evaluation.id, evidenceId: parsedIds.data.evidenceId } })
+      if (!link) return false
+      await tx.auditEfficacyEvaluationEvidence.delete({ where: { id: link.id } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_EVIDENCE_UNLINKED, summary: `Evidencia URL desvinculada de la evaluación de eficacia`, actor: auditActorOf(request), metadata: { findingId: evaluation.findingId, actionId: evaluation.actionId, evaluationId: evaluation.id, evidenceId: link.evidenceId } })
+      return true
+    })
+    if (!deleted) { response.status(409).json({ error: 'The efficacy evidence link changed before it could be removed' }); return }
+    response.status(204).send()
+  })
+
+  const unlinkEfficacyEvidenceFileHandler = asyncHandler(async (request, response) => {
+    const parsedIds = efficacyEvaluationIdsSchema.extend({ evidenceFileId: idReference }).safeParse({ processId: String(request.params.processId), auditId: String(request.params.auditId), evaluationId: String(request.params.evaluationId), evidenceFileId: String(request.params.evidenceFileId) })
+    if (!parsedIds.success) { response.status(400).json({ error: 'Invalid efficacy PDF evidence link id' }); return }
+    const audit = await findAccessibleAudit(request, parsedIds.data.processId, parsedIds.data.auditId)
+    const evaluation = audit ? await findAccessibleEfficacyEvaluation(audit.id, parsedIds.data.evaluationId) : null
+    if (!audit || !evaluation) { response.status(404).json({ error: 'Efficacy evaluation not found' }); return }
+    if ((isTerminalAuditStatus(audit.status) && !(await auditHasActiveFollowUp(db, audit.id, evaluation.findingId))) || evaluation.status === AuditEfficacyEvaluationStatus.COMPLETED || evaluation.status === AuditEfficacyEvaluationStatus.CANCELLED) { response.status(409).json({ error: 'A final efficacy evaluation cannot change its evidence' }); return }
+    const deleted = await db.$transaction(async (tx) => {
+      const lockedAudit = isTerminalAuditStatus(audit.status)
+        ? await lockAuditForFollowUpWrite(tx, audit.id, evaluation.findingId)
+        : await lockAuditForWrite(tx, audit.id)
+      if (!lockedAudit) return false
+      const link = await tx.auditEfficacyEvaluationEvidenceFile.findFirst({ where: { evaluationId: evaluation.id, evidenceFileId: parsedIds.data.evidenceFileId } })
+      if (!link) return false
+      await tx.auditEfficacyEvaluationEvidenceFile.delete({ where: { id: link.id } })
+      await auditEventWrite(tx, { auditId: audit.id, eventType: AuditEventType.EFFICACY_EVALUATION_EVIDENCE_UNLINKED, summary: `Evidencia PDF desvinculada de la evaluación de eficacia`, actor: auditActorOf(request), metadata: { findingId: evaluation.findingId, actionId: evaluation.actionId, evaluationId: evaluation.id, evidenceFileId: link.evidenceFileId } })
+      return true
+    })
+    if (!deleted) { response.status(409).json({ error: 'The efficacy PDF evidence link changed before it could be removed' }); return }
+    response.status(204).send()
+  })
+
+  app.get('/api/audits/:auditId/findings/:findingId/efficacy-evaluations', authMiddleware, withAuditProcessParam(listEfficacyEvaluationsHandler))
+  app.get('/api/processes/:processId/audits/:auditId/findings/:findingId/efficacy-evaluations', authMiddleware, listEfficacyEvaluationsHandler)
+  app.post('/api/audits/:auditId/findings/:findingId/efficacy-evaluations', authMiddleware, userWriteGuard, withAuditProcessParam(createEfficacyEvaluationHandler))
+  app.post('/api/processes/:processId/audits/:auditId/findings/:findingId/efficacy-evaluations', authMiddleware, userWriteGuard, createEfficacyEvaluationHandler)
+  app.get('/api/audits/:auditId/efficacy-evaluations/:evaluationId', authMiddleware, withAuditProcessParam(getEfficacyEvaluationHandler))
+  app.get('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId', authMiddleware, getEfficacyEvaluationHandler)
+  app.patch('/api/audits/:auditId/efficacy-evaluations/:evaluationId', authMiddleware, userWriteGuard, withAuditProcessParam(updateEfficacyEvaluationHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId', authMiddleware, userWriteGuard, updateEfficacyEvaluationHandler)
+  app.post('/api/audits/:auditId/efficacy-evaluations/:evaluationId/status', authMiddleware, userWriteGuard, withAuditProcessParam(changeEfficacyEvaluationStatusHandler))
+  app.post('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/status', authMiddleware, userWriteGuard, changeEfficacyEvaluationStatusHandler)
+  app.post('/api/audits/:auditId/efficacy-evaluations/:evaluationId/progress', authMiddleware, userWriteGuard, withAuditProcessParam(addEfficacyEvaluationProgressHandler))
+  app.post('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/progress', authMiddleware, userWriteGuard, addEfficacyEvaluationProgressHandler)
+  app.patch('/api/audits/:auditId/efficacy-evaluations/:evaluationId/criteria/:criterionResultId', authMiddleware, userWriteGuard, withAuditProcessParam(updateEfficacyCriterionResultHandler))
+  app.patch('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/criteria/:criterionResultId', authMiddleware, userWriteGuard, updateEfficacyCriterionResultHandler)
+  app.post('/api/audits/:auditId/efficacy-evaluations/:evaluationId/evidences', authMiddleware, userWriteGuard, withAuditProcessParam(linkEfficacyEvidenceHandler))
+  app.post('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/evidences', authMiddleware, userWriteGuard, linkEfficacyEvidenceHandler)
+  app.delete('/api/audits/:auditId/efficacy-evaluations/:evaluationId/evidences/:evidenceId', authMiddleware, userWriteGuard, withAuditProcessParam(unlinkEfficacyEvidenceHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/evidences/:evidenceId', authMiddleware, userWriteGuard, unlinkEfficacyEvidenceHandler)
+  app.post('/api/audits/:auditId/efficacy-evaluations/:evaluationId/evidence-files', authMiddleware, userWriteGuard, withAuditProcessParam(linkEfficacyEvidenceFileHandler))
+  app.post('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/evidence-files', authMiddleware, userWriteGuard, linkEfficacyEvidenceFileHandler)
+  app.delete('/api/audits/:auditId/efficacy-evaluations/:evaluationId/evidence-files/:evidenceFileId', authMiddleware, userWriteGuard, withAuditProcessParam(unlinkEfficacyEvidenceFileHandler))
+  app.delete('/api/processes/:processId/audits/:auditId/efficacy-evaluations/:evaluationId/evidence-files/:evidenceFileId', authMiddleware, userWriteGuard, unlinkEfficacyEvidenceFileHandler)
 
   const deleteAuditActionHandler = asyncHandler(async (request, response) => {
     const parsedIds = z.object({ processId: idReference, auditId: idReference, actionId: idReference }).safeParse({
@@ -8462,10 +11335,21 @@ response.json({
       response.status(409).json({ error: 'The corrective action has progress entries; cancel it instead' })
       return
     }
+    if ((existing.acceptanceCriteria?.length ?? 0) > 0) {
+      response.status(409).json({ error: 'The corrective action has acceptance criteria; cancel it instead' })
+      return
+    }
+    const existingCauseLink = await db.auditCorrectiveActionCause.findFirst({ where: { actionId: existing.id }, select: { id: true } })
+    if (existingCauseLink) {
+      response.status(409).json({ error: 'The corrective action has cause links; unlink them instead' })
+      return
+    }
     const actor = auditActorOf(request)
     const deleted = await db.$transaction(async (tx) => {
       const locked = await lockAuditForWrite(tx, audit.id)
       if (!locked) return false
+      const lockedCauseLink = await tx.auditCorrectiveActionCause.findFirst({ where: { actionId: existing.id }, select: { id: true } })
+      if (lockedCauseLink) return false
       await tx.auditEvidenceFile.updateMany({ where: { actionId: existing.id }, data: { actionId: null } })
       await tx.auditCorrectiveAction.delete({ where: { id: existing.id } })
       await auditEventWrite(tx, {

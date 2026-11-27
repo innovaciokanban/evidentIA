@@ -1,0 +1,757 @@
+;
+; Archive created at 2026-11-24 19:17:43
+;     dbname: EvidentIA
+;     TOC Entries: 746
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 18.6
+;     Dumped by pg_dump version: 18.6
+;
+;
+; Selected TOC Entries:
+;
+990; 1247 16668 TYPE public ActionItemStatus postgres
+987; 1247 16660 TYPE public ActionPlanStatus postgres
+1350; 1247 96172 TYPE public AuditActivityResult postgres
+1158; 1247 46896 TYPE public AuditChecklistResult postgres
+1164; 1247 46916 TYPE public AuditCorrectiveActionPriority postgres
+1161; 1247 46906 TYPE public AuditCorrectiveActionStatus postgres
+1140; 1247 43614 TYPE public AuditEventType postgres
+1134; 1247 43596 TYPE public AuditFindingSeverity postgres
+1137; 1247 43604 TYPE public AuditFindingStatus postgres
+1131; 1247 43588 TYPE public AuditFindingType postgres
+1326; 1247 95932 TYPE public AuditIndependenceStatus postgres
+1338; 1247 96038 TYPE public AuditPlanActivityStatus postgres
+1335; 1247 96024 TYPE public AuditPlanActivityType postgres
+1332; 1247 96014 TYPE public AuditPlanStatus postgres
+1302; 1247 95756 TYPE public AuditProgramStatus postgres
+1128; 1247 43578 TYPE public AuditStatus postgres
+1323; 1247 95926 TYPE public AuditTeamRole postgres
+1314; 1247 95856 TYPE public AuditorStatus postgres
+1311; 1247 95851 TYPE public AuditorType postgres
+1023; 1247 16950 TYPE public CheckyCategory postgres
+1017; 1247 16936 TYPE public CheckyFindingBasis postgres
+1014; 1247 16931 TYPE public CheckyMessageRole postgres
+1020; 1247 16942 TYPE public CheckySuggestionStatus postgres
+1005; 1247 16780 TYPE public CrossOrigin postgres
+1002; 1247 16770 TYPE public CrossType postgres
+960; 1247 16521 TYPE public DiagnosticStatus postgres
+1200; 1247 54674 TYPE public EvidenceStorageOperationStatus postgres
+1197; 1247 54666 TYPE public EvidenceStorageOperationType postgres
+1188; 1247 52193 TYPE public EvidenceStorageProvider postgres
+1191; 1247 54630 TYPE public EvidenceStorageState postgres
+1194; 1247 54659 TYPE public GoogleDriveConnectionStatus postgres
+969; 1247 16546 TYPE public Impact postgres
+1260; 1247 60968 TYPE public LearningCourseStatus postgres
+1263; 1247 60976 TYPE public LearningLessonType postgres
+966; 1247 16538 TYPE public Priority postgres
+1119; 1247 42134 TYPE public ProcedureHistoryAction postgres
+1116; 1247 42125 TYPE public ProcedureStatus postgres
+1080; 1247 36002 TYPE public ProcessChangeAction postgres
+1047; 1247 19576 TYPE public ProcessStatus postgres
+1044; 1247 19568 TYPE public ProcessType postgres
+984; 1247 16652 TYPE public RecommendationStatus postgres
+1086; 1247 39708 TYPE public RiskAcceptanceStatus postgres
+1101; 1247 39773 TYPE public RiskApprovalStatus postgres
+1110; 1247 39843 TYPE public RiskAuditEventType postgres
+1095; 1247 39756 TYPE public RiskCodeCategory postgres
+1068; 1247 20414 TYPE public RiskControlEvaluation postgres
+1089; 1247 39716 TYPE public RiskTreatmentType postgres
+1011; 1247 16830 TYPE public Role postgres
+963; 1247 16528 TYPE public SWOTType postgres
+1245; 1247 60762 TYPE public StrategicObjectiveHistoryEventType postgres
+1239; 1247 60748 TYPE public StrategicObjectiveOrigin postgres
+1236; 1247 60743 TYPE public StrategicObjectiveStatus postgres
+1242; 1247 60754 TYPE public StrategicObjectiveStrategySource postgres
+1038; 1247 18216 TYPE public StrategySource postgres
+1224; 1247 60638 TYPE public TicketAssignmentApprovalSource postgres
+1221; 1247 60627 TYPE public TicketAssignmentApprovalStatus postgres
+1212; 1247 58613 TYPE public TicketAuditEventType postgres
+945; 1247 16418 TYPE public TicketPriority postgres
+942; 1247 16408 TYPE public TicketStatus postgres
+1230; 1247 60711 TYPE public UserStatusEventType postgres
+1032; 1247 17017 TYPE public WeightingLevel postgres
+300; 1255 54798 FUNCTION public lock_evidentia_entities(text[]) postgres
+314; 1255 54805 FUNCTION public prevent_drive_connection_tenant_change_with_references() postgres
+313; 1255 54803 FUNCTION public prevent_process_tenant_change_with_audits() postgres
+317; 1255 54799 FUNCTION public validate_audit_evidence_file_tenant() postgres
+312; 1255 54801 FUNCTION public validate_audit_tenant() postgres
+315; 1255 54807 FUNCTION public validate_storage_operation_tenant() postgres
+316; 1255 60624 FUNCTION public validate_ticket_drive_reference_tenant() postgres
+227; 1259 16623 TABLE public AIAnalysis postgres
+230; 1259 16713 TABLE public ActionItem postgres
+229; 1259 16696 TABLE public ActionPlan postgres
+253; 1259 43635 TABLE public Audit postgres
+263; 1259 47000 TABLE public AuditActionProgress postgres
+260; 1259 46947 TABLE public AuditChecklist postgres
+261; 1259 46960 TABLE public AuditChecklistItem postgres
+262; 1259 46980 TABLE public AuditCorrectiveAction postgres
+256; 1259 43686 TABLE public AuditEvent postgres
+255; 1259 43671 TABLE public AuditEvidence postgres
+264; 1259 47012 TABLE public AuditEvidenceFile postgres
+254; 1259 43653 TABLE public AuditFinding postgres
+293; 1259 96047 TABLE public AuditPlan postgres
+294; 1259 96062 TABLE public AuditPlanActivity postgres
+295; 1259 96121 TABLE public AuditPlanActivityAuditor postgres
+296; 1259 96193 TABLE public AuditPlanActivityChecklistItem postgres
+297; 1259 96220 TABLE public AuditPlanActivityEvidence postgres
+298; 1259 96247 TABLE public AuditPlanActivityEvidenceFile postgres
+299; 1259 96274 TABLE public AuditPlanActivityFinding postgres
+259; 1259 46936 TABLE public AuditProcedure postgres
+258; 1259 46925 TABLE public AuditProcess postgres
+288; 1259 95765 TABLE public AuditProgram postgres
+289; 1259 95806 TABLE public AuditProgramProcessPriority postgres
+292; 1259 95941 TABLE public AuditTeamMember postgres
+290; 1259 95863 TABLE public Auditor postgres
+291; 1259 95894 TABLE public AuditorCompetency postgres
+233; 1259 16980 TABLE public CheckyMessage postgres
+232; 1259 16967 TABLE public CheckySession postgres
+223; 1259 16497 TABLE public Company postgres
+265; 1259 54688 TABLE public CompanyGoogleDriveConnection postgres
+267; 1259 54723 TABLE public EvidenceStorageOperation postgres
+266; 1259 54707 TABLE public GoogleDriveOAuthState postgres
+237; 1259 20300 TABLE public Kpi postgres
+276; 1259 60987 TABLE public LearningCourse postgres
+277; 1259 61006 TABLE public LearningCourseVersion postgres
+280; 1259 61107 TABLE public LearningEnrollment postgres
+279; 1259 61039 TABLE public LearningLesson postgres
+278; 1259 61023 TABLE public LearningModule postgres
+249; 1259 39796 TABLE public Notification postgres
+251; 1259 42141 TABLE public Procedure postgres
+286; 1259 95690 TABLE public ProcedureIndicator postgres
+282; 1259 70908 TABLE public ProcedureKpi postgres
+285; 1259 95675 TABLE public ProcedureStep postgres
+287; 1259 95735 TABLE public ProcedureStepResponsible postgres
+252; 1259 42161 TABLE public ProcedureVersion postgres
+236; 1259 19581 TABLE public Process postgres
+245; 1259 36007 TABLE public ProcessChange postgres
+284; 1259 95637 TABLE public ProcessIndicator postgres
+283; 1259 78305 TABLE public ProcessKpi postgres
+224; 1259 16553 TABLE public QualityDiagnostic postgres
+228; 1259 16677 TABLE public Recommendation postgres
+242; 1259 20423 TABLE public Risk postgres
+248; 1259 39781 TABLE public RiskApproval postgres
+250; 1259 39869 TABLE public RiskAuditEvent postgres
+247; 1259 39763 TABLE public RiskCodeSequence postgres
+243; 1259 20443 TABLE public RiskControl postgres
+246; 1259 39727 TABLE public RiskEvidence postgres
+225; 1259 16570 TABLE public SWOTAnalysis postgres
+226; 1259 16582 TABLE public SWOTItem postgres
+221; 1259 16443 TABLE public Session postgres
+241; 1259 20376 TABLE public SipocCustomer postgres
+239; 1259 20350 TABLE public SipocInput postgres
+240; 1259 20363 TABLE public SipocOutput postgres
+244; 1259 33321 TABLE public SipocProcess postgres
+238; 1259 20337 TABLE public SipocSupplier postgres
+231; 1259 16787 TABLE public StrategicCross postgres
+234; 1259 17027 TABLE public StrategicCrossWeighting postgres
+272; 1259 60773 TABLE public StrategicObjective postgres
+275; 1259 60822 TABLE public StrategicObjectiveHistory postgres
+274; 1259 60810 TABLE public StrategicObjectiveIndicator postgres
+273; 1259 60792 TABLE public StrategicObjectiveStrategy postgres
+281; 1259 63554 TABLE public StrategicObjectiveSuggestion postgres
+235; 1259 18221 TABLE public StrategyWeighting postgres
+222; 1259 16456 TABLE public Ticket postgres
+270; 1259 60656 TABLE public TicketAssignmentApproval postgres
+268; 1259 58633 TABLE public TicketAuditEvent postgres
+269; 1259 60580 TABLE public TicketDriveReference postgres
+257; 1259 43762 TABLE public TicketEvidenceFile postgres
+220; 1259 16427 TABLE public User postgres
+271; 1259 60717 TABLE public UserStatusEvent postgres
+219; 1259 16388 TABLE public _prisma_migrations postgres
+6219; 0 16623 TABLE DATA public AIAnalysis postgres
+6222; 0 16713 TABLE DATA public ActionItem postgres
+6221; 0 16696 TABLE DATA public ActionPlan postgres
+6245; 0 43635 TABLE DATA public Audit postgres
+6255; 0 47000 TABLE DATA public AuditActionProgress postgres
+6252; 0 46947 TABLE DATA public AuditChecklist postgres
+6253; 0 46960 TABLE DATA public AuditChecklistItem postgres
+6254; 0 46980 TABLE DATA public AuditCorrectiveAction postgres
+6248; 0 43686 TABLE DATA public AuditEvent postgres
+6247; 0 43671 TABLE DATA public AuditEvidence postgres
+6256; 0 47012 TABLE DATA public AuditEvidenceFile postgres
+6246; 0 43653 TABLE DATA public AuditFinding postgres
+6285; 0 96047 TABLE DATA public AuditPlan postgres
+6286; 0 96062 TABLE DATA public AuditPlanActivity postgres
+6287; 0 96121 TABLE DATA public AuditPlanActivityAuditor postgres
+6288; 0 96193 TABLE DATA public AuditPlanActivityChecklistItem postgres
+6289; 0 96220 TABLE DATA public AuditPlanActivityEvidence postgres
+6290; 0 96247 TABLE DATA public AuditPlanActivityEvidenceFile postgres
+6291; 0 96274 TABLE DATA public AuditPlanActivityFinding postgres
+6251; 0 46936 TABLE DATA public AuditProcedure postgres
+6250; 0 46925 TABLE DATA public AuditProcess postgres
+6280; 0 95765 TABLE DATA public AuditProgram postgres
+6281; 0 95806 TABLE DATA public AuditProgramProcessPriority postgres
+6284; 0 95941 TABLE DATA public AuditTeamMember postgres
+6282; 0 95863 TABLE DATA public Auditor postgres
+6283; 0 95894 TABLE DATA public AuditorCompetency postgres
+6225; 0 16980 TABLE DATA public CheckyMessage postgres
+6224; 0 16967 TABLE DATA public CheckySession postgres
+6215; 0 16497 TABLE DATA public Company postgres
+6257; 0 54688 TABLE DATA public CompanyGoogleDriveConnection postgres
+6259; 0 54723 TABLE DATA public EvidenceStorageOperation postgres
+6258; 0 54707 TABLE DATA public GoogleDriveOAuthState postgres
+6229; 0 20300 TABLE DATA public Kpi postgres
+6268; 0 60987 TABLE DATA public LearningCourse postgres
+6269; 0 61006 TABLE DATA public LearningCourseVersion postgres
+6272; 0 61107 TABLE DATA public LearningEnrollment postgres
+6271; 0 61039 TABLE DATA public LearningLesson postgres
+6270; 0 61023 TABLE DATA public LearningModule postgres
+6241; 0 39796 TABLE DATA public Notification postgres
+6243; 0 42141 TABLE DATA public Procedure postgres
+6278; 0 95690 TABLE DATA public ProcedureIndicator postgres
+6274; 0 70908 TABLE DATA public ProcedureKpi postgres
+6277; 0 95675 TABLE DATA public ProcedureStep postgres
+6279; 0 95735 TABLE DATA public ProcedureStepResponsible postgres
+6244; 0 42161 TABLE DATA public ProcedureVersion postgres
+6228; 0 19581 TABLE DATA public Process postgres
+6237; 0 36007 TABLE DATA public ProcessChange postgres
+6276; 0 95637 TABLE DATA public ProcessIndicator postgres
+6275; 0 78305 TABLE DATA public ProcessKpi postgres
+6216; 0 16553 TABLE DATA public QualityDiagnostic postgres
+6220; 0 16677 TABLE DATA public Recommendation postgres
+6234; 0 20423 TABLE DATA public Risk postgres
+6240; 0 39781 TABLE DATA public RiskApproval postgres
+6242; 0 39869 TABLE DATA public RiskAuditEvent postgres
+6239; 0 39763 TABLE DATA public RiskCodeSequence postgres
+6235; 0 20443 TABLE DATA public RiskControl postgres
+6238; 0 39727 TABLE DATA public RiskEvidence postgres
+6217; 0 16570 TABLE DATA public SWOTAnalysis postgres
+6218; 0 16582 TABLE DATA public SWOTItem postgres
+6213; 0 16443 TABLE DATA public Session postgres
+6233; 0 20376 TABLE DATA public SipocCustomer postgres
+6231; 0 20350 TABLE DATA public SipocInput postgres
+6232; 0 20363 TABLE DATA public SipocOutput postgres
+6236; 0 33321 TABLE DATA public SipocProcess postgres
+6230; 0 20337 TABLE DATA public SipocSupplier postgres
+6223; 0 16787 TABLE DATA public StrategicCross postgres
+6226; 0 17027 TABLE DATA public StrategicCrossWeighting postgres
+6264; 0 60773 TABLE DATA public StrategicObjective postgres
+6267; 0 60822 TABLE DATA public StrategicObjectiveHistory postgres
+6266; 0 60810 TABLE DATA public StrategicObjectiveIndicator postgres
+6265; 0 60792 TABLE DATA public StrategicObjectiveStrategy postgres
+6273; 0 63554 TABLE DATA public StrategicObjectiveSuggestion postgres
+6227; 0 18221 TABLE DATA public StrategyWeighting postgres
+6214; 0 16456 TABLE DATA public Ticket postgres
+6262; 0 60656 TABLE DATA public TicketAssignmentApproval postgres
+6260; 0 58633 TABLE DATA public TicketAuditEvent postgres
+6261; 0 60580 TABLE DATA public TicketDriveReference postgres
+6249; 0 43762 TABLE DATA public TicketEvidenceFile postgres
+6212; 0 16427 TABLE DATA public User postgres
+6263; 0 60717 TABLE DATA public UserStatusEvent postgres
+6211; 0 16388 TABLE DATA public _prisma_migrations postgres
+5509; 2606 16644 CONSTRAINT public AIAnalysis AIAnalysis_pkey postgres
+5523; 2606 16729 CONSTRAINT public ActionItem ActionItem_pkey postgres
+5518; 2606 16712 CONSTRAINT public ActionPlan ActionPlan_pkey postgres
+5672; 2606 47011 CONSTRAINT public AuditActionProgress AuditActionProgress_pkey postgres
+5662; 2606 46979 CONSTRAINT public AuditChecklistItem AuditChecklistItem_pkey postgres
+5659; 2606 46959 CONSTRAINT public AuditChecklist AuditChecklist_pkey postgres
+5667; 2606 46999 CONSTRAINT public AuditCorrectiveAction AuditCorrectiveAction_pkey postgres
+5645; 2606 43698 CONSTRAINT public AuditEvent AuditEvent_pkey postgres
+5679; 2606 47027 CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_pkey postgres
+5641; 2606 43685 CONSTRAINT public AuditEvidence AuditEvidence_pkey postgres
+5632; 2606 43670 CONSTRAINT public AuditFinding AuditFinding_pkey postgres
+5852; 2606 96134 CONSTRAINT public AuditPlanActivityAuditor AuditPlanActivityAuditor_pkey postgres
+5858; 2606 96206 CONSTRAINT public AuditPlanActivityChecklistItem AuditPlanActivityChecklistItem_pkey postgres
+5868; 2606 96260 CONSTRAINT public AuditPlanActivityEvidenceFile AuditPlanActivityEvidenceFile_pkey postgres
+5863; 2606 96233 CONSTRAINT public AuditPlanActivityEvidence AuditPlanActivityEvidence_pkey postgres
+5873; 2606 96287 CONSTRAINT public AuditPlanActivityFinding AuditPlanActivityFinding_pkey postgres
+5843; 2606 96082 CONSTRAINT public AuditPlanActivity AuditPlanActivity_pkey postgres
+5836; 2606 96061 CONSTRAINT public AuditPlan AuditPlan_pkey postgres
+5655; 2606 46946 CONSTRAINT public AuditProcedure AuditProcedure_pkey postgres
+5652; 2606 46935 CONSTRAINT public AuditProcess AuditProcess_pkey postgres
+5810; 2606 95829 CONSTRAINT public AuditProgramProcessPriority AuditProgramProcessPriority_pkey postgres
+5803; 2606 95785 CONSTRAINT public AuditProgram AuditProgram_pkey postgres
+5831; 2606 95962 CONSTRAINT public AuditTeamMember AuditTeamMember_pkey postgres
+5624; 2606 43652 CONSTRAINT public Audit Audit_pkey postgres
+5821; 2606 95909 CONSTRAINT public AuditorCompetency AuditorCompetency_pkey postgres
+5817; 2606 95879 CONSTRAINT public Auditor Auditor_pkey postgres
+5538; 2606 16996 CONSTRAINT public CheckyMessage CheckyMessage_pkey postgres
+5536; 2606 16979 CONSTRAINT public CheckySession CheckySession_pkey postgres
+5685; 2606 54706 CONSTRAINT public CompanyGoogleDriveConnection CompanyGoogleDriveConnection_pkey postgres
+5494; 2606 16511 CONSTRAINT public Company Company_pkey postgres
+5697; 2606 54741 CONSTRAINT public EvidenceStorageOperation EvidenceStorageOperation_pkey postgres
+5689; 2606 54722 CONSTRAINT public GoogleDriveOAuthState GoogleDriveOAuthState_pkey postgres
+5559; 2606 20318 CONSTRAINT public Kpi Kpi_pkey postgres
+5753; 2606 61022 CONSTRAINT public LearningCourseVersion LearningCourseVersion_pkey postgres
+5747; 2606 61005 CONSTRAINT public LearningCourse LearningCourse_pkey postgres
+5766; 2606 61124 CONSTRAINT public LearningEnrollment LearningEnrollment_pkey postgres
+5760; 2606 61056 CONSTRAINT public LearningLesson LearningLesson_pkey postgres
+5756; 2606 61038 CONSTRAINT public LearningModule LearningModule_pkey postgres
+5603; 2606 39809 CONSTRAINT public Notification Notification_pkey postgres
+5793; 2606 95708 CONSTRAINT public ProcedureIndicator ProcedureIndicator_pkey postgres
+5776; 2606 70918 CONSTRAINT public ProcedureKpi ProcedureKpi_pkey postgres
+5797; 2606 95743 CONSTRAINT public ProcedureStepResponsible ProcedureStepResponsible_pkey postgres
+5787; 2606 95689 CONSTRAINT public ProcedureStep ProcedureStep_pkey postgres
+5618; 2606 42174 CONSTRAINT public ProcedureVersion ProcedureVersion_pkey postgres
+5611; 2606 42160 CONSTRAINT public Procedure Procedure_pkey postgres
+5588; 2606 36021 CONSTRAINT public ProcessChange ProcessChange_pkey postgres
+5783; 2606 95655 CONSTRAINT public ProcessIndicator ProcessIndicator_pkey postgres
+5779; 2606 78315 CONSTRAINT public ProcessKpi ProcessKpi_pkey postgres
+5554; 2606 19597 CONSTRAINT public Process Process_pkey postgres
+5498; 2606 16569 CONSTRAINT public QualityDiagnostic QualityDiagnostic_pkey postgres
+5512; 2606 16695 CONSTRAINT public Recommendation Recommendation_pkey postgres
+5597; 2606 39795 CONSTRAINT public RiskApproval RiskApproval_pkey postgres
+5608; 2606 39881 CONSTRAINT public RiskAuditEvent RiskAuditEvent_pkey postgres
+5594; 2606 39771 CONSTRAINT public RiskCodeSequence RiskCodeSequence_pkey postgres
+5581; 2606 20457 CONSTRAINT public RiskControl RiskControl_pkey postgres
+5591; 2606 39741 CONSTRAINT public RiskEvidence RiskEvidence_pkey postgres
+5577; 2606 20442 CONSTRAINT public Risk Risk_pkey postgres
+5502; 2606 16581 CONSTRAINT public SWOTAnalysis SWOTAnalysis_pkey postgres
+5504; 2606 16596 CONSTRAINT public SWOTItem SWOTItem_pkey postgres
+5480; 2606 16455 CONSTRAINT public Session Session_pkey postgres
+5572; 2606 20388 CONSTRAINT public SipocCustomer SipocCustomer_pkey postgres
+5566; 2606 20362 CONSTRAINT public SipocInput SipocInput_pkey postgres
+5569; 2606 20375 CONSTRAINT public SipocOutput SipocOutput_pkey postgres
+5584; 2606 33333 CONSTRAINT public SipocProcess SipocProcess_pkey postgres
+5563; 2606 20349 CONSTRAINT public SipocSupplier SipocSupplier_pkey postgres
+5544; 2606 17045 CONSTRAINT public StrategicCrossWeighting StrategicCrossWeighting_pkey postgres
+5532; 2606 16804 CONSTRAINT public StrategicCross StrategicCross_pkey postgres
+5743; 2606 60834 CONSTRAINT public StrategicObjectiveHistory StrategicObjectiveHistory_pkey postgres
+5737; 2606 60821 CONSTRAINT public StrategicObjectiveIndicator StrategicObjectiveIndicator_pkey postgres
+5731; 2606 60809 CONSTRAINT public StrategicObjectiveStrategy StrategicObjectiveStrategy_pkey postgres
+5772; 2606 63573 CONSTRAINT public StrategicObjectiveSuggestion StrategicObjectiveSuggestion_pkey postgres
+5727; 2606 60791 CONSTRAINT public StrategicObjective StrategicObjective_pkey postgres
+5550; 2606 18241 CONSTRAINT public StrategyWeighting StrategyWeighting_pkey postgres
+5713; 2606 60671 CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_pkey postgres
+5702; 2606 58644 CONSTRAINT public TicketAuditEvent TicketAuditEvent_pkey postgres
+5708; 2606 60598 CONSTRAINT public TicketDriveReference TicketDriveReference_pkey postgres
+5647; 2606 43777 CONSTRAINT public TicketEvidenceFile TicketEvidenceFile_pkey postgres
+5487; 2606 16473 CONSTRAINT public Ticket Ticket_pkey postgres
+5722; 2606 60728 CONSTRAINT public UserStatusEvent UserStatusEvent_pkey postgres
+5477; 2606 16442 CONSTRAINT public User User_pkey postgres
+5472; 2606 16401 CONSTRAINT public _prisma_migrations _prisma_migrations_pkey postgres
+5507; 1259 16645 INDEX public AIAnalysis_diagnosticId_key postgres
+5521; 1259 16735 INDEX public ActionItem_actionPlanId_idx postgres
+5524; 1259 16736 INDEX public ActionItem_recommendationId_idx postgres
+5525; 1259 16737 INDEX public ActionItem_responsibleId_idx postgres
+5526; 1259 16738 INDEX public ActionItem_status_idx postgres
+5514; 1259 16733 INDEX public ActionPlan_createdById_idx postgres
+5515; 1259 16732 INDEX public ActionPlan_diagnosticId_idx postgres
+5516; 1259 19540 INDEX public ActionPlan_diagnosticId_strategySource_strategySourceRef_key postgres
+5519; 1259 39894 INDEX public ActionPlan_riskId_idx postgres
+5520; 1259 16734 INDEX public ActionPlan_status_idx postgres
+5670; 1259 47037 INDEX public AuditActionProgress_actionId_createdAt_idx postgres
+5660; 1259 47031 INDEX public AuditChecklistItem_checklistId_idx postgres
+5663; 1259 47032 INDEX public AuditChecklistItem_result_idx postgres
+5657; 1259 47030 INDEX public AuditChecklist_auditId_idx postgres
+5664; 1259 47036 INDEX public AuditCorrectiveAction_dueDate_idx postgres
+5665; 1259 47033 INDEX public AuditCorrectiveAction_findingId_idx postgres
+5668; 1259 47035 INDEX public AuditCorrectiveAction_responsibleId_idx postgres
+5669; 1259 47034 INDEX public AuditCorrectiveAction_status_idx postgres
+5642; 1259 43710 INDEX public AuditEvent_auditId_occurredAt_idx postgres
+5643; 1259 43711 INDEX public AuditEvent_eventType_idx postgres
+5673; 1259 47041 INDEX public AuditEvidenceFile_actionId_idx postgres
+5674; 1259 47039 INDEX public AuditEvidenceFile_auditId_idx postgres
+5675; 1259 52211 INDEX public AuditEvidenceFile_driveFileId_key postgres
+5676; 1259 47040 INDEX public AuditEvidenceFile_findingId_idx postgres
+5677; 1259 47042 INDEX public AuditEvidenceFile_itemId_idx postgres
+5680; 1259 47038 INDEX public AuditEvidenceFile_storedName_key postgres
+5681; 1259 47043 INDEX public AuditEvidenceFile_uploadedById_idx postgres
+5638; 1259 43708 INDEX public AuditEvidence_auditId_idx postgres
+5639; 1259 43709 INDEX public AuditEvidence_findingId_idx postgres
+5629; 1259 43704 INDEX public AuditFinding_auditId_idx postgres
+5630; 1259 47044 INDEX public AuditFinding_itemId_idx postgres
+5633; 1259 47046 INDEX public AuditFinding_procedureId_idx postgres
+5634; 1259 47045 INDEX public AuditFinding_processId_idx postgres
+5635; 1259 43707 INDEX public AuditFinding_responsibleId_idx postgres
+5636; 1259 43706 INDEX public AuditFinding_severity_idx postgres
+5637; 1259 43705 INDEX public AuditFinding_status_idx postgres
+5847; 1259 96135 INDEX public AuditPlanActivityAuditor_activityId_auditTeamMemberId_key postgres
+5848; 1259 96136 INDEX public AuditPlanActivityAuditor_activityId_isActive_idx postgres
+5849; 1259 96138 INDEX public AuditPlanActivityAuditor_assignedById_idx postgres
+5850; 1259 96137 INDEX public AuditPlanActivityAuditor_auditTeamMemberId_isActive_idx postgres
+5853; 1259 96139 INDEX public AuditPlanActivityAuditor_removedById_idx postgres
+5854; 1259 96208 INDEX public AuditPlanActivityChecklistItem_activityId_isActive_idx postgres
+5855; 1259 96207 INDEX public AuditPlanActivityChecklistItem_activityId_itemId_key postgres
+5856; 1259 96209 INDEX public AuditPlanActivityChecklistItem_itemId_isActive_idx postgres
+5864; 1259 96261 INDEX public AuditPlanActivityEvidenceFile_activityId_evidenceFileId_key postgres
+5865; 1259 96262 INDEX public AuditPlanActivityEvidenceFile_activityId_isActive_idx postgres
+5866; 1259 96263 INDEX public AuditPlanActivityEvidenceFile_evidenceFileId_isActive_idx postgres
+5859; 1259 96234 INDEX public AuditPlanActivityEvidence_activityId_evidenceId_key postgres
+5860; 1259 96235 INDEX public AuditPlanActivityEvidence_activityId_isActive_idx postgres
+5861; 1259 96236 INDEX public AuditPlanActivityEvidence_evidenceId_isActive_idx postgres
+5869; 1259 96288 INDEX public AuditPlanActivityFinding_activityId_findingId_key postgres
+5870; 1259 96289 INDEX public AuditPlanActivityFinding_activityId_isActive_idx postgres
+5871; 1259 96290 INDEX public AuditPlanActivityFinding_findingId_isActive_idx postgres
+5839; 1259 96087 INDEX public AuditPlanActivity_auditPlanId_scheduledStart_idx postgres
+5840; 1259 96088 INDEX public AuditPlanActivity_auditPlanId_status_idx postgres
+5841; 1259 96182 INDEX public AuditPlanActivity_completedById_idx postgres
+5844; 1259 96090 INDEX public AuditPlanActivity_processId_idx postgres
+5845; 1259 96089 INDEX public AuditPlanActivity_responsibleId_idx postgres
+5846; 1259 96181 INDEX public AuditPlanActivity_startedById_idx postgres
+5833; 1259 96086 INDEX public AuditPlan_approvedById_idx postgres
+5834; 1259 96083 INDEX public AuditPlan_auditId_key postgres
+5837; 1259 96085 INDEX public AuditPlan_preparedById_idx postgres
+5838; 1259 96084 INDEX public AuditPlan_status_idx postgres
+5656; 1259 47029 INDEX public AuditProcedure_procedureId_idx postgres
+5653; 1259 47028 INDEX public AuditProcess_processId_idx postgres
+5805; 1259 95831 INDEX public AuditProgramProcessPriority_auditProgramId_calculatedPriority_i postgres
+5806; 1259 95830 INDEX public AuditProgramProcessPriority_auditProgramId_processId_key postgres
+5807; 1259 95832 INDEX public AuditProgramProcessPriority_auditProgramId_score_idx postgres
+5808; 1259 95834 INDEX public AuditProgramProcessPriority_evaluatedById_idx postgres
+5811; 1259 95833 INDEX public AuditProgramProcessPriority_processId_idx postgres
+5799; 1259 95786 INDEX public AuditProgram_companyId_code_key postgres
+5800; 1259 95787 INDEX public AuditProgram_companyId_idx postgres
+5801; 1259 95788 INDEX public AuditProgram_companyId_status_idx postgres
+5804; 1259 95789 INDEX public AuditProgram_responsibleId_idx postgres
+5822; 1259 95970 INDEX public AuditTeamMember_active_auditor_key postgres
+5823; 1259 95971 INDEX public AuditTeamMember_active_lead_key postgres
+5824; 1259 95967 INDEX public AuditTeamMember_assignedById_idx postgres
+5825; 1259 95963 INDEX public AuditTeamMember_auditId_isActive_idx postgres
+5826; 1259 95964 INDEX public AuditTeamMember_auditId_role_isActive_idx postgres
+5827; 1259 95965 INDEX public AuditTeamMember_auditorId_isActive_idx postgres
+5828; 1259 95966 INDEX public AuditTeamMember_companyId_isActive_idx postgres
+5829; 1259 95969 INDEX public AuditTeamMember_independenceEvaluatedById_idx postgres
+5832; 1259 95968 INDEX public AuditTeamMember_removedById_idx postgres
+5620; 1259 95790 INDEX public Audit_auditProgramId_idx postgres
+5621; 1259 52206 INDEX public Audit_driveFolderId_key postgres
+5622; 1259 43701 INDEX public Audit_leadAuditorId_idx postgres
+5625; 1259 43703 INDEX public Audit_processId_code_key postgres
+5626; 1259 43699 INDEX public Audit_processId_idx postgres
+5627; 1259 43702 INDEX public Audit_responsibleId_idx postgres
+5628; 1259 43700 INDEX public Audit_status_idx postgres
+5818; 1259 95911 INDEX public AuditorCompetency_auditorId_idx postgres
+5819; 1259 95910 INDEX public AuditorCompetency_auditorId_nameKey_key postgres
+5812; 1259 95880 INDEX public Auditor_companyId_email_key postgres
+5813; 1259 95881 INDEX public Auditor_companyId_status_idx postgres
+5814; 1259 95882 INDEX public Auditor_companyId_type_idx postgres
+5815; 1259 95883 INDEX public Auditor_createdById_idx postgres
+5539; 1259 16999 INDEX public CheckyMessage_sessionId_idx postgres
+5540; 1259 17000 INDEX public CheckyMessage_status_idx postgres
+5533; 1259 16998 INDEX public CheckySession_createdById_idx postgres
+5534; 1259 16997 INDEX public CheckySession_diagnosticId_idx postgres
+5682; 1259 54742 INDEX public CompanyGoogleDriveConnection_companyId_status_idx postgres
+5683; 1259 54743 INDEX public CompanyGoogleDriveConnection_one_active_per_company postgres
+5490; 1259 52205 INDEX public Company_driveFolderId_key postgres
+5491; 1259 16512 INDEX public Company_identification_key postgres
+5492; 1259 16514 INDEX public Company_name_idx postgres
+5692; 1259 54751 INDEX public EvidenceStorageOperation_companyId_auditId_idx postgres
+5693; 1259 54752 INDEX public EvidenceStorageOperation_evidenceFileId_idx postgres
+5694; 1259 54748 INDEX public EvidenceStorageOperation_idempotencyKey_key postgres
+5695; 1259 54750 INDEX public EvidenceStorageOperation_leaseUntil_idx postgres
+5698; 1259 54749 INDEX public EvidenceStorageOperation_status_nextAttemptAt_idx postgres
+5686; 1259 54746 INDEX public GoogleDriveOAuthState_companyId_idx postgres
+5687; 1259 54745 INDEX public GoogleDriveOAuthState_expiresAt_idx postgres
+5690; 1259 54747 INDEX public GoogleDriveOAuthState_sessionId_idx postgres
+5691; 1259 54744 INDEX public GoogleDriveOAuthState_stateHash_key postgres
+5557; 1259 20321 INDEX public Kpi_monitorResponsibleId_idx postgres
+5560; 1259 20319 INDEX public Kpi_processId_idx postgres
+5561; 1259 20320 INDEX public Kpi_reportResponsibleId_idx postgres
+5749; 1259 61061 INDEX public LearningCourseVersion_courseId_status_idx postgres
+5750; 1259 61060 INDEX public LearningCourseVersion_courseId_versionNumber_key postgres
+5751; 1259 61066 INDEX public LearningCourseVersion_one_published_per_course_key postgres
+5754; 1259 61062 INDEX public LearningCourseVersion_status_publishedAt_idx postgres
+5744; 1259 61058 INDEX public LearningCourse_companyId_category_idx postgres
+5745; 1259 61057 INDEX public LearningCourse_companyId_status_idx postgres
+5748; 1259 61059 INDEX public LearningCourse_updatedAt_idx postgres
+5762; 1259 61126 INDEX public LearningEnrollment_companyId_userId_idx postgres
+5763; 1259 61125 INDEX public LearningEnrollment_courseId_userId_key postgres
+5764; 1259 61127 INDEX public LearningEnrollment_courseId_versionId_idx postgres
+5767; 1259 61128 INDEX public LearningEnrollment_userId_assignedAt_idx postgres
+5758; 1259 61064 INDEX public LearningLesson_moduleId_position_idx postgres
+5761; 1259 61065 INDEX public LearningLesson_type_idx postgres
+5757; 1259 61063 INDEX public LearningModule_versionId_position_idx postgres
+5604; 1259 39816 INDEX public Notification_readAt_idx postgres
+5605; 1259 39815 INDEX public Notification_userId_idx postgres
+5790; 1259 95712 INDEX public ProcedureIndicator_deadline_idx postgres
+5791; 1259 95714 INDEX public ProcedureIndicator_monitorResponsibleId_idx postgres
+5794; 1259 95711 INDEX public ProcedureIndicator_procedureId_idx postgres
+5795; 1259 95713 INDEX public ProcedureIndicator_reportResponsibleId_idx postgres
+5774; 1259 70919 INDEX public ProcedureKpi_kpiId_idx postgres
+5798; 1259 95744 INDEX public ProcedureStepResponsible_userId_idx postgres
+5788; 1259 95710 INDEX public ProcedureStep_procedureId_idx postgres
+5789; 1259 95709 INDEX public ProcedureStep_procedureId_position_key postgres
+5616; 1259 42180 INDEX public ProcedureVersion_changedById_idx postgres
+5619; 1259 42179 INDEX public ProcedureVersion_procedureId_changedAt_idx postgres
+5612; 1259 42178 INDEX public Procedure_processId_code_key postgres
+5613; 1259 42175 INDEX public Procedure_processId_idx postgres
+5614; 1259 42177 INDEX public Procedure_responsibleId_idx postgres
+5615; 1259 42176 INDEX public Procedure_status_idx postgres
+5586; 1259 36023 INDEX public ProcessChange_changedById_idx postgres
+5589; 1259 36022 INDEX public ProcessChange_processId_changedAt_idx postgres
+5780; 1259 95657 INDEX public ProcessIndicator_deadline_idx postgres
+5781; 1259 95659 INDEX public ProcessIndicator_monitorResponsibleId_idx postgres
+5784; 1259 95656 INDEX public ProcessIndicator_processId_idx postgres
+5785; 1259 95658 INDEX public ProcessIndicator_reportResponsibleId_idx postgres
+5777; 1259 78316 INDEX public ProcessKpi_kpiId_idx postgres
+5551; 1259 19598 INDEX public Process_companyId_idx postgres
+5552; 1259 19601 INDEX public Process_companyId_name_key postgres
+5555; 1259 19600 INDEX public Process_responsibleId_idx postgres
+5556; 1259 19599 INDEX public Process_type_idx postgres
+5495; 1259 16598 INDEX public QualityDiagnostic_companyId_idx postgres
+5496; 1259 16599 INDEX public QualityDiagnostic_createdById_idx postgres
+5499; 1259 16600 INDEX public QualityDiagnostic_status_idx postgres
+5510; 1259 16730 INDEX public Recommendation_diagnosticId_idx postgres
+5513; 1259 16731 INDEX public Recommendation_status_idx postgres
+5595; 1259 39810 INDEX public RiskApproval_openKey_key postgres
+5598; 1259 39813 INDEX public RiskApproval_requestedById_idx postgres
+5599; 1259 39812 INDEX public RiskApproval_riskId_idx postgres
+5600; 1259 39814 INDEX public RiskApproval_status_idx postgres
+5601; 1259 39811 INDEX public RiskApproval_ticketId_key postgres
+5606; 1259 39883 INDEX public RiskAuditEvent_eventType_idx postgres
+5609; 1259 39882 INDEX public RiskAuditEvent_riskId_occurredAt_idx postgres
+5582; 1259 20459 INDEX public RiskControl_riskId_idx postgres
+5592; 1259 39743 INDEX public RiskEvidence_riskId_idx postgres
+5574; 1259 39754 INDEX public Risk_code_key postgres
+5575; 1259 39742 INDEX public Risk_mitigationOwnerId_idx postgres
+5578; 1259 20458 INDEX public Risk_processId_idx postgres
+5579; 1259 38783 INDEX public Risk_riskOwnerId_idx postgres
+5500; 1259 16597 INDEX public SWOTAnalysis_diagnosticId_key postgres
+5505; 1259 16601 INDEX public SWOTItem_swotId_idx postgres
+5506; 1259 16602 INDEX public SWOTItem_type_idx postgres
+5478; 1259 16477 INDEX public Session_expiresAt_idx postgres
+5481; 1259 16475 INDEX public Session_tokenHash_key postgres
+5482; 1259 16476 INDEX public Session_userId_idx postgres
+5573; 1259 20392 INDEX public SipocCustomer_processId_idx postgres
+5567; 1259 20390 INDEX public SipocInput_processId_idx postgres
+5570; 1259 20391 INDEX public SipocOutput_processId_idx postgres
+5585; 1259 33334 INDEX public SipocProcess_processId_idx postgres
+5564; 1259 20389 INDEX public SipocSupplier_processId_idx postgres
+5541; 1259 17048 INDEX public StrategicCrossWeighting_createdById_idx postgres
+5542; 1259 17046 INDEX public StrategicCrossWeighting_crossId_key postgres
+5545; 1259 17047 INDEX public StrategicCrossWeighting_weightedScore_idx postgres
+5527; 1259 16805 INDEX public StrategicCross_diagnosticId_idx postgres
+5528; 1259 16808 INDEX public StrategicCross_factor1Id_factor2Id_key postgres
+5529; 1259 16806 INDEX public StrategicCross_factor1Id_idx postgres
+5530; 1259 16807 INDEX public StrategicCross_factor2Id_idx postgres
+5739; 1259 60844 INDEX public StrategicObjectiveHistory_actorId_idx postgres
+5740; 1259 60843 INDEX public StrategicObjectiveHistory_eventType_idx postgres
+5741; 1259 60842 INDEX public StrategicObjectiveHistory_objectiveId_occurredAt_idx postgres
+5733; 1259 60841 INDEX public StrategicObjectiveIndicator_deadline_idx postgres
+5734; 1259 61154 INDEX public StrategicObjectiveIndicator_kpiId_idx postgres
+5735; 1259 90647 INDEX public StrategicObjectiveIndicator_monitorResponsibleId_idx postgres
+5738; 1259 90646 INDEX public StrategicObjectiveIndicator_reportResponsibleId_idx postgres
+5728; 1259 60838 INDEX public StrategicObjectiveStrategy_linkedById_idx postgres
+5729; 1259 60839 INDEX public StrategicObjectiveStrategy_objectiveId_source_sourceRef_key postgres
+5732; 1259 60837 INDEX public StrategicObjectiveStrategy_source_sourceRef_idx postgres
+5768; 1259 63575 INDEX public StrategicObjectiveSuggestion_acceptedObjectiveId_key postgres
+5769; 1259 63574 INDEX public StrategicObjectiveSuggestion_diagnosticId_dedupeKey_key postgres
+5770; 1259 63576 INDEX public StrategicObjectiveSuggestion_diagnosticId_status_idx postgres
+5773; 1259 63577 INDEX public StrategicObjectiveSuggestion_requestedById_idx postgres
+5724; 1259 60836 INDEX public StrategicObjective_createdById_idx postgres
+5725; 1259 60835 INDEX public StrategicObjective_diagnosticId_status_idx postgres
+5546; 1259 18243 INDEX public StrategyWeighting_createdById_idx postgres
+5547; 1259 18244 INDEX public StrategyWeighting_diagnosticId_source_sourceRef_key postgres
+5548; 1259 18242 INDEX public StrategyWeighting_diagnosticId_weightedScore_idx postgres
+5711; 1259 60673 INDEX public TicketAssignmentApproval_one_pending_per_ticket postgres
+5714; 1259 60676 INDEX public TicketAssignmentApproval_proposedAssigneeId_status_idx postgres
+5715; 1259 60677 INDEX public TicketAssignmentApproval_requestedById_status_idx postgres
+5716; 1259 60672 INDEX public TicketAssignmentApproval_riskApprovalId_key postgres
+5717; 1259 60678 INDEX public TicketAssignmentApproval_status_idx postgres
+5718; 1259 60674 INDEX public TicketAssignmentApproval_ticketId_createdAt_idx postgres
+5719; 1259 60675 INDEX public TicketAssignmentApproval_ticketId_status_idx postgres
+5699; 1259 58646 INDEX public TicketAuditEvent_companyId_occurredAt_idx postgres
+5700; 1259 58647 INDEX public TicketAuditEvent_eventType_idx postgres
+5703; 1259 58645 INDEX public TicketAuditEvent_ticketId_occurredAt_idx postgres
+5704; 1259 60601 INDEX public TicketDriveReference_companyId_idx postgres
+5705; 1259 60602 INDEX public TicketDriveReference_connectionId_idx postgres
+5706; 1259 60603 INDEX public TicketDriveReference_createdById_idx postgres
+5709; 1259 60599 INDEX public TicketDriveReference_ticketId_createdAt_idx postgres
+5710; 1259 60600 INDEX public TicketDriveReference_ticketId_driveFileId_key postgres
+5648; 1259 43778 INDEX public TicketEvidenceFile_storedName_key postgres
+5649; 1259 43779 INDEX public TicketEvidenceFile_ticketId_idx postgres
+5650; 1259 43780 INDEX public TicketEvidenceFile_uploadedById_idx postgres
+5483; 1259 16859 INDEX public Ticket_actionItemId_key postgres
+5484; 1259 16479 INDEX public Ticket_assignedToId_idx postgres
+5485; 1259 16478 INDEX public Ticket_createdById_idx postgres
+5488; 1259 16481 INDEX public Ticket_priority_idx postgres
+5489; 1259 16480 INDEX public Ticket_status_idx postgres
+5720; 1259 60731 INDEX public UserStatusEvent_actorId_idx postgres
+5723; 1259 60730 INDEX public UserStatusEvent_userId_occurredAt_idx postgres
+5473; 1259 16842 INDEX public User_companyId_idx postgres
+5474; 1259 60729 INDEX public User_companyId_isActive_idx postgres
+5475; 1259 16474 INDEX public User_email_key postgres
+6060; 2620 54800 TRIGGER public AuditEvidenceFile AuditEvidenceFile_validate_tenant postgres
+6059; 2620 54802 TRIGGER public Audit Audit_validate_tenant postgres
+6061; 2620 54806 TRIGGER public CompanyGoogleDriveConnection CompanyGoogleDriveConnection_prevent_tenant_change_with_referen postgres
+6062; 2620 54808 TRIGGER public EvidenceStorageOperation EvidenceStorageOperation_validate_tenant postgres
+6058; 2620 54804 TRIGGER public Process Process_prevent_tenant_change_with_audits postgres
+6063; 2620 60625 TRIGGER public TicketDriveReference TicketDriveReference_validate_tenant postgres
+5883; 2606 16646 FK CONSTRAINT public AIAnalysis AIAnalysis_diagnosticId_fkey postgres
+5888; 2606 16754 FK CONSTRAINT public ActionItem ActionItem_actionPlanId_fkey postgres
+5889; 2606 16759 FK CONSTRAINT public ActionItem ActionItem_recommendationId_fkey postgres
+5890; 2606 16764 FK CONSTRAINT public ActionItem ActionItem_responsibleId_fkey postgres
+5885; 2606 16749 FK CONSTRAINT public ActionPlan ActionPlan_createdById_fkey postgres
+5886; 2606 16744 FK CONSTRAINT public ActionPlan ActionPlan_diagnosticId_fkey postgres
+5887; 2606 39895 FK CONSTRAINT public ActionPlan ActionPlan_riskId_fkey postgres
+5955; 2606 47107 FK CONSTRAINT public AuditActionProgress AuditActionProgress_actionId_fkey postgres
+5956; 2606 47112 FK CONSTRAINT public AuditActionProgress AuditActionProgress_createdById_fkey postgres
+5952; 2606 47092 FK CONSTRAINT public AuditChecklistItem AuditChecklistItem_checklistId_fkey postgres
+5951; 2606 47087 FK CONSTRAINT public AuditChecklist AuditChecklist_auditId_fkey postgres
+5953; 2606 47097 FK CONSTRAINT public AuditCorrectiveAction AuditCorrectiveAction_findingId_fkey postgres
+5954; 2606 47102 FK CONSTRAINT public AuditCorrectiveAction AuditCorrectiveAction_responsibleId_fkey postgres
+5943; 2606 43757 FK CONSTRAINT public AuditEvent AuditEvent_actorId_fkey postgres
+5944; 2606 43752 FK CONSTRAINT public AuditEvent AuditEvent_auditId_fkey postgres
+5957; 2606 47127 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_actionId_fkey postgres
+5958; 2606 47117 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_auditId_fkey postgres
+5959; 2606 54773 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_driveConnectionId_fkey postgres
+5960; 2606 47122 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_findingId_fkey postgres
+5961; 2606 47132 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_itemId_fkey postgres
+5962; 2606 47137 FK CONSTRAINT public AuditEvidenceFile AuditEvidenceFile_uploadedById_fkey postgres
+5941; 2606 43742 FK CONSTRAINT public AuditEvidence AuditEvidence_auditId_fkey postgres
+5942; 2606 43747 FK CONSTRAINT public AuditEvidence AuditEvidence_findingId_fkey postgres
+5934; 2606 43727 FK CONSTRAINT public AuditFinding AuditFinding_auditId_fkey postgres
+5935; 2606 47062 FK CONSTRAINT public AuditFinding AuditFinding_efficacyVerifiedById_fkey postgres
+5936; 2606 47047 FK CONSTRAINT public AuditFinding AuditFinding_itemId_fkey postgres
+5937; 2606 47057 FK CONSTRAINT public AuditFinding AuditFinding_procedureId_fkey postgres
+5938; 2606 47052 FK CONSTRAINT public AuditFinding AuditFinding_processId_fkey postgres
+5939; 2606 43732 FK CONSTRAINT public AuditFinding AuditFinding_responsibleId_fkey postgres
+5940; 2606 43737 FK CONSTRAINT public AuditFinding AuditFinding_verifiedById_fkey postgres
+6046; 2606 96140 FK CONSTRAINT public AuditPlanActivityAuditor AuditPlanActivityAuditor_activityId_fkey postgres
+6047; 2606 96150 FK CONSTRAINT public AuditPlanActivityAuditor AuditPlanActivityAuditor_assignedById_fkey postgres
+6048; 2606 96145 FK CONSTRAINT public AuditPlanActivityAuditor AuditPlanActivityAuditor_auditTeamMemberId_fkey postgres
+6049; 2606 96155 FK CONSTRAINT public AuditPlanActivityAuditor AuditPlanActivityAuditor_removedById_fkey postgres
+6050; 2606 96210 FK CONSTRAINT public AuditPlanActivityChecklistItem AuditPlanActivityChecklistItem_activityId_fkey postgres
+6051; 2606 96215 FK CONSTRAINT public AuditPlanActivityChecklistItem AuditPlanActivityChecklistItem_itemId_fkey postgres
+6054; 2606 96264 FK CONSTRAINT public AuditPlanActivityEvidenceFile AuditPlanActivityEvidenceFile_activityId_fkey postgres
+6055; 2606 96269 FK CONSTRAINT public AuditPlanActivityEvidenceFile AuditPlanActivityEvidenceFile_evidenceFileId_fkey postgres
+6052; 2606 96237 FK CONSTRAINT public AuditPlanActivityEvidence AuditPlanActivityEvidence_activityId_fkey postgres
+6053; 2606 96242 FK CONSTRAINT public AuditPlanActivityEvidence AuditPlanActivityEvidence_evidenceId_fkey postgres
+6056; 2606 96291 FK CONSTRAINT public AuditPlanActivityFinding AuditPlanActivityFinding_activityId_fkey postgres
+6057; 2606 96296 FK CONSTRAINT public AuditPlanActivityFinding AuditPlanActivityFinding_findingId_fkey postgres
+6041; 2606 96106 FK CONSTRAINT public AuditPlanActivity AuditPlanActivity_auditPlanId_fkey postgres
+6042; 2606 96188 FK CONSTRAINT public AuditPlanActivity AuditPlanActivity_completedById_fkey postgres
+6043; 2606 96116 FK CONSTRAINT public AuditPlanActivity AuditPlanActivity_processId_fkey postgres
+6044; 2606 96111 FK CONSTRAINT public AuditPlanActivity AuditPlanActivity_responsibleId_fkey postgres
+6045; 2606 96183 FK CONSTRAINT public AuditPlanActivity AuditPlanActivity_startedById_fkey postgres
+6038; 2606 96101 FK CONSTRAINT public AuditPlan AuditPlan_approvedById_fkey postgres
+6039; 2606 96091 FK CONSTRAINT public AuditPlan AuditPlan_auditId_fkey postgres
+6040; 2606 96096 FK CONSTRAINT public AuditPlan AuditPlan_preparedById_fkey postgres
+5949; 2606 47077 FK CONSTRAINT public AuditProcedure AuditProcedure_auditId_fkey postgres
+5950; 2606 47082 FK CONSTRAINT public AuditProcedure AuditProcedure_procedureId_fkey postgres
+5947; 2606 47067 FK CONSTRAINT public AuditProcess AuditProcess_auditId_fkey postgres
+5948; 2606 47072 FK CONSTRAINT public AuditProcess AuditProcess_processId_fkey postgres
+6026; 2606 95835 FK CONSTRAINT public AuditProgramProcessPriority AuditProgramProcessPriority_auditProgramId_fkey postgres
+6027; 2606 95845 FK CONSTRAINT public AuditProgramProcessPriority AuditProgramProcessPriority_evaluatedById_fkey postgres
+6028; 2606 95840 FK CONSTRAINT public AuditProgramProcessPriority AuditProgramProcessPriority_processId_fkey postgres
+6024; 2606 95791 FK CONSTRAINT public AuditProgram AuditProgram_companyId_fkey postgres
+6025; 2606 95796 FK CONSTRAINT public AuditProgram AuditProgram_responsibleId_fkey postgres
+6032; 2606 95987 FK CONSTRAINT public AuditTeamMember AuditTeamMember_assignedById_fkey postgres
+6033; 2606 95972 FK CONSTRAINT public AuditTeamMember AuditTeamMember_auditId_fkey postgres
+6034; 2606 95977 FK CONSTRAINT public AuditTeamMember AuditTeamMember_auditorId_fkey postgres
+6035; 2606 95982 FK CONSTRAINT public AuditTeamMember AuditTeamMember_companyId_fkey postgres
+6036; 2606 95997 FK CONSTRAINT public AuditTeamMember AuditTeamMember_independenceEvaluatedById_fkey postgres
+6037; 2606 95992 FK CONSTRAINT public AuditTeamMember AuditTeamMember_removedById_fkey postgres
+5930; 2606 95801 FK CONSTRAINT public Audit Audit_auditProgramId_fkey postgres
+5931; 2606 43717 FK CONSTRAINT public Audit Audit_leadAuditorId_fkey postgres
+5932; 2606 43712 FK CONSTRAINT public Audit Audit_processId_fkey postgres
+5933; 2606 43722 FK CONSTRAINT public Audit Audit_responsibleId_fkey postgres
+6031; 2606 95912 FK CONSTRAINT public AuditorCompetency AuditorCompetency_auditorId_fkey postgres
+6029; 2606 95884 FK CONSTRAINT public Auditor Auditor_companyId_fkey postgres
+6030; 2606 95889 FK CONSTRAINT public Auditor Auditor_createdById_fkey postgres
+5897; 2606 17011 FK CONSTRAINT public CheckyMessage CheckyMessage_sessionId_fkey postgres
+5895; 2606 17006 FK CONSTRAINT public CheckySession CheckySession_createdById_fkey postgres
+5896; 2606 17001 FK CONSTRAINT public CheckySession CheckySession_diagnosticId_fkey postgres
+5963; 2606 54753 FK CONSTRAINT public CompanyGoogleDriveConnection CompanyGoogleDriveConnection_companyId_fkey postgres
+5967; 2606 54783 FK CONSTRAINT public EvidenceStorageOperation EvidenceStorageOperation_auditId_fkey postgres
+5968; 2606 54778 FK CONSTRAINT public EvidenceStorageOperation EvidenceStorageOperation_companyId_fkey postgres
+5969; 2606 54793 FK CONSTRAINT public EvidenceStorageOperation EvidenceStorageOperation_connectionId_fkey postgres
+5970; 2606 54788 FK CONSTRAINT public EvidenceStorageOperation EvidenceStorageOperation_evidenceFileId_fkey postgres
+5964; 2606 54758 FK CONSTRAINT public GoogleDriveOAuthState GoogleDriveOAuthState_companyId_fkey postgres
+5965; 2606 54763 FK CONSTRAINT public GoogleDriveOAuthState GoogleDriveOAuthState_initiatedById_fkey postgres
+5966; 2606 54768 FK CONSTRAINT public GoogleDriveOAuthState GoogleDriveOAuthState_sessionId_fkey postgres
+5904; 2606 20332 FK CONSTRAINT public Kpi Kpi_monitorResponsibleId_fkey postgres
+5905; 2606 20322 FK CONSTRAINT public Kpi Kpi_processId_fkey postgres
+5906; 2606 20327 FK CONSTRAINT public Kpi Kpi_reportResponsibleId_fkey postgres
+5998; 2606 61082 FK CONSTRAINT public LearningCourseVersion LearningCourseVersion_courseId_fkey postgres
+5999; 2606 61087 FK CONSTRAINT public LearningCourseVersion LearningCourseVersion_createdById_fkey postgres
+6000; 2606 61092 FK CONSTRAINT public LearningCourseVersion LearningCourseVersion_updatedById_fkey postgres
+5995; 2606 61067 FK CONSTRAINT public LearningCourse LearningCourse_companyId_fkey postgres
+5996; 2606 61072 FK CONSTRAINT public LearningCourse LearningCourse_createdById_fkey postgres
+5997; 2606 61077 FK CONSTRAINT public LearningCourse LearningCourse_updatedById_fkey postgres
+6003; 2606 61149 FK CONSTRAINT public LearningEnrollment LearningEnrollment_assignedById_fkey postgres
+6004; 2606 61129 FK CONSTRAINT public LearningEnrollment LearningEnrollment_companyId_fkey postgres
+6005; 2606 61134 FK CONSTRAINT public LearningEnrollment LearningEnrollment_courseId_fkey postgres
+6006; 2606 61144 FK CONSTRAINT public LearningEnrollment LearningEnrollment_userId_fkey postgres
+6007; 2606 61139 FK CONSTRAINT public LearningEnrollment LearningEnrollment_versionId_fkey postgres
+6002; 2606 61102 FK CONSTRAINT public LearningLesson LearningLesson_moduleId_fkey postgres
+6001; 2606 61097 FK CONSTRAINT public LearningModule LearningModule_versionId_fkey postgres
+5923; 2606 39837 FK CONSTRAINT public Notification Notification_userId_fkey postgres
+6019; 2606 95730 FK CONSTRAINT public ProcedureIndicator ProcedureIndicator_monitorResponsibleId_fkey postgres
+6020; 2606 95720 FK CONSTRAINT public ProcedureIndicator ProcedureIndicator_procedureId_fkey postgres
+6021; 2606 95725 FK CONSTRAINT public ProcedureIndicator ProcedureIndicator_reportResponsibleId_fkey postgres
+6011; 2606 70925 FK CONSTRAINT public ProcedureKpi ProcedureKpi_kpiId_fkey postgres
+6012; 2606 70920 FK CONSTRAINT public ProcedureKpi ProcedureKpi_procedureId_fkey postgres
+6022; 2606 95745 FK CONSTRAINT public ProcedureStepResponsible ProcedureStepResponsible_stepId_fkey postgres
+6023; 2606 95750 FK CONSTRAINT public ProcedureStepResponsible ProcedureStepResponsible_userId_fkey postgres
+6018; 2606 95715 FK CONSTRAINT public ProcedureStep ProcedureStep_procedureId_fkey postgres
+5928; 2606 42196 FK CONSTRAINT public ProcedureVersion ProcedureVersion_changedById_fkey postgres
+5929; 2606 42191 FK CONSTRAINT public ProcedureVersion ProcedureVersion_procedureId_fkey postgres
+5926; 2606 42181 FK CONSTRAINT public Procedure Procedure_processId_fkey postgres
+5927; 2606 42186 FK CONSTRAINT public Procedure Procedure_responsibleId_fkey postgres
+5916; 2606 36029 FK CONSTRAINT public ProcessChange ProcessChange_changedById_fkey postgres
+5917; 2606 36034 FK CONSTRAINT public ProcessChange ProcessChange_processId_fkey postgres
+6015; 2606 95670 FK CONSTRAINT public ProcessIndicator ProcessIndicator_monitorResponsibleId_fkey postgres
+6016; 2606 95660 FK CONSTRAINT public ProcessIndicator ProcessIndicator_processId_fkey postgres
+6017; 2606 95665 FK CONSTRAINT public ProcessIndicator ProcessIndicator_reportResponsibleId_fkey postgres
+6013; 2606 78322 FK CONSTRAINT public ProcessKpi ProcessKpi_kpiId_fkey postgres
+6014; 2606 78317 FK CONSTRAINT public ProcessKpi ProcessKpi_processId_fkey postgres
+5902; 2606 19602 FK CONSTRAINT public Process Process_companyId_fkey postgres
+5903; 2606 19607 FK CONSTRAINT public Process Process_responsibleId_fkey postgres
+5879; 2606 16603 FK CONSTRAINT public QualityDiagnostic QualityDiagnostic_companyId_fkey postgres
+5880; 2606 16608 FK CONSTRAINT public QualityDiagnostic QualityDiagnostic_createdById_fkey postgres
+5884; 2606 16739 FK CONSTRAINT public Recommendation Recommendation_diagnosticId_fkey postgres
+5919; 2606 39827 FK CONSTRAINT public RiskApproval RiskApproval_decidedById_fkey postgres
+5920; 2606 39822 FK CONSTRAINT public RiskApproval RiskApproval_requestedById_fkey postgres
+5921; 2606 39817 FK CONSTRAINT public RiskApproval RiskApproval_riskId_fkey postgres
+5922; 2606 39832 FK CONSTRAINT public RiskApproval RiskApproval_ticketId_fkey postgres
+5924; 2606 39889 FK CONSTRAINT public RiskAuditEvent RiskAuditEvent_actorId_fkey postgres
+5925; 2606 39884 FK CONSTRAINT public RiskAuditEvent RiskAuditEvent_riskId_fkey postgres
+5914; 2606 20465 FK CONSTRAINT public RiskControl RiskControl_riskId_fkey postgres
+5918; 2606 39749 FK CONSTRAINT public RiskEvidence RiskEvidence_riskId_fkey postgres
+5911; 2606 39744 FK CONSTRAINT public Risk Risk_mitigationOwnerId_fkey postgres
+5912; 2606 20460 FK CONSTRAINT public Risk Risk_processId_fkey postgres
+5913; 2606 38784 FK CONSTRAINT public Risk Risk_riskOwnerId_fkey postgres
+5881; 2606 16613 FK CONSTRAINT public SWOTAnalysis SWOTAnalysis_diagnosticId_fkey postgres
+5882; 2606 16618 FK CONSTRAINT public SWOTItem SWOTItem_swotId_fkey postgres
+5875; 2606 16482 FK CONSTRAINT public Session Session_userId_fkey postgres
+5910; 2606 20408 FK CONSTRAINT public SipocCustomer SipocCustomer_processId_fkey postgres
+5908; 2606 20398 FK CONSTRAINT public SipocInput SipocInput_processId_fkey postgres
+5909; 2606 20403 FK CONSTRAINT public SipocOutput SipocOutput_processId_fkey postgres
+5915; 2606 33335 FK CONSTRAINT public SipocProcess SipocProcess_processId_fkey postgres
+5907; 2606 20393 FK CONSTRAINT public SipocSupplier SipocSupplier_processId_fkey postgres
+5898; 2606 17054 FK CONSTRAINT public StrategicCrossWeighting StrategicCrossWeighting_createdById_fkey postgres
+5899; 2606 17049 FK CONSTRAINT public StrategicCrossWeighting StrategicCrossWeighting_crossId_fkey postgres
+5891; 2606 16824 FK CONSTRAINT public StrategicCross StrategicCross_createdById_fkey postgres
+5892; 2606 16809 FK CONSTRAINT public StrategicCross StrategicCross_diagnosticId_fkey postgres
+5893; 2606 16814 FK CONSTRAINT public StrategicCross StrategicCross_factor1Id_fkey postgres
+5894; 2606 16819 FK CONSTRAINT public StrategicCross StrategicCross_factor2Id_fkey postgres
+5993; 2606 60875 FK CONSTRAINT public StrategicObjectiveHistory StrategicObjectiveHistory_actorId_fkey postgres
+5994; 2606 60870 FK CONSTRAINT public StrategicObjectiveHistory StrategicObjectiveHistory_objectiveId_fkey postgres
+5989; 2606 61155 FK CONSTRAINT public StrategicObjectiveIndicator StrategicObjectiveIndicator_kpiId_fkey postgres
+5990; 2606 90653 FK CONSTRAINT public StrategicObjectiveIndicator StrategicObjectiveIndicator_monitorResponsibleId_fkey postgres
+5991; 2606 60865 FK CONSTRAINT public StrategicObjectiveIndicator StrategicObjectiveIndicator_objectiveId_fkey postgres
+5992; 2606 90648 FK CONSTRAINT public StrategicObjectiveIndicator StrategicObjectiveIndicator_reportResponsibleId_fkey postgres
+5987; 2606 60860 FK CONSTRAINT public StrategicObjectiveStrategy StrategicObjectiveStrategy_linkedById_fkey postgres
+5988; 2606 60855 FK CONSTRAINT public StrategicObjectiveStrategy StrategicObjectiveStrategy_objectiveId_fkey postgres
+6008; 2606 63588 FK CONSTRAINT public StrategicObjectiveSuggestion StrategicObjectiveSuggestion_acceptedObjectiveId_fkey postgres
+6009; 2606 63578 FK CONSTRAINT public StrategicObjectiveSuggestion StrategicObjectiveSuggestion_diagnosticId_fkey postgres
+6010; 2606 63583 FK CONSTRAINT public StrategicObjectiveSuggestion StrategicObjectiveSuggestion_requestedById_fkey postgres
+5985; 2606 60850 FK CONSTRAINT public StrategicObjective StrategicObjective_createdById_fkey postgres
+5986; 2606 60845 FK CONSTRAINT public StrategicObjective StrategicObjective_diagnosticId_fkey postgres
+5900; 2606 18250 FK CONSTRAINT public StrategyWeighting StrategyWeighting_createdById_fkey postgres
+5901; 2606 18245 FK CONSTRAINT public StrategyWeighting StrategyWeighting_diagnosticId_fkey postgres
+5977; 2606 60699 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_decidedById_fkey postgres
+5978; 2606 60694 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_previousAssigneeId_fkey postgres
+5979; 2606 60689 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_proposedAssigneeId_fkey postgres
+5980; 2606 60684 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_requestedById_fkey postgres
+5981; 2606 60704 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_riskApprovalId_fkey postgres
+5982; 2606 60679 FK CONSTRAINT public TicketAssignmentApproval TicketAssignmentApproval_ticketId_fkey postgres
+5971; 2606 58653 FK CONSTRAINT public TicketAuditEvent TicketAuditEvent_actorId_fkey postgres
+5972; 2606 58648 FK CONSTRAINT public TicketAuditEvent TicketAuditEvent_ticketId_fkey postgres
+5973; 2606 60609 FK CONSTRAINT public TicketDriveReference TicketDriveReference_companyId_fkey postgres
+5974; 2606 60614 FK CONSTRAINT public TicketDriveReference TicketDriveReference_connectionId_fkey postgres
+5975; 2606 60619 FK CONSTRAINT public TicketDriveReference TicketDriveReference_createdById_fkey postgres
+5976; 2606 60604 FK CONSTRAINT public TicketDriveReference TicketDriveReference_ticketId_fkey postgres
+5945; 2606 43781 FK CONSTRAINT public TicketEvidenceFile TicketEvidenceFile_ticketId_fkey postgres
+5946; 2606 43786 FK CONSTRAINT public TicketEvidenceFile TicketEvidenceFile_uploadedById_fkey postgres
+5876; 2606 16860 FK CONSTRAINT public Ticket Ticket_actionItemId_fkey postgres
+5877; 2606 16492 FK CONSTRAINT public Ticket Ticket_assignedToId_fkey postgres
+5878; 2606 16487 FK CONSTRAINT public Ticket Ticket_createdById_fkey postgres
+5983; 2606 60737 FK CONSTRAINT public UserStatusEvent UserStatusEvent_actorId_fkey postgres
+5984; 2606 60732 FK CONSTRAINT public UserStatusEvent UserStatusEvent_userId_fkey postgres
+5874; 2606 16837 FK CONSTRAINT public User User_companyId_fkey postgres

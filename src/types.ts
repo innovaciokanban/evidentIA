@@ -737,6 +737,13 @@ export type AuditFindingStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'VERIFIED
 export type AuditChecklistResult = 'PENDING' | 'CONFORM' | 'NON_CONFORM' | 'NOT_APPLICABLE'
 export type AuditCorrectiveActionStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
 export type AuditCorrectiveActionPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+export type AuditImmediateCorrectionStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type AuditRootCauseAnalysisMethod = 'MANUAL' | 'FIVE_WHYS' | 'ISHIKAWA'
+export type AuditRootCauseAnalysisStatus = 'DRAFT' | 'CONFIRMED'
+export type AuditRootCauseOrigin = 'MANUAL' | 'CHECKY'
+export type AuditRootCauseStatus = 'POTENTIAL' | 'CONFIRMED' | 'DISCARDED'
+export type AuditCheckySuggestionKind = 'ROOT_CAUSE' | 'ROOT_CAUSE_ANALYSIS' | 'CORRECTIVE_ACTION'
+export type CheckySuggestionStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED'
 export type AuditEventType =
   | 'AUDIT_CREATED'
   | 'AUDIT_UPDATED'
@@ -761,9 +768,41 @@ export type AuditEventType =
   | 'EVIDENCE_FILE_STORAGE_FAILED'
   | 'EVIDENCE_FILE_DELETE_PENDING'
   | 'ACTION_CREATED'
-  | 'ACTION_UPDATED'
-  | 'ACTION_STATUS_CHANGED'
-  | 'ACTION_PROGRESS_ADDED'
+   | 'ACTION_UPDATED'
+   | 'ACTION_STATUS_CHANGED'
+   | 'ACTION_PROGRESS_ADDED'
+   | 'TEAM_MEMBER_ASSIGNED'
+   | 'TEAM_MEMBER_UPDATED'
+   | 'TEAM_MEMBER_REMOVED'
+   | 'INDEPENDENCE_EVALUATED'
+   | 'AUDIT_PLAN_ACTIVITY_EXECUTION_STARTED'
+   | 'AUDIT_PLAN_ACTIVITY_EXECUTION_UPDATED'
+   | 'AUDIT_PLAN_ACTIVITY_EXECUTION_COMPLETED'
+   | 'AUDIT_PLAN_ACTIVITY_EXECUTION_CANCELLED'
+   | 'AUDIT_PLAN_ACTIVITY_RESOURCE_LINKED'
+   | 'AUDIT_PLAN_ACTIVITY_RESOURCE_UNLINKED'
+   | 'IMMEDIATE_CORRECTION_CREATED'
+   | 'IMMEDIATE_CORRECTION_UPDATED'
+   | 'IMMEDIATE_CORRECTION_STATUS_CHANGED'
+   | 'ROOT_CAUSE_ANALYSIS_CREATED'
+   | 'ROOT_CAUSE_ANALYSIS_UPDATED'
+   | 'ROOT_CAUSE_ANALYSIS_STATUS_CHANGED'
+   | 'ROOT_CAUSE_CREATED'
+   | 'ROOT_CAUSE_UPDATED'
+   | 'ROOT_CAUSE_STATUS_CHANGED'
+   | 'ROOT_CAUSE_FIVE_WHY_STEP_CREATED'
+   | 'ROOT_CAUSE_FIVE_WHY_STEP_UPDATED'
+   | 'ROOT_CAUSE_FIVE_WHY_STEP_DELETED'
+   | 'CORRECTIVE_ACTION_CAUSE_LINKED'
+   | 'CORRECTIVE_ACTION_CAUSE_UNLINKED'
+   | 'EFFICACY_EVALUATION_CREATED'
+   | 'EFFICACY_EVALUATION_UPDATED'
+   | 'EFFICACY_EVALUATION_PROGRESS_ADDED'
+   | 'EFFICACY_EVALUATION_STARTED'
+   | 'EFFICACY_EVALUATION_COMPLETED'
+   | 'EFFICACY_EVALUATION_CANCELLED'
+   | 'EFFICACY_EVALUATION_EVIDENCE_LINKED'
+   | 'EFFICACY_EVALUATION_EVIDENCE_UNLINKED'
 
 export type AuditFinding = {
   id: string
@@ -787,6 +826,7 @@ export type AuditFinding = {
   efficacyVerification: string | null
   efficacyVerifiedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   efficacyVerifiedAt: string | null
+  efficacyEvaluations?: AuditEfficacyEvaluation[]
   actions?: AuditCorrectiveAction[]
   createdAt: string
   updatedAt: string
@@ -796,9 +836,136 @@ export type AuditActionProgressEntry = {
   id: string
   actionId: string
   note: string
+  activities?: string | null
+  results?: string | null
+  difficulties?: string | null
+  pendingActivities?: string | null
+  observations?: string | null
   percent: number | null
   createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
   createdAt: string
+}
+
+export type AuditCheckySuggestionCriterionPayload = {
+  type: AuditActionAcceptanceCriterionType
+  description: string
+  expectedResult: string
+  required: boolean
+}
+
+export type AuditCheckySuggestionPayload = {
+  kind: AuditCheckySuggestionKind
+  acceptanceCriteria?: AuditCheckySuggestionCriterionPayload[]
+  causeIds?: string[]
+  methodology?: AuditEfficacyMethodology | null
+  observationPeriod?: string | null
+  [key: string]: unknown
+}
+
+export type AuditCheckySuggestion = {
+  id: string
+  auditId: string
+  findingId: string
+  kind: AuditCheckySuggestionKind
+  originalPayload: AuditCheckySuggestionPayload
+  editablePayload: AuditCheckySuggestionPayload
+  evidenceIds: string[]
+  status: CheckySuggestionStatus
+  decisionNote: string | null
+  decidedAt: string | null
+  requestedBy: Pick<User, 'id' | 'name' | 'isActive'>
+  acceptedRootCause: { id: string; analysisId: string; findingId: string; status: AuditRootCauseStatus } | null
+  acceptedAnalysis: { id: string; findingId: string; methodology: AuditRootCauseAnalysisMethod; status: AuditRootCauseAnalysisStatus } | null
+  acceptedAction: { id: string; findingId: string; title: string; status: AuditCorrectiveActionStatus } | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditActionAcceptanceCriterionType = 'IMPLEMENTATION' | 'EFFECTIVENESS'
+export type AuditActionAcceptanceCriterion = {
+  id: string
+  actionId: string
+  type: AuditActionAcceptanceCriterionType
+  description: string
+  expectedResult: string
+  required: boolean
+  isMet: boolean
+  observations: string | null
+  completedAt: string | null
+  completedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditEfficacyEvaluationStatus = 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type AuditEfficacyOutcome = 'PENDING' | 'EFFECTIVE' | 'PARTIALLY_EFFECTIVE' | 'INEFFECTIVE'
+export type AuditEfficacyMethodology = 'DOCUMENTARY_SAMPLING' | 'INDICATOR_MONITORING' | 'DIRECT_OBSERVATION' | 'INTERVIEWS' | 'RECORD_REVIEW' | 'FOLLOW_UP_AUDIT' | 'OTHER'
+
+export type AuditEfficacyCriterionResult = {
+  id: string
+  evaluationId: string
+  criterionId: string
+  description: string
+  expectedResult: string
+  required: boolean
+  resultObtained: string | null
+  measuredValue: string | null
+  measurementUnit: string | null
+  sampleSize: number | null
+  isMet: boolean | null
+  observations: string | null
+  evaluatedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  evaluatedAt: string | null
+  sourceCriterion?: Pick<AuditActionAcceptanceCriterion, 'id' | 'type' | 'description' | 'expectedResult' | 'required'>
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditEfficacyEvaluationProgress = {
+  id: string
+  evaluationId: string
+  note: string
+  results: string | null
+  difficulties: string | null
+  pendingActivities: string | null
+  percent: number | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdAt: string
+}
+
+export type AuditEfficacyEvaluation = {
+  id: string
+  auditId: string
+  findingId: string
+  actionId: string
+  action?: Pick<AuditCorrectiveAction, 'id' | 'findingId' | 'title' | 'status' | 'workflowVersion'>
+  finding?: Pick<AuditFinding, 'id' | 'auditId' | 'title' | 'status'>
+  status: AuditEfficacyEvaluationStatus
+  outcome: AuditEfficacyOutcome
+  responsible: Pick<User, 'id' | 'name' | 'isActive'>
+  scheduledDate: string | null
+  methodology: AuditEfficacyMethodology
+  methodologyOther: string | null
+  observationPeriod: string | null
+  observationStartDate: string | null
+  observationEndDate: string | null
+  scope: string
+  observations: string | null
+  conclusion: string | null
+  recurrenceDetected: boolean
+  recurrenceDescription: string | null
+  recurrenceIdentifiedAt: string | null
+  startedAt: string | null
+  completedAt: string | null
+  completedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'>
+  criteria: AuditEfficacyCriterionResult[]
+  progress: AuditEfficacyEvaluationProgress[]
+  evidences: AuditEvidence[]
+  evidenceFiles: Pick<AuditEvidenceFile, 'id' | 'auditId' | 'findingId' | 'actionId' | 'itemId' | 'filename' | 'mimeType' | 'size' | 'storageProvider' | 'storageState' | 'createdAt'>[]
+  createdAt: string
+  updatedAt: string
 }
 
 export type AuditCorrectiveAction = {
@@ -806,13 +973,24 @@ export type AuditCorrectiveAction = {
   findingId: string
   title: string
   description: string
+  objective?: string | null
+  implementationPlan?: string | null
+  resources?: string | null
+  observations?: string | null
   responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
   priority: AuditCorrectiveActionPriority
   status: AuditCorrectiveActionStatus
   required: boolean
+  evidenceRequired?: boolean
+  progressPercent?: number
+  workflowVersion?: number
+  efficacyEvaluationId?: string | null
   dueDate: string | null
   completedAt: string | null
   progress: AuditActionProgressEntry[]
+  acceptanceCriteria?: AuditActionAcceptanceCriterion[]
+  evidences?: AuditEvidence[]
+  evidenceFiles?: Pick<AuditEvidenceFile, 'id' | 'storageState'>[]
   createdAt: string
   updatedAt: string
 }
@@ -855,6 +1033,85 @@ export type AuditEvidenceFile = {
   createdAt: string
 }
 
+export type AuditImmediateCorrection = {
+  id: string
+  findingId: string
+  description: string
+  containmentMeasures: string | null
+  consequencesIdentified: string | null
+  consequencesTreatment: string | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  plannedDate: string | null
+  executedAt: string | null
+  status: AuditImmediateCorrectionStatus
+  observations: string | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditRootCause = {
+  id: string
+  analysisId: string
+  findingId: string
+  status: AuditRootCauseStatus
+  description: string
+  justification: string | null
+  supportingEvidence: string | null
+  ishikawaCategory: string | null
+  position: number
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  confirmedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  confirmedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditRootCauseEligible = AuditRootCause & {
+  analysis: Pick<AuditRootCauseAnalysis, 'id' | 'findingId' | 'methodology' | 'status' | 'origin' | 'problemDescription'>
+}
+
+export type AuditRootCauseActionAssociation = {
+  id: string
+  findingId: string
+  actionId: string
+  causeId: string
+  isActive: boolean
+  linkedAt: string
+  linkedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  removedAt: string | null
+  removedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  cause: AuditRootCauseEligible
+  action: Pick<AuditCorrectiveAction, 'id' | 'findingId' | 'title' | 'status' | 'responsible'>
+}
+
+export type AuditRootCauseFiveWhyStep = {
+  id: string
+  analysisId: string
+  sequence: number
+  question: string
+  answer: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditRootCauseAnalysis = {
+  id: string
+  findingId: string
+  methodology: AuditRootCauseAnalysisMethod
+  status: AuditRootCauseAnalysisStatus
+  origin: AuditRootCauseOrigin
+  problemDescription: string
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  createdBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  confirmedBy: Pick<User, 'id' | 'name' | 'isActive'> | null
+  confirmedAt: string | null
+  causes: AuditRootCause[]
+  fiveWhySteps: AuditRootCauseFiveWhyStep[]
+  createdAt: string
+  updatedAt: string
+}
+
 export type EvidenceStorageOperationStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCEEDED' | 'RETRYABLE' | 'FAILED' | 'CANCELLED'
 
 export type EvidenceStorageOperation = {
@@ -875,6 +1132,7 @@ export type AuditEvidence = {
   id: string
   auditId: string
   findingId: string | null
+  actionId?: string | null
   name: string
   description: string
   url: string
@@ -885,6 +1143,7 @@ export type AuditEvidence = {
 export type Audit = {
   id: string
   processId: string
+  auditProgramId: string | null
   companyId: string
   process: Pick<Process, 'id' | 'name' | 'code'>
   code: string
@@ -917,6 +1176,284 @@ export type Audit = {
   createdAt: string
   updatedAt: string
 }
+
+export type AuditFollowUpStatus = 'ENABLED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type AuditFollowUp = {
+  id: string
+  auditId: string
+  status: AuditFollowUpStatus
+  scope: string
+  responsible: Pick<User, 'id' | 'name' | 'isActive'>
+  enabledBy: Pick<User, 'id' | 'name' | 'email'>
+  enabledAt: string
+  completedBy: Pick<User, 'id' | 'name' | 'email'> | null
+  completedAt: string | null
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditReportStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED'
+export type AuditReportEditable = {
+  executiveSummary: string
+  conclusions: string
+  recommendations: string
+}
+export type AuditReportSnapshot = {
+  schemaVersion: 1
+  generatedAt: string
+  sourceFingerprint: string
+  official: {
+    identification: { code: string; title: string; auditType: string | null; process: { id: string; code: string | null; name: string } }
+    objectives: string | null
+    scope: string
+    criteria: string
+    dates: { plannedDate: string | null; startDate: string | null }
+    team: Array<{ id: string; auditorId: string; name: string; role: string; isActive: boolean; independenceStatus: string; independenceDeclaration: string | null; conflictDescription: string | null; mitigationMeasures: string | null }>
+    processes: Array<{ id: string; code: string | null; name: string }>
+    procedures: Array<{ id: string; code: string; name: string }>
+    plan: { methodology: string | null; samplingMethod: string | null; resources: string | null; status: string | null; activities: Array<{ id: string; title: string; type: string; status: string; scheduledStart: string; scheduledEnd: string; executionResult: string | null; executionObservations: string | null }> } | null
+    checklists: Array<{ id: string; name: string; items: Array<{ id: string; description: string; criteria: string; result: string; observations: string | null; required: boolean }> }>
+    results: { checklistTotal: number; checklistEvaluated: number; conform: number; nonConform: number; findingsTotal: number; findingsOpen: number }
+    findings: Array<{
+      id: string
+      title: string
+      description: string
+      type: string
+      severity: string
+      status: string
+      dueDate: string | null
+      responsible: { id: string; name: string; isActive: boolean } | null
+      resolution: string | null
+      checklistItem: { id: string; description: string } | null
+      process: { id: string; code: string | null; name: string } | null
+      procedure: { id: string; code: string; name: string } | null
+      evidences: Array<{ id: string; name: string; description: string; url: string }>
+      evidenceFiles: Array<{ id: string; filename: string; storageState: string; size: number }>
+      actions: Array<{ id: string; title: string; description: string; objective: string | null; implementationPlan: string | null; responsible: { id: string; name: string; isActive: boolean } | null; priority: string; status: string; required: boolean; dueDate: string | null; completedAt: string | null; progressPercent: number; followUpId: string | null; followUpReason: string | null; followUpJustification: string | null; progress: Array<{ note: string; percent: number | null; createdAt: string }> }>
+      efficacyEvaluations: Array<{ id: string; status: string; outcome: string; responsible: { id: string; name: string; isActive: boolean } | null; scope: string; conclusion: string | null; recurrenceDetected: boolean; completedAt: string | null }>
+    }>
+    evidences: Array<{ id: string; name: string; description: string; url: string }>
+    evidenceFiles: Array<{ id: string; filename: string; storageState: string; size: number }>
+  }
+  editable: AuditReportEditable
+}
+export type AuditReportVersion = {
+  id: string
+  version: number
+  snapshot: AuditReportSnapshot
+  snapshotHash: string
+  approvedBy: Pick<User, 'id' | 'name' | 'email'> | null
+  approvedAt: string
+  pdfEvidenceFile: { id: string; filename: string; storageState: string; size: number; createdAt: string } | null
+}
+export type AuditReport = {
+  id: string
+  auditId: string
+  status: AuditReportStatus
+  draftSnapshot: AuditReportSnapshot
+  createdBy: Pick<User, 'id' | 'name' | 'email'> | null
+  reviewedBy: Pick<User, 'id' | 'name' | 'email'> | null
+  reviewedAt: string | null
+  approvedVersionId: string | null
+  versions: AuditReportVersion[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditProgramStatus = 'DRAFT' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED'
+export type AuditProgramProcessPriorityLevel = 'LOW' | 'MEDIUM' | 'HIGH'
+
+export type AuditProgramAudit = {
+  id: string
+  code: string
+  title: string
+  status: AuditStatus
+  plannedDate: string | null
+  startDate: string | null
+  endDate: string | null
+}
+
+export type AuditProgram = {
+  id: string
+  companyId: string
+  code: string
+  name: string
+  objective: string
+  scope: string
+  startDate: string
+  endDate: string
+  responsibleId: string | null
+  responsible: Pick<User, 'id' | 'name' | 'isActive'> | null
+  criteria: string
+  resources: string | null
+  risks: string | null
+  notes: string | null
+  status: AuditProgramStatus
+  audits: AuditProgramAudit[]
+  auditSummary: {
+    total: number
+    byStatus: Record<AuditStatus, number>
+    terminal: number
+    nonTerminal: number
+  }
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditProgramProcessPriority = {
+  id: string
+  auditProgramId: string
+  processId: string
+  process: Pick<Process, 'id' | 'companyId' | 'code' | 'name' | 'type' | 'status'>
+  criticality: number
+  recentChanges: number
+  previousUnfavorableResults: number
+  score: number
+  calculatedPriority: AuditProgramProcessPriorityLevel
+  manualPriority: AuditProgramProcessPriorityLevel | null
+  effectivePriority: AuditProgramProcessPriorityLevel
+  manualJustification: string | null
+  observations: string | null
+  evaluatedBy: Pick<User, 'id' | 'name' | 'email'>
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditorType = 'INTERNAL' | 'EXTERNAL'
+export type AuditorStatus = 'AVAILABLE' | 'UNAVAILABLE' | 'INACTIVE'
+export type AuditorCompetency = {
+  id: string
+  auditorId: string
+  name: string
+  level: number
+  evidence: string | null
+  createdAt: string
+  updatedAt: string
+}
+export type Auditor = {
+  id: string
+  companyId: string
+  name: string
+  email: string
+  phone: string | null
+  type: AuditorType
+  position: string | null
+  organization: string | null
+  experience: string | null
+  status: AuditorStatus
+  observations: string | null
+  createdById: string | null
+  createdBy: Pick<User, 'id' | 'name' | 'email' | 'isActive'> | null
+  competencies: AuditorCompetency[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuditTeamRole = 'LEAD' | 'MEMBER'
+export type AuditIndependenceStatus = 'PENDING' | 'CLEAR' | 'CONFLICT' | 'MITIGATED'
+export type AuditTeamPerson = Pick<User, 'id' | 'name' | 'email' | 'isActive'>
+export type AuditTeamAuditor = Pick<Auditor, 'id' | 'companyId' | 'name' | 'email' | 'phone' | 'type' | 'position' | 'organization' | 'experience' | 'status' | 'observations'> & {
+  competencies: AuditorCompetency[]
+}
+export type AuditTeamMember = {
+  id: string
+  auditId: string
+  auditorId: string
+  companyId: string
+  role: AuditTeamRole
+  assignedAt: string
+  assignedBy: AuditTeamPerson | null
+  observations: string | null
+  isActive: boolean
+  removedAt: string | null
+  removedBy: AuditTeamPerson | null
+  independenceStatus: AuditIndependenceStatus
+  independenceDeclaration: string | null
+  conflictDescription: string | null
+  mitigationMeasures: string | null
+  independenceEvaluatedAt: string | null
+  independenceEvaluatedBy: AuditTeamPerson | null
+  createdAt: string
+  updatedAt: string
+  auditor: AuditTeamAuditor
+}
+export type AuditTeamResponse = {
+  members: AuditTeamMember[]
+  history: AuditTeamMember[]
+}
+
+export type AuditPlanStatus = 'DRAFT' | 'READY' | 'APPROVED' | 'CANCELLED'
+export type AuditPlanActivityType = 'OPENING_MEETING' | 'DOCUMENT_REVIEW' | 'INTERVIEW' | 'PROCESS_REVIEW' | 'CLOSING_MEETING' | 'OTHER'
+export type AuditPlanActivityStatus = 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type AuditPlanPerson = Pick<User, 'id' | 'name' | 'email' | 'isActive'>
+export type AuditPlanProcess = Pick<Process, 'id' | 'name' | 'code' | 'companyId'>
+export type AuditPlanActivityAuditor = {
+  id: string
+  teamMemberId: string
+  auditorId: string
+  name: string
+  email: string
+  role: AuditTeamRole
+  type: AuditorType
+  independenceStatus: AuditIndependenceStatus
+  mitigationMeasures: string | null
+}
+export type AuditActivityExecutionResult = 'SATISFACTORY' | 'PARTIAL' | 'ISSUE' | 'NOT_APPLICABLE'
+export type AuditPlanActivityExecution = {
+  actualStart: string | null
+  actualEnd: string | null
+  result: AuditActivityExecutionResult | null
+  observations: string | null
+  startedBy: AuditPlanPerson | null
+  completedBy: AuditPlanPerson | null
+}
+export type AuditPlanActivityChecklistItem = Pick<AuditChecklistItem, 'id' | 'checklistId' | 'description' | 'result'>
+export type AuditPlanActivityEvidence = Pick<AuditEvidence, 'id' | 'auditId' | 'findingId' | 'name' | 'description' | 'url'>
+export type AuditPlanActivityEvidenceFile = Pick<AuditEvidenceFile, 'id' | 'auditId' | 'findingId' | 'actionId' | 'itemId' | 'filename' | 'mimeType' | 'size' | 'storageProvider' | 'storageState'>
+export type AuditPlanActivityFinding = Pick<AuditFinding, 'id' | 'auditId' | 'title' | 'type' | 'severity' | 'status'>
+export type AuditPlanActivityResources = {
+  checklistItems: AuditPlanActivityChecklistItem[]
+  evidences: AuditPlanActivityEvidence[]
+  evidenceFiles: AuditPlanActivityEvidenceFile[]
+  findings: AuditPlanActivityFinding[]
+}
+export type AuditPlanActivity = {
+  id: string
+  auditPlanId: string
+  position: number
+  type: AuditPlanActivityType
+  title: string
+  description: string | null
+  scheduledStart: string
+  scheduledEnd: string
+  location: string | null
+  responsible: AuditPlanPerson | null
+  process: AuditPlanProcess | null
+  auditors: AuditPlanActivityAuditor[]
+  execution?: AuditPlanActivityExecution
+  resources?: AuditPlanActivityResources
+  status: AuditPlanActivityStatus
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+export type AuditPlan = {
+  id: string
+  auditId: string
+  methodology: string
+  samplingMethod: string | null
+  resources: string | null
+  notes: string | null
+  status: AuditPlanStatus
+  preparedBy: AuditPlanPerson | null
+  approvedBy: AuditPlanPerson | null
+  approvedAt: string | null
+  activities: AuditPlanActivity[]
+  createdAt: string
+  updatedAt: string
+}
+export type AuditPlanResponse = { plan: AuditPlan | null }
 
 // Historial append-only del ciclo de vida de una auditoría de calidad: solo lo escribe el backend.
 export type AuditEvent = {
